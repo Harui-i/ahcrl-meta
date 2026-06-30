@@ -17,6 +17,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 "model_blocks = 2",
                 'device = "cpu"',
                 'checkpoint_dir = "tmp/checkpoints"',
+                "checkpoint_interval_updates = 5",
             ]
         )
     )
@@ -29,6 +30,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.model_blocks == 3
     assert args.device == "cpu"
     assert args.checkpoint_dir == Path("tmp/checkpoints")
+    assert args.checkpoint_interval_updates == 5
 
 
 def test_parse_args_rejects_unknown_toml_key(tmp_path: Path) -> None:
@@ -36,4 +38,12 @@ def test_parse_args_rejects_unknown_toml_key(tmp_path: Path) -> None:
     config_path.write_text("[train]\nunknown = 1\n")
 
     with pytest.raises(ValueError, match="unknown config keys"):
+        parse_args(["--config", str(config_path)])
+
+
+def test_parse_args_rejects_non_positive_checkpoint_interval(tmp_path: Path) -> None:
+    config_path = tmp_path / "ppo.toml"
+    config_path.write_text("[train]\ncheckpoint_interval_updates = 0\n")
+
+    with pytest.raises(ValueError, match="checkpoint_interval_updates"):
         parse_args(["--config", str(config_path)])

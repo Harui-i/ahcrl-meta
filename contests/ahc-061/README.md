@@ -20,3 +20,4 @@ uv run python3 -m ahcrl.contests.ahc061.train_ppo --config contests/ahc-061/conf
 設定はTOMLの `[train]` に書く。CLIで同じオプションを指定した場合はCLI側を優先する。
 学習開始時には解決済みconfigを `config={...}` のJSON形式でstdoutへ出す。
 モデル規模は `model_channels` と `model_blocks` で指定する。
+checkpoint保存頻度は `checkpoint_interval_updates` で「何updateごとに保存するか」を指定する。最後のupdateは必ず保存する。

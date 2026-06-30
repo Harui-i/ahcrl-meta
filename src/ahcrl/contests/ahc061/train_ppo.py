@@ -34,6 +34,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "value_coef": 0.5,
     "max_grad_norm": 0.5,
     "checkpoint_dir": ROOT / "contests/ahc-061/artifacts/ppo",
+    "checkpoint_interval_updates": 1,
     "model_channels": 64,
     "model_blocks": 4,
 }
@@ -70,11 +71,15 @@ def main() -> None:
             stats = update_model(model, optimizer, rollout, args, device)
 
             elapsed = max(time.time() - started, 1e-6)
-            checkpoint_path = args.checkpoint_dir / f"ppo_step{global_step}.pt"
-            torch.save(
-                {"model": model.state_dict(), "args": vars(args), "step": global_step},
-                checkpoint_path,
-            )
+            checkpoint_path = None
+            is_last_update = global_step >= args.total_steps
+            should_save = update % args.checkpoint_interval_updates == 0 or is_last_update
+            if should_save:
+                checkpoint_path = args.checkpoint_dir / f"ppo_step{global_step}.pt"
+                torch.save(
+                    {"model": model.state_dict(), "args": vars(args), "step": global_step},
+                    checkpoint_path,
+                )
             print(
                 " ".join(
                     [
@@ -253,6 +258,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--value-coef", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--max-grad-norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--checkpoint-dir", type=Path, default=argparse.SUPPRESS)
+    parser.add_argument("--checkpoint-interval-updates", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-channels", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-blocks", type=int, default=argparse.SUPPRESS)
     parsed = parser.parse_args(argv)
@@ -264,6 +270,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         config.update(load_toml_config(config_path))
     config.update(cli_config)
     config["checkpoint_dir"] = Path(config["checkpoint_dir"])
+    if config["checkpoint_interval_updates"] <= 0:
+        raise ValueError("checkpoint_interval_updates must be positive")
     if config["device"] == "auto":
         config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
     return argparse.Namespace(**config)
