@@ -1,17 +1,15 @@
 [train]
-num_envs = 2
-total_steps = 128
-rollout_steps = 64
+num_envs = 128
+total_steps = 10000000000000000
+rollout_steps = 100
 seed_start = 0
 seed_stride = 1
-fixed_m = 4
-fixed_u = 3
-device = "cpu"
+device = "cuda"
 lr = 0.0003
 gamma = 0.995
 gae_lambda = 0.95
 clip = 0.2
-epochs = 4
+epochs = 1
 minibatch_size = 1024
 entropy_coef = 0.01
 value_coef = 0.5

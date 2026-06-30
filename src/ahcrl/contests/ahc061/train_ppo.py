@@ -1,4 +1,5 @@
 import argparse
+import json
 import time
 import tomllib
 from pathlib import Path
@@ -33,16 +34,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "value_coef": 0.5,
     "max_grad_norm": 0.5,
     "checkpoint_dir": ROOT / "contests/ahc-061/artifacts/ppo",
+    "model_channels": 64,
+    "model_blocks": 4,
 }
 
 
 def main() -> None:
     args = parse_args()
+    print_resolved_config(args)
 
     torch.manual_seed(args.seed_start)
     np.random.seed(args.seed_start)
     device = torch.device(args.device)
-    model = ActorCritic().to(device)
+    model = ActorCritic(channels=args.model_channels, blocks=args.model_blocks).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     env = RustVecEnv(
         num_envs=args.num_envs,
@@ -249,6 +253,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--value-coef", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--max-grad-norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--checkpoint-dir", type=Path, default=argparse.SUPPRESS)
+    parser.add_argument("--model-channels", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--model-blocks", type=int, default=argparse.SUPPRESS)
     parsed = parser.parse_args(argv)
 
     cli_config = vars(parsed).copy()
@@ -274,6 +280,14 @@ def load_toml_config(path: Path) -> dict[str, Any]:
     if unknown:
         raise ValueError(f"unknown config keys: {', '.join(unknown)}")
     return raw
+
+
+def print_resolved_config(args: argparse.Namespace) -> None:
+    printable = {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in sorted(vars(args).items())
+    }
+    print("config=" + json.dumps(printable, sort_keys=True), flush=True)
 
 
 if __name__ == "__main__":

@@ -13,16 +13,20 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 "[train]",
                 "num_envs = 8",
                 "total_steps = 1024",
+                "model_channels = 32",
+                "model_blocks = 2",
                 'device = "cpu"',
                 'checkpoint_dir = "tmp/checkpoints"',
             ]
         )
     )
 
-    args = parse_args(["--config", str(config_path), "--num-envs", "4"])
+    args = parse_args(["--config", str(config_path), "--num-envs", "4", "--model-blocks", "3"])
 
     assert args.num_envs == 4
     assert args.total_steps == 1024
+    assert args.model_channels == 32
+    assert args.model_blocks == 3
     assert args.device == "cpu"
     assert args.checkpoint_dir == Path("tmp/checkpoints")
 
