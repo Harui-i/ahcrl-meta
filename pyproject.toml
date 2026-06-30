@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ahcrl-meta"
+version = "0.1.0"
+description = "Common RL utilities and contest-specific implementations for AtCoder Heuristic Contest."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+    "torch>=2.3",
+]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.390",
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+ahc061 = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "contests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+include = ["src", "tests", "contests"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
