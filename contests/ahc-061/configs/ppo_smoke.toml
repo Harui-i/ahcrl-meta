@@ -1,0 +1,19 @@
+[train]
+num_envs = 2
+total_steps = 128
+rollout_steps = 64
+seed_start = 0
+seed_stride = 1
+fixed_m = 4
+fixed_u = 3
+device = "cpu"
+lr = 0.0003
+gamma = 0.995
+gae_lambda = 0.95
+clip = 0.2
+epochs = 4
+minibatch_size = 1024
+entropy_coef = 0.01
+value_coef = 0.5
+max_grad_norm = 0.5
+checkpoint_dir = "contests/ahc-061/artifacts/ppo"
