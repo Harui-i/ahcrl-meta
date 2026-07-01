@@ -1,6 +1,6 @@
 [train]
-num_envs = 128
-total_steps = 2000000
+num_envs = 512
+total_steps = 20000000000
 rollout_steps = 100
 seed_start = 0
 seed_stride = 1
@@ -15,6 +15,6 @@ entropy_coef = 0.01
 value_coef = 0.5
 max_grad_norm = 0.5
 checkpoint_dir = "contests/ahc-061/artifacts/ppo"
-checkpoint_interval_updates = 20
+checkpoint_interval_updates = 40
 model_channels = 256
 model_blocks = 4
