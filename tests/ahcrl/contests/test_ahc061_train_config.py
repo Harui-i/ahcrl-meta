@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from ahcrl.contests.ahc061.train_ppo import parse_args
+from ahcrl.contests.ahc061.train_ppo import (
+    _advance_seed_start,
+    _initial_next_seed_start,
+    parse_args,
+)
 
 
 def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
@@ -47,3 +51,22 @@ def test_parse_args_rejects_non_positive_checkpoint_interval(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="checkpoint_interval_updates"):
         parse_args(["--config", str(config_path)])
+
+
+def test_seed_blocks_advance_by_parallel_env_span(tmp_path: Path) -> None:
+    config_path = tmp_path / "ppo.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[train]",
+                "num_envs = 256",
+                "seed_start = 1000",
+                "seed_stride = 3",
+            ]
+        )
+    )
+
+    args = parse_args(["--config", str(config_path)])
+
+    assert _initial_next_seed_start(args) == 1768
+    assert _advance_seed_start(1768, args) == 2536

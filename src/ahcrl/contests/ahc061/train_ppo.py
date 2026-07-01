@@ -59,13 +59,15 @@ def main() -> None:
     args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     obs = env.obs
+    next_seed_start = _initial_next_seed_start(args)
     global_step = 0
     update = 0
     started = time.time()
     try:
         while global_step < args.total_steps:
-            rollout = collect_rollout(model, env, obs, args, device)
+            rollout = collect_rollout(model, env, obs, next_seed_start, args, device)
             obs = rollout.pop("last_obs")
+            next_seed_start = rollout.pop("next_seed_start")
             global_step += args.num_envs * args.rollout_steps
             update += 1
             stats = update_model(model, optimizer, rollout, args, device)
@@ -106,6 +108,7 @@ def collect_rollout(
     model: ActorCritic,
     env: RustVecEnv,
     obs: dict[str, np.ndarray],
+    next_seed_start: int,
     args: argparse.Namespace,
     device: torch.device,
 ) -> dict[str, Any]:
@@ -141,11 +144,12 @@ def collect_rollout(
         obs = step.obs
         if step.done.any():
             obs = env.reset(
-                args.seed_start + int(obs["turn"].sum()) + 1,
+                next_seed_start,
                 args.seed_stride,
                 args.fixed_m,
                 args.fixed_u,
             )
+            next_seed_start = _advance_seed_start(next_seed_start, args)
 
     with torch.no_grad():
         next_value = model(torch.from_numpy(encode_batch(obs)).to(device))[1].cpu()
@@ -175,7 +179,16 @@ def collect_rollout(
         "masks": torch.stack(mask_buf),
         "scores": torch.stack(score_buf),
         "last_obs": obs,
+        "next_seed_start": next_seed_start,
     }
+
+
+def _initial_next_seed_start(args: argparse.Namespace) -> int:
+    return _advance_seed_start(args.seed_start, args)
+
+
+def _advance_seed_start(seed_start: int, args: argparse.Namespace) -> int:
+    return seed_start + args.num_envs * args.seed_stride
 
 
 def update_model(
