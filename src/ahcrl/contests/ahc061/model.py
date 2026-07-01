@@ -1,11 +1,12 @@
 import torch
 from torch import nn
 
+from ahcrl.contests.ahc061.encoder import NUM_PLANES
 from ahcrl.nn.blocks import ResidualBlock
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, in_channels: int = 24, channels: int = 64, blocks: int = 4) -> None:
+    def __init__(self, in_channels: int = NUM_PLANES, channels: int = 64, blocks: int = 4) -> None:
         super().__init__()
         self.trunk = nn.Sequential(
             nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False),
