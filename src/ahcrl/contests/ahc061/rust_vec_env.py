@@ -110,6 +110,7 @@ class RustVecEnv:
             "owner": np.zeros((nenv, 100), dtype=np.int64),
             "level": np.zeros((nenv, 100), dtype=np.int64),
             "pos": np.zeros((nenv, 16), dtype=np.int64),
+            "enemy_params": np.zeros((nenv, 40), dtype=np.float32),
             "mask": np.zeros((nenv, 100), dtype=bool),
         }
         for expected_idx in range(nenv):
@@ -136,6 +137,9 @@ class RustVecEnv:
                 self.proc.stdout.readline(), "LEVEL", 100, np.int64
             )
             obs["pos"][idx] = _parse_line(self.proc.stdout.readline(), "POS", 16, np.int64)
+            obs["enemy_params"][idx] = _parse_line(
+                self.proc.stdout.readline(), "ENEMY_PARAMS", 40, np.float32
+            )
             obs["mask"][idx] = _parse_line(
                 self.proc.stdout.readline(), "MASK", 100, np.int64
             ).astype(

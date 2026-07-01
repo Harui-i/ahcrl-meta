@@ -45,6 +45,24 @@ fn print_slot(slot_id: usize, slot: &EnvSlot, out: &mut impl Write) -> io::Resul
         }
     }
     writeln!(out)?;
+    write!(out, "ENEMY_PARAMS")?;
+    for p in 0..8 {
+        if p > 0 && p < slot.input.M {
+            let ai = p - 1;
+            write!(
+                out,
+                " {:.12} {:.12} {:.12} {:.12} {:.12}",
+                slot.input.wa[ai],
+                slot.input.wb[ai],
+                slot.input.wc[ai],
+                slot.input.wd[ai],
+                slot.input.eps[ai]
+            )?;
+        } else {
+            write!(out, " 0 0 0 0 0")?;
+        }
+    }
+    writeln!(out)?;
     write!(out, "MASK")?;
     for ok in slot.mask() {
         write!(out, " {}", if ok { 1 } else { 0 })?;

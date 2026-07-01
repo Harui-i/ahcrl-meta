@@ -4,13 +4,16 @@ BOARD_SIZE = 10
 MAX_PLAYERS = 8
 MAX_LEVEL = 5
 BASE_PLANES = 24
-NUM_PLANES = BASE_PLANES + 2 + 2 + 1 + MAX_PLAYERS
+ORACLE_PARAMS_PER_PLAYER = 5
+ORACLE_PARAM_PLANES = MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER
+NUM_PLANES = BASE_PLANES + 2 + 2 + 1 + MAX_PLAYERS + ORACLE_PARAM_PLANES
 PLANE_M = 24
 PLANE_U = 25
 PLANE_SCORE_RATIO = 26
 PLANE_SCORE_DIFF = 27
 PLANE_LEGAL_MASK = 28
 PLANE_PLAYER_SCORE_START = 29
+PLANE_ORACLE_PARAM_START = PLANE_PLAYER_SCORE_START + MAX_PLAYERS
 
 
 def encode_batch(obs: dict[str, np.ndarray]) -> np.ndarray:
@@ -21,6 +24,10 @@ def encode_batch(obs: dict[str, np.ndarray]) -> np.ndarray:
     positions = obs["pos"].reshape(batch, MAX_PLAYERS, 2)
     turns = obs["turn"].astype(np.float32)
     legal_masks = obs["mask"].reshape(batch, BOARD_SIZE, BOARD_SIZE)
+    enemy_params = obs.get(
+        "enemy_params",
+        np.zeros((batch, MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER), dtype=np.float32),
+    ).reshape(batch, MAX_PLAYERS, ORACLE_PARAMS_PER_PLAYER)
 
     planes = np.zeros((batch, NUM_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
 
@@ -67,6 +74,13 @@ def encode_batch(obs: dict[str, np.ndarray]) -> np.ndarray:
                 planes[b, PLANE_PLAYER_SCORE_START + mapped_player, :, :] = (
                     scores[player] / total_capacity
                 )
+                param_start = (
+                    PLANE_ORACLE_PARAM_START + mapped_player * ORACLE_PARAMS_PER_PLAYER
+                )
+                for param_idx in range(ORACLE_PARAMS_PER_PLAYER):
+                    planes[b, param_start + param_idx, :, :] = enemy_params[
+                        b, player, param_idx
+                    ]
 
     return planes
 
