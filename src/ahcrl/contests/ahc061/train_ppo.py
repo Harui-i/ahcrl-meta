@@ -13,7 +13,6 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributions import Categorical
 
-from .encoder import encode_batch
 from .model import ActorCritic
 from .rust_vec_env import RustVecEnv
 
@@ -200,7 +199,7 @@ def collect_rollout(
     score_buf = []
 
     for _ in range(args.rollout_steps):
-        encoded = torch.from_numpy(encode_batch(obs)).to(device)
+        encoded = torch.from_numpy(obs["planes"]).to(device)
         mask = torch.from_numpy(obs["mask"]).to(device)
         with torch.no_grad():
             logits, value = model(encoded)
@@ -230,7 +229,7 @@ def collect_rollout(
             next_seed_start = _advance_seed_start(next_seed_start, args)
 
     with torch.no_grad():
-        next_value = model(torch.from_numpy(encode_batch(obs)).to(device))[1].cpu()
+        next_value = model(torch.from_numpy(obs["planes"]).to(device))[1].cpu()
 
     rewards = torch.stack(reward_buf)
     dones = torch.stack(done_buf)

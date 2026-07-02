@@ -4,6 +4,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .encoder import BOARD_SIZE, NUM_PLANES
+
 ROOT = Path(__file__).resolve().parents[4]
 RL_TOOLS_MANIFEST = ROOT / "contests" / "ahc-061" / "rl-tools" / "Cargo.toml"
 
@@ -37,8 +39,8 @@ class RustVecEnv:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=None,
-            text=True,
-            bufsize=1,
+            text=False,
+            bufsize=0,
         )
         self._closed = False
         self.obs = self.reset(seed_start, seed_stride, fixed_m, fixed_u)
@@ -64,10 +66,24 @@ class RustVecEnv:
         self.obs = obs
         return StepResult(
             obs=obs,
-            reward=obs["reward"].astype(np.float32),
-            done=obs["done"].astype(bool),
-            score=obs["score"].astype(np.int64),
+            reward=obs["reward"],
+            done=obs["done"],
+            score=obs["score"],
         )
+
+    def step_first_legal_noobs(self) -> None:
+        self._send("STEP_FIRST_LEGAL_NOOBS")
+        header = self._readline()
+        if header != "OK_NOOBS":
+            raise RuntimeError(f"unexpected rl_env noobs header: {header!r}")
+
+    def bench_first_legal_internal(self, steps: int) -> tuple[int, float]:
+        self._send(f"BENCH_FIRST_LEGAL_INTERNAL {steps}")
+        header = self._readline()
+        parts = header.split()
+        if len(parts) != 3 or parts[0] != "OK_BENCH":
+            raise RuntimeError(f"unexpected rl_env bench header: {header!r}")
+        return int(parts[1]), float(parts[2])
 
     def close(self) -> None:
         if self._closed:
@@ -85,74 +101,79 @@ class RustVecEnv:
     def _send(self, line: str) -> None:
         if self.proc.stdin is None:
             raise RuntimeError("rl_env stdin is closed")
-        self.proc.stdin.write(line + "\n")
+        self.proc.stdin.write((line + "\n").encode("ascii"))
         self.proc.stdin.flush()
 
-    def _read_obs(self) -> dict[str, np.ndarray]:
+    def _readline(self) -> str:
         if self.proc.stdout is None:
             raise RuntimeError("rl_env stdout is closed")
-        header = self.proc.stdout.readline().strip()
+        line = self.proc.stdout.readline()
+        if not line:
+            raise RuntimeError("rl_env stdout closed")
+        return line.decode("ascii").strip()
+
+    def _read_exact(self, size: int) -> bytes:
+        if self.proc.stdout is None:
+            raise RuntimeError("rl_env stdout is closed")
+        chunks = []
+        remaining = size
+        while remaining > 0:
+            chunk = self.proc.stdout.read(remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) != size:
+            raise RuntimeError(f"expected {size} bytes from rl_env, got {len(data)}")
+        return data
+
+    def _read_obs(self) -> dict[str, np.ndarray]:
+        header = self._readline()
         if header.startswith("ERR"):
             raise RuntimeError(header)
         parts = header.split()
-        if len(parts) != 2 or parts[0] != "OK":
+        if len(parts) != 5 or parts[0] != "OK":
             raise RuntimeError(f"unexpected rl_env header: {header!r}")
         nenv = int(parts[1])
-        obs = {
-            "m": np.zeros(nenv, dtype=np.int64),
-            "u": np.zeros(nenv, dtype=np.int64),
-            "turn": np.zeros(nenv, dtype=np.int64),
-            "done": np.zeros(nenv, dtype=np.int64),
-            "score": np.zeros(nenv, dtype=np.int64),
-            "n": np.zeros(nenv, dtype=np.int64),
-            "reward": np.zeros(nenv, dtype=np.float32),
-            "values": np.zeros((nenv, 100), dtype=np.float32),
-            "owner": np.zeros((nenv, 100), dtype=np.int64),
-            "level": np.zeros((nenv, 100), dtype=np.int64),
-            "pos": np.zeros((nenv, 16), dtype=np.int64),
-            "enemy_params": np.zeros((nenv, 40), dtype=np.float32),
-            "mask": np.zeros((nenv, 100), dtype=bool),
-        }
-        for expected_idx in range(nenv):
-            env_line = self.proc.stdout.readline().strip().split()
-            if len(env_line) != 9 or env_line[0] != "ENV":
-                raise RuntimeError(f"bad ENV line: {' '.join(env_line)!r}")
-            idx = int(env_line[1])
-            if idx != expected_idx:
-                raise RuntimeError(f"unexpected env index {idx}, expected {expected_idx}")
-            obs["m"][idx] = int(env_line[2])
-            obs["u"][idx] = int(env_line[3])
-            obs["turn"][idx] = int(env_line[4])
-            obs["done"][idx] = int(env_line[5])
-            obs["score"][idx] = int(env_line[6])
-            obs["n"][idx] = int(env_line[7])
-            obs["reward"][idx] = float(env_line[8])
-            obs["values"][idx] = _parse_line(
-                self.proc.stdout.readline(), "VALUES", 100, np.float32
+        planes = int(parts[2])
+        height = int(parts[3])
+        width = int(parts[4])
+        if nenv != self.num_envs:
+            raise RuntimeError(f"unexpected env count {nenv}, expected {self.num_envs}")
+        if (planes, height, width) != (NUM_PLANES, BOARD_SIZE, BOARD_SIZE):
+            raise RuntimeError(
+                f"unexpected encoded shape {(planes, height, width)}, "
+                f"expected {(NUM_PLANES, BOARD_SIZE, BOARD_SIZE)}"
             )
-            obs["owner"][idx] = _parse_line(
-                self.proc.stdout.readline(), "OWNER", 100, np.int64
-            )
-            obs["level"][idx] = _parse_line(
-                self.proc.stdout.readline(), "LEVEL", 100, np.int64
-            )
-            obs["pos"][idx] = _parse_line(self.proc.stdout.readline(), "POS", 16, np.int64)
-            obs["enemy_params"][idx] = _parse_line(
-                self.proc.stdout.readline(), "ENEMY_PARAMS", 40, np.float32
-            )
-            obs["mask"][idx] = _parse_line(
-                self.proc.stdout.readline(), "MASK", 100, np.int64
-            ).astype(
-                bool
-            )
-        end = self.proc.stdout.readline().strip()
+
+        planes_size = nenv * NUM_PLANES * BOARD_SIZE * BOARD_SIZE * np.dtype("<f4").itemsize
+        mask_size = nenv * BOARD_SIZE * BOARD_SIZE
+        reward_size = nenv * np.dtype("<f4").itemsize
+        done_size = nenv
+        score_size = nenv * np.dtype("<i8").itemsize
+
+        planes_arr = np.frombuffer(self._read_exact(planes_size), dtype="<f4").reshape(
+            nenv,
+            NUM_PLANES,
+            BOARD_SIZE,
+            BOARD_SIZE,
+        )
+        mask_arr = np.frombuffer(self._read_exact(mask_size), dtype=np.uint8).reshape(
+            nenv,
+            BOARD_SIZE * BOARD_SIZE,
+        )
+        reward_arr = np.frombuffer(self._read_exact(reward_size), dtype="<f4")
+        done_arr = np.frombuffer(self._read_exact(done_size), dtype=np.uint8)
+        score_arr = np.frombuffer(self._read_exact(score_size), dtype="<i8")
+        end = self._readline()
         if end != "END":
             raise RuntimeError(f"expected END, got {end!r}")
-        return obs
 
-
-def _parse_line(line: str, label: str, size: int, dtype: type[np.generic]) -> np.ndarray:
-    parts = line.strip().split()
-    if len(parts) != size + 1 or parts[0] != label:
-        raise RuntimeError(f"bad {label} line")
-    return np.asarray(parts[1:], dtype=dtype)
+        return {
+            "planes": planes_arr.copy(),
+            "mask": mask_arr.astype(bool),
+            "reward": reward_arr.copy(),
+            "done": done_arr.astype(bool),
+            "score": score_arr.copy(),
+        }
