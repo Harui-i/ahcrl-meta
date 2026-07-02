@@ -6,6 +6,7 @@ import torch
 from ahcrl.contests.ahc061.train_ppo import (
     _advance_seed_start,
     _initial_next_seed_start,
+    _normalized_entropy,
     build_log_metrics,
     parse_args,
 )
@@ -109,6 +110,7 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
         "policy_loss": 0.01,
         "value_loss": 0.02,
         "entropy": 0.03,
+        "normalized_entropy": 0.5,
         "approx_kl": 0.04,
         "clip_frac": 0.05,
     }
@@ -129,4 +131,17 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
     assert metrics["train/final_mean_score"] == 6.0
     assert metrics["train/mean_reward"] == pytest.approx(0.25)
     assert metrics["loss/policy"] == 0.01
+    assert metrics["train/normalized_entropy"] == 0.5
     assert metrics["checkpoint/path"] == "checkpoint.pt"
+
+
+def test_normalized_entropy_scales_by_valid_action_count() -> None:
+    entropy = torch.tensor([torch.log(torch.tensor(4.0)), 0.0])
+    mask = torch.tensor(
+        [
+            [True, True, True, True, False],
+            [True, False, False, False, False],
+        ]
+    )
+
+    assert _normalized_entropy(entropy, mask).item() == pytest.approx(0.5)

@@ -120,6 +120,7 @@ def main() -> None:
                         f"policy_loss={stats['policy_loss']:.5f}",
                         f"value_loss={stats['value_loss']:.5f}",
                         f"entropy={stats['entropy']:.5f}",
+                        f"normalized_entropy={stats['normalized_entropy']:.5f}",
                         f"approx_kl={stats['approx_kl']:.5f}",
                         f"clip_frac={stats['clip_frac']:.5f}",
                         f"checkpoint={checkpoint_path}",
@@ -241,6 +242,7 @@ def update_model(
         "policy_loss": 0.0,
         "value_loss": 0.0,
         "entropy": 0.0,
+        "normalized_entropy": 0.0,
         "approx_kl": 0.0,
         "clip_frac": 0.0,
     }
@@ -253,6 +255,7 @@ def update_model(
             dist = Categorical(logits=logits)
             new_logprobs = dist.log_prob(actions[mb])
             entropy = dist.entropy().mean()
+            normalized_entropy = _normalized_entropy(dist.entropy(), masks[mb])
             ratio = (new_logprobs - old_logprobs[mb]).exp()
             pg1 = -advantages[mb] * ratio
             pg2 = -advantages[mb] * torch.clamp(ratio, 1.0 - args.clip, 1.0 + args.clip)
@@ -273,10 +276,22 @@ def update_model(
                 "policy_loss": float(policy_loss.item()),
                 "value_loss": float(value_loss.item()),
                 "entropy": float(entropy.item()),
+                "normalized_entropy": float(normalized_entropy.item()),
                 "approx_kl": float(approx_kl.item()),
                 "clip_frac": float(clip_frac.item()),
             }
     return last_stats
+
+
+def _normalized_entropy(entropy: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    valid_action_count = mask.sum(dim=-1).to(entropy.dtype)
+    max_entropy = valid_action_count.log()
+    normalized = torch.where(
+        valid_action_count > 1,
+        entropy / max_entropy.clamp_min(1e-8),
+        torch.zeros_like(entropy),
+    )
+    return normalized.mean()
 
 
 def init_wandb(args: argparse.Namespace) -> Any | None:
@@ -340,6 +355,7 @@ def build_log_metrics(
         "loss/policy": stats["policy_loss"],
         "loss/value": stats["value_loss"],
         "train/entropy": stats["entropy"],
+        "train/normalized_entropy": stats["normalized_entropy"],
         "train/approx_kl": stats["approx_kl"],
         "train/clip_fraction": stats["clip_frac"],
         "checkpoint/path": checkpoint,
