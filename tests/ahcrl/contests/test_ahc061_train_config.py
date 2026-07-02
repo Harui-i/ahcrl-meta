@@ -19,6 +19,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 "total_steps = 1024",
                 "model_channels = 32",
                 "model_blocks = 2",
+                'model_block_type = "residual"',
                 'device = "cpu"',
                 'checkpoint_dir = "tmp/checkpoints"',
                 "checkpoint_interval_updates = 5",
@@ -26,12 +27,24 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
         )
     )
 
-    args = parse_args(["--config", str(config_path), "--num-envs", "4", "--model-blocks", "3"])
+    args = parse_args(
+        [
+            "--config",
+            str(config_path),
+            "--num-envs",
+            "4",
+            "--model-blocks",
+            "3",
+            "--model-block-type",
+            "convnext",
+        ]
+    )
 
     assert args.num_envs == 4
     assert args.total_steps == 1024
     assert args.model_channels == 32
     assert args.model_blocks == 3
+    assert args.model_block_type == "convnext"
     assert args.device == "cpu"
     assert args.checkpoint_dir == Path("tmp/checkpoints")
     assert args.checkpoint_interval_updates == 5

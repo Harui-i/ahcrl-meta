@@ -2,17 +2,24 @@ import torch
 from torch import nn
 
 from ahcrl.contests.ahc061.encoder import NUM_PLANES
-from ahcrl.nn.blocks import ResidualBlock
+from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, in_channels: int = NUM_PLANES, channels: int = 64, blocks: int = 4) -> None:
+    def __init__(
+        self,
+        in_channels: int = NUM_PLANES,
+        channels: int = 64,
+        blocks: int = 4,
+        block_type: str = "convnext",
+    ) -> None:
         super().__init__()
+        block_cls = _block_class(block_type)
         self.trunk = nn.Sequential(
             nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(channels),
             nn.ReLU(inplace=True),
-            *[ResidualBlock(channels) for _ in range(blocks)],
+            *[block_cls(channels) for _ in range(blocks)],
         )
         self.policy = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1, bias=False),
@@ -34,3 +41,11 @@ class ActorCritic(nn.Module):
         logits = self.policy(h)
         value = self.value(h).squeeze(-1)
         return logits, value
+
+
+def _block_class(block_type: str) -> type[nn.Module]:
+    if block_type == "convnext":
+        return ConvNeXtBlock
+    if block_type == "residual":
+        return ResidualBlock
+    raise ValueError(f"unknown block_type: {block_type}")

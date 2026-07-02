@@ -1,6 +1,6 @@
 [train]
-num_envs = 512
-total_steps = 20000000000
+num_envs = 256
+total_steps = 2000000
 rollout_steps = 100
 seed_start = 0
 seed_stride = 1
@@ -18,3 +18,4 @@ checkpoint_dir = "contests/ahc-061/artifacts/ppo"
 checkpoint_interval_updates = 40
 model_channels = 256
 model_blocks = 4
+model_block_type = "convnext"

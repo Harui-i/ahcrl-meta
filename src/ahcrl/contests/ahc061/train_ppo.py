@@ -37,6 +37,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "checkpoint_interval_updates": 1,
     "model_channels": 64,
     "model_blocks": 4,
+    "model_block_type": "convnext",
 }
 
 
@@ -47,7 +48,11 @@ def main() -> None:
     torch.manual_seed(args.seed_start)
     np.random.seed(args.seed_start)
     device = torch.device(args.device)
-    model = ActorCritic(channels=args.model_channels, blocks=args.model_blocks).to(device)
+    model = ActorCritic(
+        channels=args.model_channels,
+        blocks=args.model_blocks,
+        block_type=args.model_block_type,
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     env = RustVecEnv(
         num_envs=args.num_envs,
@@ -274,6 +279,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint-interval-updates", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-channels", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-blocks", type=int, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--model-block-type",
+        choices=("convnext", "residual"),
+        default=argparse.SUPPRESS,
+    )
     parsed = parser.parse_args(argv)
 
     cli_config = vars(parsed).copy()

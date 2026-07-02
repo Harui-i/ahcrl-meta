@@ -20,3 +20,4 @@ checkpoint_dir = "contests/ahc-061/artifacts/ppo"
 checkpoint_interval_updates = 1
 model_channels = 64
 model_blocks = 4
+model_block_type = "convnext"
