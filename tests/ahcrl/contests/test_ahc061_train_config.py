@@ -1,10 +1,12 @@
 from pathlib import Path
 
 import pytest
+import torch
 
 from ahcrl.contests.ahc061.train_ppo import (
     _advance_seed_start,
     _initial_next_seed_start,
+    build_log_metrics,
     parse_args,
 )
 
@@ -23,6 +25,10 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 'device = "cpu"',
                 'checkpoint_dir = "tmp/checkpoints"',
                 "checkpoint_interval_updates = 5",
+                "wandb_enabled = true",
+                'wandb_project = "test-project"',
+                'wandb_name = "test-run"',
+                'wandb_tags = ["ahc061", "test"]',
             ]
         )
     )
@@ -48,6 +54,10 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.device == "cpu"
     assert args.checkpoint_dir == Path("tmp/checkpoints")
     assert args.checkpoint_interval_updates == 5
+    assert args.wandb_enabled is True
+    assert args.wandb_project == "test-project"
+    assert args.wandb_name == "test-run"
+    assert args.wandb_tags == ["ahc061", "test"]
 
 
 def test_parse_args_rejects_unknown_toml_key(tmp_path: Path) -> None:
@@ -83,3 +93,40 @@ def test_seed_blocks_advance_by_parallel_env_span(tmp_path: Path) -> None:
 
     assert _initial_next_seed_start(args) == 1768
     assert _advance_seed_start(1768, args) == 2536
+
+
+def test_build_log_metrics_contains_required_wandb_stats() -> None:
+    rollout = {
+        "scores": torch.tensor([[1.0, 3.0], [5.0, 7.0]]),
+        "rewards": torch.tensor([[0.1, 0.2], [0.3, 0.4]]),
+        "dones": torch.tensor([[0.0, 0.0], [1.0, 0.0]]),
+        "values": torch.tensor([[0.5, 0.6], [0.7, 0.8]]),
+        "advantages": torch.tensor([[1.0, -1.0], [0.5, -0.5]]),
+        "returns": torch.tensor([[1.5, 1.6], [1.7, 1.8]]),
+        "masks": torch.ones(2, 2, 10),
+    }
+    stats = {
+        "policy_loss": 0.01,
+        "value_loss": 0.02,
+        "entropy": 0.03,
+        "approx_kl": 0.04,
+        "clip_frac": 0.05,
+    }
+
+    metrics = build_log_metrics(
+        update=3,
+        global_step=128,
+        elapsed=2.0,
+        rollout=rollout,
+        stats=stats,
+        checkpoint_path=Path("checkpoint.pt"),
+    )
+
+    assert metrics["summary/cumulative_env_steps"] == 128
+    assert metrics["summary/updates"] == 3
+    assert metrics["summary/fps"] == 64.0
+    assert metrics["train/mean_score"] == 4.0
+    assert metrics["train/final_mean_score"] == 6.0
+    assert metrics["train/mean_reward"] == pytest.approx(0.25)
+    assert metrics["loss/policy"] == 0.01
+    assert metrics["checkpoint/path"] == "checkpoint.pt"

@@ -19,3 +19,7 @@ checkpoint_interval_updates = 40
 model_channels = 256
 model_blocks = 4
 model_block_type = "convnext"
+wandb_enabled = true
+wandb_project = "ahcrl-meta"
+wandb_name = "ahc061-ppo"
+wandb_tags = ["ahc061", "ppo"]

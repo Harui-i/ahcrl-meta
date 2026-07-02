@@ -38,6 +38,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "model_channels": 64,
     "model_blocks": 4,
     "model_block_type": "convnext",
+    "wandb_enabled": False,
+    "wandb_project": "ahcrl-meta",
+    "wandb_entity": None,
+    "wandb_name": None,
+    "wandb_mode": "online",
+    "wandb_tags": [],
 }
 
 
@@ -68,7 +74,9 @@ def main() -> None:
     global_step = 0
     update = 0
     started = time.time()
+    wandb_run = None
     try:
+        wandb_run = init_wandb(args)
         while global_step < args.total_steps:
             rollout = collect_rollout(model, env, obs, next_seed_start, args, device)
             obs = rollout.pop("last_obs")
@@ -87,14 +95,28 @@ def main() -> None:
                     {"model": model.state_dict(), "args": vars(args), "step": global_step},
                     checkpoint_path,
                 )
+            log_metrics = build_log_metrics(
+                update=update,
+                global_step=global_step,
+                elapsed=elapsed,
+                rollout=rollout,
+                stats=stats,
+                checkpoint_path=checkpoint_path,
+            )
+            if wandb_run is not None:
+                wandb_run.log(log_metrics, step=global_step)
+                wandb_run.summary["summary/cumulative_env_steps"] = global_step
+                wandb_run.summary["summary/updates"] = update
+                wandb_run.summary["summary/fps"] = log_metrics["summary/fps"]
+                wandb_run.summary["train/mean_score"] = log_metrics["train/mean_score"]
             print(
                 " ".join(
                     [
                         f"update={update}",
                         f"step={global_step}",
-                        f"fps={global_step / elapsed:.1f}",
-                        f"mean_score={rollout['scores'].float().mean().item():.1f}",
-                        f"mean_reward={rollout['rewards'].mean().item():.5f}",
+                        f"fps={log_metrics['summary/fps']:.1f}",
+                        f"mean_score={log_metrics['train/mean_score']:.1f}",
+                        f"mean_reward={log_metrics['train/mean_reward']:.5f}",
                         f"policy_loss={stats['policy_loss']:.5f}",
                         f"value_loss={stats['value_loss']:.5f}",
                         f"entropy={stats['entropy']:.5f}",
@@ -107,6 +129,8 @@ def main() -> None:
             )
     finally:
         env.close()
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 def collect_rollout(
@@ -255,6 +279,73 @@ def update_model(
     return last_stats
 
 
+def init_wandb(args: argparse.Namespace) -> Any | None:
+    if not args.wandb_enabled:
+        return None
+
+    import wandb
+
+    config = {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in sorted(vars(args).items())
+    }
+    run = wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        name=args.wandb_name,
+        mode=args.wandb_mode,
+        tags=args.wandb_tags,
+        config=config,
+    )
+    wandb.define_metric("summary/cumulative_env_steps")
+    wandb.define_metric("*", step_metric="summary/cumulative_env_steps")
+    return run
+
+
+def build_log_metrics(
+    *,
+    update: int,
+    global_step: int,
+    elapsed: float,
+    rollout: dict[str, Any],
+    stats: dict[str, float],
+    checkpoint_path: Path | None,
+) -> dict[str, float | int | str]:
+    scores = rollout["scores"].float()
+    rewards = rollout["rewards"].float()
+    dones = rollout["dones"].float()
+    values = rollout["values"].float()
+    advantages = rollout["advantages"].float()
+    returns = rollout["returns"].float()
+    masks = rollout["masks"].float()
+    checkpoint = "" if checkpoint_path is None else str(checkpoint_path)
+
+    return {
+        "summary/cumulative_env_steps": global_step,
+        "summary/updates": update,
+        "summary/elapsed_sec": elapsed,
+        "summary/fps": global_step / max(elapsed, 1e-6),
+        "train/mean_score": float(scores.mean().item()),
+        "train/max_score": float(scores.max().item()),
+        "train/min_score": float(scores.min().item()),
+        "train/final_mean_score": float(scores[-1].mean().item()),
+        "train/mean_reward": float(rewards.mean().item()),
+        "train/sum_reward": float(rewards.sum().item()),
+        "train/done_count": int(dones.sum().item()),
+        "train/mean_value": float(values.mean().item()),
+        "train/mean_return": float(returns.mean().item()),
+        "train/mean_advantage": float(advantages.mean().item()),
+        "train/std_advantage": float(advantages.std(unbiased=False).item()),
+        "train/valid_action_fraction": float(masks.mean().item()),
+        "loss/policy": stats["policy_loss"],
+        "loss/value": stats["value_loss"],
+        "train/entropy": stats["entropy"],
+        "train/approx_kl": stats["approx_kl"],
+        "train/clip_fraction": stats["clip_frac"],
+        "checkpoint/path": checkpoint,
+    }
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, help="Path to a TOML config file.")
@@ -282,6 +373,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--model-block-type",
         choices=("convnext", "residual"),
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--wandb",
+        dest="wandb_enabled",
+        action="store_true",
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-wandb",
+        dest="wandb_enabled",
+        action="store_false",
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument("--wandb-project", default=argparse.SUPPRESS)
+    parser.add_argument("--wandb-entity", default=argparse.SUPPRESS)
+    parser.add_argument("--wandb-name", default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--wandb-mode",
+        choices=("online", "offline", "disabled"),
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--wandb-tag",
+        dest="wandb_tags",
+        action="append",
         default=argparse.SUPPRESS,
     )
     parsed = parser.parse_args(argv)
