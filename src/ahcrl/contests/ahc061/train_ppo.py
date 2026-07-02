@@ -5,11 +5,12 @@ import time
 import tomllib
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch import nn
 from torch.distributions import Categorical
 
 from .encoder import encode_batch
@@ -26,6 +27,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "fixed_m": None,
     "fixed_u": None,
     "device": "auto",
+    "compile": True,
     "lr": 3e-4,
     "gamma": 0.995,
     "gae_lambda": 0.95,
@@ -62,14 +64,14 @@ def main() -> None:
     torch.manual_seed(args.seed_start)
     np.random.seed(args.seed_start)
     device = torch.device(args.device)
-    model = ActorCritic(
+    raw_model = ActorCritic(
         channels=args.model_channels,
         blocks=args.model_blocks,
         block_type=args.model_block_type,
     ).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     if args.init_checkpoint is not None:
-        load_initial_model(args.init_checkpoint, model, device)
+        load_initial_model(args.init_checkpoint, raw_model, device)
+    optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
     env = RustVecEnv(
         num_envs=args.num_envs,
         seed_start=args.seed_start,
@@ -83,7 +85,7 @@ def main() -> None:
     global_step = 0
     update = 0
     if args.resume_dir is not None:
-        resume_state = load_training_state(args.resume_dir, model, optimizer, device)
+        resume_state = load_training_state(args.resume_dir, raw_model, optimizer, device)
         global_step = resume_state["global_step"]
         update = resume_state["update"]
         resume_seed_start = resume_state["next_seed_start"]
@@ -98,6 +100,7 @@ def main() -> None:
                 f"global_step ({global_step})"
             )
 
+    model = cast(nn.Module, torch.compile(raw_model)) if args.compile else raw_model
     started = time.time()
     wandb_run = None
     try:
@@ -116,7 +119,7 @@ def main() -> None:
             next_seed_start = rollout.pop("next_seed_start")
             global_step += args.num_envs * args.rollout_steps
             update += 1
-            stats = update_model(model, optimizer, rollout, args, device)
+            stats = update_model(model, raw_model, optimizer, rollout, args, device)
 
             elapsed = max(time.time() - started, 1e-6)
             checkpoint_path = None
@@ -126,7 +129,7 @@ def main() -> None:
                 checkpoint_seed_start = next_seed_start
                 checkpoint_path = save_training_state(
                     args,
-                    model,
+                    raw_model,
                     optimizer,
                     global_step=global_step,
                     update=update,
@@ -180,7 +183,7 @@ def main() -> None:
 
 
 def collect_rollout(
-    model: ActorCritic,
+    model: nn.Module,
     env: RustVecEnv,
     obs: dict[str, np.ndarray],
     next_seed_start: int,
@@ -396,7 +399,8 @@ def load_initial_model(
 
 
 def update_model(
-    model: ActorCritic,
+    model: nn.Module,
+    grad_model: nn.Module,
     optimizer: torch.optim.Optimizer,
     rollout: dict[str, Any],
     args: argparse.Namespace,
@@ -439,7 +443,7 @@ def update_model(
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(grad_model.parameters(), args.max_grad_norm)
             optimizer.step()
 
             with torch.no_grad():
@@ -551,6 +555,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fixed-m", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--fixed-u", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--device", default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--compile",
+        dest="compile",
+        action="store_true",
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-compile",
+        dest="compile",
+        action="store_false",
+        default=argparse.SUPPRESS,
+    )
     parser.add_argument("--lr", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--gamma", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--gae-lambda", type=float, default=argparse.SUPPRESS)

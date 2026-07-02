@@ -30,6 +30,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 "model_blocks = 2",
                 'model_block_type = "residual"',
                 'device = "cpu"',
+                "compile = false",
                 'artifact_dir = "tmp/artifacts"',
                 "checkpoint_interval_updates = 5",
                 "wandb_enabled = true",
@@ -50,6 +51,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
             "3",
             "--model-block-type",
             "convnext",
+            "--compile",
         ]
     )
 
@@ -59,12 +61,18 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.model_blocks == 3
     assert args.model_block_type == "convnext"
     assert args.device == "cpu"
+    assert args.compile is True
     assert args.artifact_dir == Path("tmp/artifacts")
     assert args.checkpoint_interval_updates == 5
     assert args.wandb_enabled is True
     assert args.wandb_project == "test-project"
     assert args.wandb_name == "test-run"
     assert args.wandb_tags == ["ahc061", "test"]
+
+
+def test_parse_args_compile_defaults_to_true_and_can_be_disabled() -> None:
+    assert parse_args(["--device", "cpu"]).compile is True
+    assert parse_args(["--device", "cpu", "--no-compile"]).compile is False
 
 
 def test_parse_args_rejects_unknown_toml_key(tmp_path: Path) -> None:

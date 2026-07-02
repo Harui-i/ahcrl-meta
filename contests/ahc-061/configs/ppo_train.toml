@@ -5,6 +5,7 @@ rollout_steps = 100
 seed_start = 0
 seed_stride = 1
 device = "cuda"
+compile = true
 lr = 0.0003
 gamma = 0.995
 gae_lambda = 0.95
