@@ -21,3 +21,6 @@ uv run python3 -m ahcrl.contests.ahc061.train_ppo --config contests/ahc-061/conf
 学習開始時には解決済みconfigを `config={...}` のJSON形式でstdoutへ出す。
 モデル規模は `model_channels` と `model_blocks` で指定する。
 checkpoint保存頻度は `checkpoint_interval_updates` で「何updateごとに保存するか」を指定する。最後のupdateは必ず保存する。
+新規runは `artifact_dir` 配下に `run_*` ディレクトリを作って保存する。
+同一runを継続する場合は `--resume-dir contests/ahc-061/artifacts/ppo/run_...` を指定する。resume時は保存済みconfigを使い、`--total-steps` だけ増やせる。
+別runの初期値としてモデルだけ読む場合は `--init-checkpoint path/to/checkpoint.pt` を指定する。

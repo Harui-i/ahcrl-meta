@@ -1,7 +1,9 @@
 import argparse
 import json
+import shutil
 import time
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +35,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "entropy_coef": 0.01,
     "value_coef": 0.5,
     "max_grad_norm": 0.5,
-    "checkpoint_dir": ROOT / "contests/ahc-061/artifacts/ppo",
+    "artifact_dir": ROOT / "contests/ahc-061/artifacts/ppo",
     "checkpoint_interval_updates": 1,
     "model_channels": 64,
     "model_blocks": 4,
@@ -45,10 +47,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "wandb_mode": "online",
     "wandb_tags": [],
 }
+RESUME_ALLOWED_OVERRIDE_KEYS = {"total_steps"}
+RUNTIME_CONFIG_KEYS = {"config", "resume_dir", "run_dir", "init_checkpoint"}
+LATEST_CHECKPOINT_NAME = "checkpoint_latest.pt"
+STATE_FILE_NAME = "state.json"
+CONFIG_FILE_NAME = "config.json"
 
 
 def main() -> None:
     args = parse_args()
+    args.run_dir = prepare_run_dir(args)
     print_resolved_config(args)
 
     torch.manual_seed(args.seed_start)
@@ -60,6 +68,8 @@ def main() -> None:
         block_type=args.model_block_type,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    if args.init_checkpoint is not None:
+        load_initial_model(args.init_checkpoint, model, device)
     env = RustVecEnv(
         num_envs=args.num_envs,
         seed_start=args.seed_start,
@@ -67,16 +77,39 @@ def main() -> None:
         fixed_m=args.fixed_m,
         fixed_u=args.fixed_u,
     )
-    args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     obs = env.obs
     next_seed_start = _initial_next_seed_start(args)
     global_step = 0
     update = 0
+    if args.resume_dir is not None:
+        resume_state = load_training_state(args.resume_dir, model, optimizer, device)
+        global_step = resume_state["global_step"]
+        update = resume_state["update"]
+        resume_seed_start = resume_state["next_seed_start"]
+        torch.set_rng_state(resume_state["torch_rng_state"])
+        np.random.set_state(resume_state["numpy_rng_state"])
+        env.reset(resume_seed_start, args.seed_stride, args.fixed_m, args.fixed_u)
+        obs = env.obs
+        next_seed_start = _advance_seed_start(resume_seed_start, args)
+        if args.total_steps <= global_step:
+            raise ValueError(
+                f"total_steps ({args.total_steps}) must be greater than resumed "
+                f"global_step ({global_step})"
+            )
+
     started = time.time()
     wandb_run = None
     try:
-        wandb_run = init_wandb(args)
+        wandb_run = init_wandb(args, wandb_run_id=get_wandb_run_id(args.run_dir))
+        write_config(args)
+        update_run_state(
+            args.run_dir,
+            global_step=global_step,
+            update=update,
+            next_seed_start=next_seed_start,
+            wandb_run_id=None if wandb_run is None else wandb_run.id,
+        )
         while global_step < args.total_steps:
             rollout = collect_rollout(model, env, obs, next_seed_start, args, device)
             obs = rollout.pop("last_obs")
@@ -90,11 +123,23 @@ def main() -> None:
             is_last_update = global_step >= args.total_steps
             should_save = update % args.checkpoint_interval_updates == 0 or is_last_update
             if should_save:
-                checkpoint_path = args.checkpoint_dir / f"ppo_step{global_step}.pt"
-                torch.save(
-                    {"model": model.state_dict(), "args": vars(args), "step": global_step},
-                    checkpoint_path,
+                checkpoint_seed_start = next_seed_start
+                checkpoint_path = save_training_state(
+                    args,
+                    model,
+                    optimizer,
+                    global_step=global_step,
+                    update=update,
+                    next_seed_start=checkpoint_seed_start,
+                    wandb_run_id=None if wandb_run is None else wandb_run.id,
                 )
+                obs = env.reset(
+                    checkpoint_seed_start,
+                    args.seed_stride,
+                    args.fixed_m,
+                    args.fixed_u,
+                )
+                next_seed_start = _advance_seed_start(checkpoint_seed_start, args)
             log_metrics = build_log_metrics(
                 update=update,
                 global_step=global_step,
@@ -221,6 +266,135 @@ def _advance_seed_start(seed_start: int, args: argparse.Namespace) -> int:
     return seed_start + args.num_envs * args.seed_stride
 
 
+def prepare_run_dir(args: argparse.Namespace) -> Path:
+    if args.resume_dir is not None:
+        return args.resume_dir
+
+    args.artifact_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = args.artifact_dir / f"run_{timestamp}"
+    run_dir = base
+    suffix = 1
+    while run_dir.exists():
+        run_dir = Path(f"{base}_{suffix:02d}")
+        suffix += 1
+    (run_dir / "checkpoints").mkdir(parents=True)
+    return run_dir
+
+
+def config_for_save(args: argparse.Namespace) -> dict[str, Any]:
+    config = {}
+    for key, value in sorted(vars(args).items()):
+        if key in RUNTIME_CONFIG_KEYS:
+            continue
+        config[key] = _jsonable(value)
+    return config
+
+
+def write_config(args: argparse.Namespace) -> None:
+    config_path = args.run_dir / CONFIG_FILE_NAME
+    config_path.write_text(json.dumps(config_for_save(args), indent=2, sort_keys=True) + "\n")
+
+
+def update_run_state(
+    run_dir: Path,
+    *,
+    global_step: int,
+    update: int,
+    next_seed_start: int,
+    wandb_run_id: str | None,
+) -> None:
+    state_path = run_dir / STATE_FILE_NAME
+    previous: dict[str, Any] = {}
+    if state_path.exists():
+        previous = json.loads(state_path.read_text())
+    now = datetime.now().isoformat(timespec="seconds")
+    state = {
+        "created_at": previous.get("created_at", now),
+        "updated_at": now,
+        "global_step": global_step,
+        "update": update,
+        "next_seed_start": next_seed_start,
+        "wandb_run_id": wandb_run_id if wandb_run_id is not None else previous.get("wandb_run_id"),
+    }
+    state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def get_wandb_run_id(run_dir: Path) -> str | None:
+    state_path = run_dir / STATE_FILE_NAME
+    if not state_path.exists():
+        return None
+    state = json.loads(state_path.read_text())
+    run_id = state.get("wandb_run_id")
+    return run_id if isinstance(run_id, str) and run_id else None
+
+
+def save_training_state(
+    args: argparse.Namespace,
+    model: ActorCritic,
+    optimizer: torch.optim.Optimizer,
+    *,
+    global_step: int,
+    update: int,
+    next_seed_start: int,
+    wandb_run_id: str | None,
+) -> Path:
+    checkpoints_dir = args.run_dir / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = checkpoints_dir / f"step_{global_step}.pt"
+    checkpoint = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "config": config_for_save(args),
+        "global_step": global_step,
+        "update": update,
+        "next_seed_start": next_seed_start,
+        "torch_rng_state": torch.get_rng_state(),
+        "numpy_rng_state": np.random.get_state(),
+    }
+    torch.save(checkpoint, checkpoint_path)
+    shutil.copy2(checkpoint_path, args.run_dir / LATEST_CHECKPOINT_NAME)
+    update_run_state(
+        args.run_dir,
+        global_step=global_step,
+        update=update,
+        next_seed_start=next_seed_start,
+        wandb_run_id=wandb_run_id,
+    )
+    return checkpoint_path
+
+
+def load_training_state(
+    resume_dir: Path,
+    model: ActorCritic,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+) -> dict[str, Any]:
+    checkpoint_path = resume_dir / LATEST_CHECKPOINT_NAME
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"latest checkpoint not found: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    model.load_state_dict(checkpoint["model"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
+    return {
+        "global_step": int(checkpoint["global_step"]),
+        "update": int(checkpoint["update"]),
+        "next_seed_start": int(checkpoint["next_seed_start"]),
+        "torch_rng_state": checkpoint["torch_rng_state"],
+        "numpy_rng_state": checkpoint["numpy_rng_state"],
+    }
+
+
+def load_initial_model(
+    checkpoint_path: Path,
+    model: ActorCritic,
+    device: torch.device,
+) -> None:
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
+    model.load_state_dict(state_dict)
+
+
 def update_model(
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
@@ -294,7 +468,7 @@ def _normalized_entropy(entropy: torch.Tensor, mask: torch.Tensor) -> torch.Tens
     return normalized.mean()
 
 
-def init_wandb(args: argparse.Namespace) -> Any | None:
+def init_wandb(args: argparse.Namespace, *, wandb_run_id: str | None = None) -> Any | None:
     if not args.wandb_enabled:
         return None
 
@@ -311,6 +485,8 @@ def init_wandb(args: argparse.Namespace) -> Any | None:
         mode=args.wandb_mode,
         tags=args.wandb_tags,
         config=config,
+        id=wandb_run_id,
+        resume="must" if wandb_run_id is not None else None,
     )
     wandb.define_metric("summary/cumulative_env_steps")
     wandb.define_metric("*", step_metric="summary/cumulative_env_steps")
@@ -365,6 +541,8 @@ def build_log_metrics(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, help="Path to a TOML config file.")
+    parser.add_argument("--resume-dir", type=Path, default=argparse.SUPPRESS)
+    parser.add_argument("--init-checkpoint", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--num-envs", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--total-steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--rollout-steps", type=int, default=argparse.SUPPRESS)
@@ -382,7 +560,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--entropy-coef", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--value-coef", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--max-grad-norm", type=float, default=argparse.SUPPRESS)
-    parser.add_argument("--checkpoint-dir", type=Path, default=argparse.SUPPRESS)
+    parser.add_argument("--artifact-dir", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--checkpoint-interval-updates", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-channels", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-blocks", type=int, default=argparse.SUPPRESS)
@@ -421,16 +599,53 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     cli_config = vars(parsed).copy()
     config_path = cli_config.pop("config", None)
-    config = DEFAULT_CONFIG.copy()
+    resume_dir = cli_config.get("resume_dir")
+    if resume_dir is not None and "init_checkpoint" in cli_config:
+        raise ValueError("resume_dir and init_checkpoint are mutually exclusive")
+
+    config = load_saved_config(resume_dir) if resume_dir is not None else DEFAULT_CONFIG.copy()
+    file_config = {}
     if config_path is not None:
-        config.update(load_toml_config(config_path))
+        file_config = load_toml_config(config_path)
+    if resume_dir is not None:
+        validate_resume_overrides(file_config)
+        validate_resume_overrides(
+            {key: value for key, value in cli_config.items() if key != "resume_dir"}
+        )
+    config.update(file_config)
     config.update(cli_config)
-    config["checkpoint_dir"] = Path(config["checkpoint_dir"])
+    config["artifact_dir"] = Path(config["artifact_dir"])
+    config["resume_dir"] = None if config.get("resume_dir") is None else Path(config["resume_dir"])
+    config["init_checkpoint"] = (
+        None if config.get("init_checkpoint") is None else Path(config["init_checkpoint"])
+    )
     if config["checkpoint_interval_updates"] <= 0:
         raise ValueError("checkpoint_interval_updates must be positive")
     if config["device"] == "auto":
         config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
     return argparse.Namespace(**config)
+
+
+def validate_resume_overrides(overrides: dict[str, Any]) -> None:
+    disallowed = sorted(set(overrides) - RESUME_ALLOWED_OVERRIDE_KEYS)
+    if disallowed:
+        raise ValueError(
+            "resume only allows overriding total_steps; disallowed keys: "
+            + ", ".join(disallowed)
+        )
+
+
+def load_saved_config(resume_dir: Path) -> dict[str, Any]:
+    config_path = resume_dir / CONFIG_FILE_NAME
+    if not config_path.exists():
+        raise FileNotFoundError(f"saved config not found: {config_path}")
+    raw = json.loads(config_path.read_text())
+    unknown = sorted(set(raw) - set(DEFAULT_CONFIG))
+    if unknown:
+        raise ValueError(f"unknown saved config keys: {', '.join(unknown)}")
+    config = DEFAULT_CONFIG.copy()
+    config.update(raw)
+    return config
 
 
 def load_toml_config(path: Path) -> dict[str, Any]:
@@ -448,10 +663,16 @@ def load_toml_config(path: Path) -> dict[str, Any]:
 
 def print_resolved_config(args: argparse.Namespace) -> None:
     printable = {
-        key: str(value) if isinstance(value, Path) else value
+        key: _jsonable(value)
         for key, value in sorted(vars(args).items())
     }
     print("config=" + json.dumps(printable, sort_keys=True), flush=True)
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 
 if __name__ == "__main__":

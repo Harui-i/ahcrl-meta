@@ -1,14 +1,20 @@
+import json
 from pathlib import Path
 
 import pytest
 import torch
 
+from ahcrl.contests.ahc061.model import ActorCritic
 from ahcrl.contests.ahc061.train_ppo import (
     _advance_seed_start,
     _initial_next_seed_start,
     _normalized_entropy,
     build_log_metrics,
+    config_for_save,
+    load_initial_model,
+    load_training_state,
     parse_args,
+    save_training_state,
 )
 
 
@@ -24,7 +30,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 "model_blocks = 2",
                 'model_block_type = "residual"',
                 'device = "cpu"',
-                'checkpoint_dir = "tmp/checkpoints"',
+                'artifact_dir = "tmp/artifacts"',
                 "checkpoint_interval_updates = 5",
                 "wandb_enabled = true",
                 'wandb_project = "test-project"',
@@ -53,7 +59,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.model_blocks == 3
     assert args.model_block_type == "convnext"
     assert args.device == "cpu"
-    assert args.checkpoint_dir == Path("tmp/checkpoints")
+    assert args.artifact_dir == Path("tmp/artifacts")
     assert args.checkpoint_interval_updates == 5
     assert args.wandb_enabled is True
     assert args.wandb_project == "test-project"
@@ -75,6 +81,60 @@ def test_parse_args_rejects_non_positive_checkpoint_interval(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="checkpoint_interval_updates"):
         parse_args(["--config", str(config_path)])
+
+
+def test_parse_args_resume_loads_saved_config_and_only_allows_total_steps(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run_1"
+    run_dir.mkdir()
+    config_path = run_dir / "config.json"
+    args = parse_args(
+        [
+            "--total-steps",
+            "128",
+            "--num-envs",
+            "4",
+            "--device",
+            "cpu",
+            "--artifact-dir",
+            str(tmp_path / "artifacts"),
+        ]
+    )
+    config_path.write_text(json.dumps(config_for_save(args), sort_keys=True) + "\n")
+
+    resumed = parse_args(
+        [
+            "--resume-dir",
+            str(run_dir),
+            "--total-steps",
+            "256",
+        ]
+    )
+
+    assert resumed.resume_dir == run_dir
+    assert resumed.total_steps == 256
+    assert resumed.num_envs == 4
+    assert resumed.device == "cpu"
+
+    with pytest.raises(ValueError, match="resume only allows overriding total_steps"):
+        parse_args(["--resume-dir", str(run_dir), "--lr", "0.001"])
+
+
+def test_parse_args_rejects_resume_with_init_checkpoint(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_1"
+    run_dir.mkdir()
+    (run_dir / "config.json").write_text("{}\n")
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        parse_args(
+            [
+                "--resume-dir",
+                str(run_dir),
+                "--init-checkpoint",
+                str(tmp_path / "checkpoint.pt"),
+            ]
+        )
 
 
 def test_seed_blocks_advance_by_parallel_env_span(tmp_path: Path) -> None:
@@ -133,6 +193,67 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
     assert metrics["loss/policy"] == 0.01
     assert metrics["train/normalized_entropy"] == 0.5
     assert metrics["checkpoint/path"] == "checkpoint.pt"
+
+
+def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -> None:
+    args = parse_args(
+        [
+            "--device",
+            "cpu",
+            "--model-channels",
+            "8",
+            "--model-blocks",
+            "1",
+            "--artifact-dir",
+            str(tmp_path),
+        ]
+    )
+    args.run_dir = tmp_path / "run_1"
+    args.run_dir.mkdir()
+    model = ActorCritic(channels=8, blocks=1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    torch.manual_seed(123)
+
+    checkpoint_path = save_training_state(
+        args,
+        model,
+        optimizer,
+        global_step=128,
+        update=2,
+        next_seed_start=64,
+        wandb_run_id="abc123",
+    )
+
+    reloaded_model = ActorCritic(channels=8, blocks=1)
+    reloaded_optimizer = torch.optim.AdamW(reloaded_model.parameters(), lr=args.lr)
+    state = load_training_state(
+        args.run_dir,
+        reloaded_model,
+        reloaded_optimizer,
+        torch.device("cpu"),
+    )
+
+    assert checkpoint_path == args.run_dir / "checkpoints" / "step_128.pt"
+    assert (args.run_dir / "checkpoint_latest.pt").exists()
+    assert state["global_step"] == 128
+    assert state["update"] == 2
+    assert state["next_seed_start"] == 64
+    for left, right in zip(model.parameters(), reloaded_model.parameters(), strict=True):
+        assert torch.equal(left, right)
+
+
+def test_load_initial_model_loads_only_model_state(tmp_path: Path) -> None:
+    source = ActorCritic(channels=8, blocks=1)
+    target = ActorCritic(channels=8, blocks=1)
+    for parameter in source.parameters():
+        parameter.data.fill_(0.5)
+    checkpoint_path = tmp_path / "checkpoint.pt"
+    torch.save({"model": source.state_dict(), "global_step": 999}, checkpoint_path)
+
+    load_initial_model(checkpoint_path, target, torch.device("cpu"))
+
+    for left, right in zip(source.parameters(), target.parameters(), strict=True):
+        assert torch.equal(left, right)
 
 
 def test_normalized_entropy_scales_by_valid_action_count() -> None:
