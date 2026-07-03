@@ -1,6 +1,6 @@
 [train]
 num_envs = 256
-total_steps = 2000000
+total_steps = 10000000
 rollout_steps = 100
 seed_start = 0
 seed_stride = 1

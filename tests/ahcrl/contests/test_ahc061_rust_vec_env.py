@@ -1,6 +1,15 @@
 import numpy as np
 
-from ahcrl.contests.ahc061.encoder import NUM_PLANES, PLANE_LEGAL_MASK, PLANE_M, PLANE_U
+from ahcrl.contests.ahc061.encoder import (
+    NUM_PLANES,
+    PLANE_COMP_START,
+    PLANE_DIST_CENTER,
+    PLANE_LEGAL_MASK,
+    PLANE_M,
+    PLANE_NEXT_GREEDY_START,
+    PLANE_REACH_START,
+    PLANE_U,
+)
 from ahcrl.contests.ahc061.rust_vec_env import RustVecEnv
 
 
@@ -20,6 +29,17 @@ def test_rust_vec_env_reset_and_step() -> None:
             obs["planes"][0, PLANE_LEGAL_MASK].reshape(100).astype(bool),
             obs["mask"][0],
         )
+        np.testing.assert_array_equal(
+            obs["planes"][0, PLANE_REACH_START].reshape(100).astype(bool),
+            obs["mask"][0],
+        )
+        np.testing.assert_array_equal(
+            obs["planes"][0, PLANE_NEXT_GREEDY_START].reshape(100).astype(bool),
+            obs["mask"][0],
+        )
+        assert np.all(obs["planes"][0, PLANE_COMP_START] <= obs["planes"][0, PLANE_REACH_START])
+        assert obs["planes"][0, PLANE_DIST_CENTER, 0, 0] == np.float32(1.0)
+        assert obs["planes"][0, PLANE_DIST_CENTER, 4, 4] == np.float32(1 / 9)
         assert obs["mask"][0].any()
         action = int(np.flatnonzero(obs["mask"][0])[0])
         step = env.step(np.array([action], dtype=np.int64))

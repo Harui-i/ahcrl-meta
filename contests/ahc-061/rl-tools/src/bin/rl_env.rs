@@ -1,13 +1,15 @@
+use std::collections::VecDeque;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
+use ahc061_rl_tools::official_compat::get_candidates;
 use ahc061_rl_tools::vec_env::EnvSlot;
 
 const BOARD_SIZE: usize = 10;
 const MAX_PLAYERS: usize = 8;
 const MAX_LEVEL: usize = 5;
 const ORACLE_PARAMS_PER_PLAYER: usize = 5;
-const NUM_PLANES: usize = 77;
+const NUM_PLANES: usize = 118;
 const PLANE_M: usize = 24;
 const PLANE_U: usize = 25;
 const PLANE_SCORE_RATIO: usize = 26;
@@ -15,6 +17,12 @@ const PLANE_SCORE_DIFF: usize = 27;
 const PLANE_LEGAL_MASK: usize = 28;
 const PLANE_PLAYER_SCORE_START: usize = 29;
 const PLANE_ORACLE_PARAM_START: usize = PLANE_PLAYER_SCORE_START + MAX_PLAYERS;
+const PLANE_COMP_START: usize = PLANE_ORACLE_PARAM_START + MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER;
+const PLANE_REACH_START: usize = PLANE_COMP_START + MAX_PLAYERS;
+const PLANE_NEXT_GREEDY_START: usize = PLANE_REACH_START + MAX_PLAYERS;
+const PLANE_DIST_OWNER_START: usize = PLANE_NEXT_GREEDY_START + MAX_PLAYERS;
+const PLANE_DIST_COMP_START: usize = PLANE_DIST_OWNER_START + MAX_PLAYERS;
+const PLANE_DIST_CENTER: usize = PLANE_DIST_COMP_START + MAX_PLAYERS;
 
 fn plane_idx(plane: usize, x: usize, y: usize) -> usize {
     plane * BOARD_SIZE * BOARD_SIZE + x * BOARD_SIZE + y
@@ -26,6 +34,132 @@ fn fill_plane(planes: &mut [f32], plane: usize, value: f32) {
             planes[plane_idx(plane, x, y)] = value;
         }
     }
+}
+
+fn connected_component_mask(slot: &EnvSlot, player: usize) -> Vec<bool> {
+    let mut mask = vec![false; BOARD_SIZE * BOARD_SIZE];
+    let start = slot.state.pos[player];
+    if slot.state.owner[start.0][start.1] != player as i32 {
+        return mask;
+    }
+
+    let mut queue = VecDeque::new();
+    mask[start.0 * BOARD_SIZE + start.1] = true;
+    queue.push_back(start);
+    while let Some((x, y)) = queue.pop_front() {
+        let dirs = [(0, 1), (1, 0), (0, !0), (!0, 0)];
+        for &(dx, dy) in &dirs {
+            let nx = x.wrapping_add(dx);
+            let ny = y.wrapping_add(dy);
+            if nx >= BOARD_SIZE || ny >= BOARD_SIZE {
+                continue;
+            }
+            let idx = nx * BOARD_SIZE + ny;
+            if !mask[idx] && slot.state.owner[nx][ny] == player as i32 {
+                mask[idx] = true;
+                queue.push_back((nx, ny));
+            }
+        }
+    }
+    mask
+}
+
+fn reach_mask(slot: &EnvSlot, player: usize) -> Vec<bool> {
+    let mut mask = vec![false; BOARD_SIZE * BOARD_SIZE];
+    for (x, y) in get_candidates(&slot.input, &slot.state, player) {
+        mask[x * BOARD_SIZE + y] = true;
+    }
+    mask
+}
+
+fn greedy_target_mask(slot: &EnvSlot, player: usize) -> Vec<bool> {
+    if player == 0 {
+        return reach_mask(slot, player);
+    }
+
+    let mut mask = vec![false; BOARD_SIZE * BOARD_SIZE];
+    let candidates = get_candidates(&slot.input, &slot.state, player);
+    if candidates.is_empty() {
+        return mask;
+    }
+
+    let ai_idx = player - 1;
+    let mut best_score = f64::NEG_INFINITY;
+    let mut candidate_scores = Vec::with_capacity(candidates.len());
+    for &(x, y) in &candidates {
+        let owner = slot.state.owner[x][y];
+        let level = slot.state.level[x][y];
+        let value = slot.input.V[x][y] as f64;
+        let score = if owner == -1 {
+            value * slot.input.wa[ai_idx]
+        } else if owner == player as i32 {
+            if level < slot.input.U {
+                value * slot.input.wb[ai_idx]
+            } else {
+                0.0
+            }
+        } else if level == 1 {
+            value * slot.input.wc[ai_idx]
+        } else {
+            value * slot.input.wd[ai_idx]
+        };
+        best_score = best_score.max(score);
+        candidate_scores.push(score);
+    }
+
+    let tolerance = 1e-9 * best_score.abs().max(1.0);
+    for (&(x, y), &score) in candidates.iter().zip(candidate_scores.iter()) {
+        if score >= best_score - tolerance {
+            mask[x * BOARD_SIZE + y] = true;
+        }
+    }
+    mask
+}
+
+fn dist_to_sources(sources: &[bool]) -> Vec<f32> {
+    const INF: i32 = 1 << 20;
+    let mut dist = vec![INF; BOARD_SIZE * BOARD_SIZE];
+    let mut has_source = false;
+    for idx in 0..BOARD_SIZE * BOARD_SIZE {
+        if sources[idx] {
+            dist[idx] = 0;
+            has_source = true;
+        }
+    }
+    if !has_source {
+        return vec![1.0; BOARD_SIZE * BOARD_SIZE];
+    }
+
+    for x in 0..BOARD_SIZE {
+        for y in 0..BOARD_SIZE {
+            let idx = x * BOARD_SIZE + y;
+            let mut d = dist[idx];
+            if x > 0 {
+                d = d.min(dist[(x - 1) * BOARD_SIZE + y] + 1);
+            }
+            if y > 0 {
+                d = d.min(dist[x * BOARD_SIZE + y - 1] + 1);
+            }
+            dist[idx] = d;
+        }
+    }
+    for x in (0..BOARD_SIZE).rev() {
+        for y in (0..BOARD_SIZE).rev() {
+            let idx = x * BOARD_SIZE + y;
+            let mut d = dist[idx];
+            if x + 1 < BOARD_SIZE {
+                d = d.min(dist[(x + 1) * BOARD_SIZE + y] + 1);
+            }
+            if y + 1 < BOARD_SIZE {
+                d = d.min(dist[x * BOARD_SIZE + y + 1] + 1);
+            }
+            dist[idx] = d;
+        }
+    }
+
+    dist.into_iter()
+        .map(|d| if d >= INF { 1.0 } else { d as f32 / 18.0 })
+        .collect()
 }
 
 fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
@@ -153,6 +287,55 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
                 };
                 fill_plane(&mut planes, param_start + param_idx, value);
             }
+        }
+    }
+
+    let mut comp_masks = Vec::with_capacity(slot.input.M);
+    let mut reach_masks = Vec::with_capacity(slot.input.M);
+    let mut next_greedy_masks = Vec::with_capacity(slot.input.M);
+    for player in 0..slot.input.M {
+        comp_masks.push(connected_component_mask(slot, player));
+        reach_masks.push(reach_mask(slot, player));
+        next_greedy_masks.push(greedy_target_mask(slot, player));
+    }
+
+    for player in 0..slot.input.M {
+        let mapped_player = player_map[player];
+        if mapped_player >= MAX_PLAYERS {
+            continue;
+        }
+        for idx in 0..BOARD_SIZE * BOARD_SIZE {
+            let x = idx / BOARD_SIZE;
+            let y = idx % BOARD_SIZE;
+            planes[plane_idx(PLANE_COMP_START + mapped_player, x, y)] =
+                comp_masks[player][idx] as u8 as f32;
+            planes[plane_idx(PLANE_REACH_START + mapped_player, x, y)] =
+                reach_masks[player][idx] as u8 as f32;
+            planes[plane_idx(PLANE_NEXT_GREEDY_START + mapped_player, x, y)] =
+                next_greedy_masks[player][idx] as u8 as f32;
+        }
+
+        let mut owner_source = vec![false; BOARD_SIZE * BOARD_SIZE];
+        for x in 0..BOARD_SIZE {
+            for y in 0..BOARD_SIZE {
+                owner_source[x * BOARD_SIZE + y] = slot.state.owner[x][y] == player as i32;
+            }
+        }
+        let dist_owner = dist_to_sources(&owner_source);
+        let dist_comp = dist_to_sources(&comp_masks[player]);
+        for idx in 0..BOARD_SIZE * BOARD_SIZE {
+            let x = idx / BOARD_SIZE;
+            let y = idx % BOARD_SIZE;
+            planes[plane_idx(PLANE_DIST_OWNER_START + mapped_player, x, y)] = dist_owner[idx];
+            planes[plane_idx(PLANE_DIST_COMP_START + mapped_player, x, y)] = dist_comp[idx];
+        }
+    }
+
+    for x in 0..BOARD_SIZE {
+        for y in 0..BOARD_SIZE {
+            let dx = (x as f32 - 4.5).abs();
+            let dy = (y as f32 - 4.5).abs();
+            planes[plane_idx(PLANE_DIST_CENTER, x, y)] = (dx + dy) / 9.0;
         }
     }
 
