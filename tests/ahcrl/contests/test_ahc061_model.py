@@ -45,6 +45,22 @@ def test_value_head_receives_gradients() -> None:
     assert grad_norm > 0.0
 
 
+def test_policy_head_receives_gradients() -> None:
+    model = ActorCritic(channels=8, blocks=1)
+    x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+    logits, _ = model(x)
+    loss = logits.square().mean()
+
+    loss.backward()
+
+    grad_norm = sum(
+        parameter.grad.abs().sum().item()
+        for name, parameter in model.named_parameters()
+        if name.startswith("policy.") and parameter.grad is not None
+    )
+    assert grad_norm > 0.0
+
+
 def test_actor_critic_rejects_unknown_block_type() -> None:
     with pytest.raises(ValueError, match="unknown block_type"):
         ActorCritic(block_type="unknown")

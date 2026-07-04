@@ -22,6 +22,8 @@ class ActorCritic(nn.Module):
             *[block_cls(channels) for _ in range(blocks)],
         )
         self.policy = nn.Sequential(
+            block_cls(channels),
+            block_cls(channels),
             nn.Conv2d(channels, channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(channels),
             nn.ReLU(inplace=True),
