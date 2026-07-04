@@ -13,7 +13,13 @@ from torch.distributions import Categorical
 
 from .model import ActorCritic
 from .rust_vec_env import RustVecEnv
-from .train_ppo import _advance_seed_start, _initial_next_seed_start, load_initial_model, parse_args
+from .train_ppo import (
+    MODEL_DTYPE,
+    _advance_seed_start,
+    _initial_next_seed_start,
+    load_initial_model,
+    parse_args,
+)
 
 
 @dataclass
@@ -58,7 +64,7 @@ def main(argv: list[str] | None = None) -> None:
         channels=args.model_channels,
         blocks=args.model_blocks,
         block_type=args.model_block_type,
-    ).to(device)
+    ).to(device=device, dtype=MODEL_DTYPE)
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, raw_model, device)
     raw_model.eval()
@@ -149,7 +155,10 @@ def timed_rollout(
     for _ in range(args.rollout_steps):
         encoded = timed(
             "planes_to_device",
-            lambda current_obs=obs: torch.from_numpy(current_obs["planes"]).to(device),
+            lambda current_obs=obs: torch.from_numpy(current_obs["planes"]).to(
+                device=device,
+                dtype=MODEL_DTYPE,
+            ),
         )
         mask = timed(
             "mask_to_device",
@@ -162,6 +171,8 @@ def timed_rollout(
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
             with torch.no_grad():
                 logits, value = model(current_encoded)
+                logits = logits.float()
+                value = value.float()
                 logits = logits.masked_fill(~current_mask, -1e9)
                 dist = Categorical(logits=logits)
                 action = dist.sample()
@@ -212,11 +223,14 @@ def timed_rollout(
 
     next_encoded = timed(
         "bootstrap_planes_to_device",
-        lambda current_obs=obs: torch.from_numpy(current_obs["planes"]).to(device),
+        lambda current_obs=obs: torch.from_numpy(current_obs["planes"]).to(
+            device=device,
+            dtype=MODEL_DTYPE,
+        ),
     )
     next_value = timed(
         "bootstrap_inference",
-        lambda: model(next_encoded)[1].cpu(),
+        lambda: model(next_encoded)[1].float().cpu(),
     )
 
     def build_gae() -> None:

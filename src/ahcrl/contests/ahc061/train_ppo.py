@@ -17,6 +17,7 @@ from .model import ActorCritic
 from .rust_vec_env import RustVecEnv
 
 ROOT = Path(__file__).resolve().parents[4]
+MODEL_DTYPE = torch.bfloat16
 DEFAULT_CONFIG: dict[str, Any] = {
     "num_envs": 64,
     "total_steps": 200_000,
@@ -67,7 +68,7 @@ def main() -> None:
         channels=args.model_channels,
         blocks=args.model_blocks,
         block_type=args.model_block_type,
-    ).to(device)
+    ).to(device=device, dtype=MODEL_DTYPE)
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, raw_model, device)
     optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
@@ -199,10 +200,12 @@ def collect_rollout(
     score_buf = []
 
     for _ in range(args.rollout_steps):
-        encoded = torch.from_numpy(obs["planes"]).to(device)
+        encoded = torch.from_numpy(obs["planes"]).to(device=device, dtype=MODEL_DTYPE)
         mask = torch.from_numpy(obs["mask"]).to(device)
         with torch.no_grad():
             logits, value = model(encoded)
+            logits = logits.float()
+            value = value.float()
             logits = logits.masked_fill(~mask, -1e9)
             dist = Categorical(logits=logits)
             action = dist.sample()
@@ -229,7 +232,11 @@ def collect_rollout(
             next_seed_start = _advance_seed_start(next_seed_start, args)
 
     with torch.no_grad():
-        next_value = model(torch.from_numpy(obs["planes"]).to(device))[1].cpu()
+        next_encoded = torch.from_numpy(obs["planes"]).to(
+            device=device,
+            dtype=MODEL_DTYPE,
+        )
+        next_value = model(next_encoded)[1].float().cpu()
 
     rewards = torch.stack(reward_buf)
     dones = torch.stack(done_buf)
@@ -428,6 +435,8 @@ def update_model(
         for start in range(0, batch_size, args.minibatch_size):
             mb = perm[start : start + args.minibatch_size].to(device)
             logits, value = model(obs[mb])
+            logits = logits.float()
+            value = value.float()
             logits = logits.masked_fill(~masks[mb], -1e9)
             dist = Categorical(logits=logits)
             new_logprobs = dist.log_prob(actions[mb])

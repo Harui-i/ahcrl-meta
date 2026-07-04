@@ -6,6 +6,7 @@ import torch
 
 from ahcrl.contests.ahc061.model import ActorCritic
 from ahcrl.contests.ahc061.train_ppo import (
+    MODEL_DTYPE,
     _advance_seed_start,
     _initial_next_seed_start,
     _normalized_entropy,
@@ -60,6 +61,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.model_channels == 32
     assert args.model_blocks == 3
     assert args.model_block_type == "convnext"
+    assert not hasattr(args, "model_dtype")
     assert args.device == "cpu"
     assert args.compile is True
     assert args.artifact_dir == Path("tmp/artifacts")
@@ -219,7 +221,7 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     )
     args.run_dir = tmp_path / "run_1"
     args.run_dir.mkdir()
-    model = ActorCritic(channels=8, blocks=1)
+    model = ActorCritic(channels=8, blocks=1).to(dtype=MODEL_DTYPE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     torch.manual_seed(123)
 
@@ -233,7 +235,14 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
         wandb_run_id="abc123",
     )
 
-    reloaded_model = ActorCritic(channels=8, blocks=1)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert {
+        parameter.dtype
+        for parameter in checkpoint["model"].values()
+        if torch.is_floating_point(parameter)
+    } == {MODEL_DTYPE}
+
+    reloaded_model = ActorCritic(channels=8, blocks=1).to(dtype=MODEL_DTYPE)
     reloaded_optimizer = torch.optim.AdamW(reloaded_model.parameters(), lr=args.lr)
     state = load_training_state(
         args.run_dir,
@@ -253,7 +262,7 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
 
 def test_load_initial_model_loads_only_model_state(tmp_path: Path) -> None:
     source = ActorCritic(channels=8, blocks=1)
-    target = ActorCritic(channels=8, blocks=1)
+    target = ActorCritic(channels=8, blocks=1).to(dtype=MODEL_DTYPE)
     for parameter in source.parameters():
         parameter.data.fill_(0.5)
     checkpoint_path = tmp_path / "checkpoint.pt"
@@ -262,7 +271,8 @@ def test_load_initial_model_loads_only_model_state(tmp_path: Path) -> None:
     load_initial_model(checkpoint_path, target, torch.device("cpu"))
 
     for left, right in zip(source.parameters(), target.parameters(), strict=True):
-        assert torch.equal(left, right)
+        assert right.dtype == MODEL_DTYPE
+        assert torch.equal(left.to(dtype=MODEL_DTYPE), right)
 
 
 def test_normalized_entropy_scales_by_valid_action_count() -> None:

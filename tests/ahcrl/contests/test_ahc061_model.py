@@ -29,6 +29,16 @@ def test_actor_critic_can_be_traced() -> None:
     assert value.shape == (1,)
 
 
+def test_actor_critic_runs_with_bfloat16_weights_and_inputs() -> None:
+    model = ActorCritic(channels=8, blocks=1).to(dtype=torch.bfloat16).eval()
+    x = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE, dtype=torch.bfloat16)
+
+    logits, value = model(x)
+
+    assert logits.dtype == torch.bfloat16
+    assert value.dtype == torch.bfloat16
+
+
 def test_value_head_receives_gradients() -> None:
     model = ActorCritic(channels=8, blocks=1)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
