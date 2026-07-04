@@ -162,7 +162,7 @@ def main() -> None:
                         f"update={update}",
                         f"step={global_step}",
                         f"fps={log_metrics['summary/fps']:.1f}",
-                        f"mean_score={log_metrics['train/mean_score']:.1f}",
+                        f"mean_final_score={log_metrics['train/final_mean_score']:.1f}",
                         f"mean_reward={log_metrics['train/mean_reward']:.5f}",
                         f"policy_loss={stats['policy_loss']:.5f}",
                         f"value_loss={stats['value_loss']:.5f}",
@@ -513,6 +513,12 @@ def build_log_metrics(
     returns = rollout["returns"].float()
     masks = rollout["masks"].float()
     checkpoint = "" if checkpoint_path is None else str(checkpoint_path)
+    return_variance = returns.var(unbiased=False)
+    explained_variance = (
+        torch.tensor(float("nan"), device=returns.device)
+        if return_variance <= 1e-8
+        else 1.0 - (returns - values).var(unbiased=False) / return_variance
+    )
 
     return {
         "summary/cumulative_env_steps": global_step,
@@ -528,6 +534,7 @@ def build_log_metrics(
         "train/done_count": int(dones.sum().item()),
         "train/mean_value": float(values.mean().item()),
         "train/mean_return": float(returns.mean().item()),
+        "train/explained_variance": float(explained_variance.item()),
         "train/mean_advantage": float(advantages.mean().item()),
         "train/std_advantage": float(advantages.std(unbiased=False).item()),
         "train/valid_action_fraction": float(masks.mean().item()),

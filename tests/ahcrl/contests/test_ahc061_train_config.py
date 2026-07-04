@@ -198,6 +198,7 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
     assert metrics["train/mean_score"] == 4.0
     assert metrics["train/final_mean_score"] == 6.0
     assert metrics["train/mean_reward"] == pytest.approx(0.25)
+    assert metrics["train/explained_variance"] == pytest.approx(1.0)
     assert metrics["loss/policy"] == 0.01
     assert metrics["train/normalized_entropy"] == 0.5
     assert metrics["checkpoint/path"] == "checkpoint.pt"
