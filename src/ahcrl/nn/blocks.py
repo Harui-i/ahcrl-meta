@@ -35,7 +35,7 @@ class ConvNeXtBlock(nn.Module):
         channels: int,
         *,
         expansion: int = 4,
-        kernel_size: int = 7,
+        kernel_size: int = 3,
         layer_scale_init: float = 1e-6,
     ) -> None:
         super().__init__()

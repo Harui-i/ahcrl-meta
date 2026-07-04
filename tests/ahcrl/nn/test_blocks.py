@@ -27,6 +27,13 @@ def test_convnext_block_preserves_shape() -> None:
     assert y.shape == x.shape
 
 
+def test_convnext_block_uses_3x3_depthwise_by_default() -> None:
+    block = ConvNeXtBlock(channels=8)
+
+    assert block.depthwise.kernel_size == (3, 3)
+    assert block.depthwise.padding == (1, 1)
+
+
 def test_convnext_block_rejects_non_positive_channels() -> None:
     with pytest.raises(ValueError, match="channels"):
         ConvNeXtBlock(channels=0)
