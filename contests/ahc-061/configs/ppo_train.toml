@@ -1,5 +1,5 @@
 [train]
-num_envs = 512
+num_envs = 1024
 total_steps = 10000000
 rollout_steps = 100
 seed_start = 0
@@ -18,7 +18,7 @@ max_grad_norm = 0.5
 artifact_dir = "contests/ahc-061/artifacts/ppo"
 checkpoint_interval_updates = 40
 model_channels = 256
-model_blocks = 4
+model_blocks = 2
 model_block_type = "convnext"
 wandb_enabled = true
 wandb_project = "ahcrl-meta"
