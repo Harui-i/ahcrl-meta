@@ -89,6 +89,34 @@ impl ParticleFilterSmc {
         let Some(summary) = MoveSummary::new(input, state, player, observed) else {
             return;
         };
+        self.update_with_summary(input, state, player, &summary);
+    }
+
+    pub fn update_with_candidates(
+        &mut self,
+        input: &Input,
+        state: &State,
+        player: usize,
+        observed: (usize, usize),
+        candidates: &[(usize, usize)],
+    ) {
+        let Some(observed_idx) = candidates.iter().position(|&xy| xy == observed) else {
+            return;
+        };
+        let summary = MoveSummary {
+            candidates: candidates.to_vec(),
+            observed_idx,
+        };
+        self.update_with_summary(input, state, player, &summary);
+    }
+
+    fn update_with_summary(
+        &mut self,
+        input: &Input,
+        state: &State,
+        player: usize,
+        summary: &MoveSummary,
+    ) {
         if summary.candidates.is_empty() {
             return;
         }
@@ -141,6 +169,16 @@ impl ParticleFilterSmc {
 
     pub fn predictive_distribution(&self, input: &Input, state: &State, player: usize) -> Vec<f32> {
         let candidates = get_candidates(input, state, player);
+        self.predictive_distribution_for_candidates(input, state, player, &candidates)
+    }
+
+    pub fn predictive_distribution_for_candidates(
+        &self,
+        input: &Input,
+        state: &State,
+        player: usize,
+        candidates: &[(usize, usize)],
+    ) -> Vec<f32> {
         let mut dist = vec![0.0_f64; input.N * input.N];
         if candidates.is_empty() {
             return vec![0.0; input.N * input.N];
@@ -157,6 +195,29 @@ impl ParticleFilterSmc {
             );
         }
         dist.into_iter().map(|v| v as f32).collect()
+    }
+
+    pub fn predictive_distribution_board100_for_candidates(
+        &self,
+        input: &Input,
+        state: &State,
+        player: usize,
+        candidates: &[(usize, usize)],
+    ) -> [f32; 100] {
+        let mut out = [0.0_f32; 100];
+        if candidates.is_empty() {
+            return out;
+        }
+        let mut dist = [0.0_f64; 100];
+        for (particle, &weight) in self.particles.iter().zip(self.weights.iter()) {
+            add_policy_distribution(
+                input, state, player, candidates, particle, weight, &mut dist,
+            );
+        }
+        for idx in 0..100 {
+            out[idx] = dist[idx] as f32;
+        }
+        out
     }
 
     fn effective_sample_size(&self) -> f64 {

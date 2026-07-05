@@ -211,7 +211,7 @@ def collect_rollout(
         m_values, u_values = _extract_m_u_from_obs(obs)
         encoded = torch.from_numpy(obs["planes"]).to(device=device, dtype=MODEL_DTYPE)
         mask = torch.from_numpy(obs["mask"]).to(device)
-        with torch.no_grad():
+        with torch.inference_mode():
             logits, value = model(encoded)
             logits = logits.float()
             value = value.float()
@@ -220,7 +220,7 @@ def collect_rollout(
             action = dist.sample()
             logprob = dist.log_prob(action)
 
-        step = env.step(action.cpu().numpy().astype(np.int64))
+        step = env.step(action.cpu().numpy())
         obs_buf.append(encoded.cpu())
         action_buf.append(action.cpu())
         logprob_buf.append(logprob.cpu())
@@ -242,7 +242,7 @@ def collect_rollout(
             )
             next_seed_start = _advance_seed_start(next_seed_start, args)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         next_encoded = torch.from_numpy(obs["planes"]).to(
             device=device,
             dtype=MODEL_DTYPE,

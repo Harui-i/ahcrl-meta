@@ -21,17 +21,22 @@ from .train_ppo import (
     parse_args,
 )
 
+GPU_PHASES: frozenset[str] = frozenset()
+
 
 @dataclass
 class PhaseTimer:
     device: torch.device
     totals: dict[str, float]
+    gpu_phases: frozenset[str]
 
     def measure(self, phase: str, fn: Callable[[], Any]) -> Any:
-        self._sync()
+        if phase in self.gpu_phases:
+            self._sync()
         started = time.perf_counter()
         result = fn()
-        self._sync()
+        if phase in self.gpu_phases:
+            self._sync()
         self.totals[phase] = self.totals.get(phase, 0.0) + time.perf_counter() - started
         return result
 
@@ -93,7 +98,7 @@ def main(argv: list[str] | None = None) -> None:
         warmup_sec = time.perf_counter() - warmup_started
 
         totals: dict[str, float] = {}
-        timer = PhaseTimer(device=device, totals=totals)
+        timer = PhaseTimer(device=device, totals=totals, gpu_phases=GPU_PHASES)
         measured_started = time.perf_counter()
         obs = env.obs
         for _ in range(bench_args.updates):
@@ -137,7 +142,11 @@ def timed_rollout(
     timer: PhaseTimer | None = None,
 ) -> tuple[dict[str, np.ndarray], int]:
     totals: dict[str, float] = {}
-    local_timer = timer if timer is not None else PhaseTimer(device=device, totals=totals)
+    local_timer = (
+        timer
+        if timer is not None
+        else PhaseTimer(device=device, totals=totals, gpu_phases=GPU_PHASES)
+    )
     obs_shape = obs["planes"].shape[1:]
     mask_shape = obs["mask"].shape[1:]
     obs_buf = torch.empty(
@@ -191,7 +200,7 @@ def timed_rollout(
             current_encoded: torch.Tensor = encoded,
             current_mask: torch.Tensor = mask,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-            with torch.no_grad():
+            with torch.inference_mode():
                 logits, value = model(current_encoded)
                 logits = logits.float()
                 value = value.float()
@@ -204,10 +213,7 @@ def timed_rollout(
         action, logprob, value, mask = timed("torch_inference_sample", infer)
         action_np = timed(
             "action_to_numpy",
-            lambda current_action=action: current_action.cpu().numpy().astype(
-                np.int64,
-                copy=False,
-            ),
+            lambda current_action=action: current_action.cpu().numpy(),
         )
         step = timed("env_step", lambda current_action_np=action_np: env.step(current_action_np))
 
@@ -251,10 +257,11 @@ def timed_rollout(
             dtype=MODEL_DTYPE,
         ),
     )
-    next_value = timed(
-        "bootstrap_inference",
-        lambda: model(next_encoded)[1].float(),
-    )
+    def bootstrap() -> torch.Tensor:
+        with torch.inference_mode():
+            return model(next_encoded)[1].float()
+
+    next_value = timed("bootstrap_inference", bootstrap)
 
     def build_gae() -> None:
         rewards = reward_buf

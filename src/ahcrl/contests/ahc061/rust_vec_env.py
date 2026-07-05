@@ -32,13 +32,34 @@ class RustVecEnv:
     ) -> None:
         self.num_envs = num_envs
         self.pf_particles = pf_particles
+        requested_workers = int(os.environ.get("AHC061_ENV_WORKERS", "0") or "0")
+        self.num_workers = requested_workers if requested_workers > 0 else min(2, num_envs)
+        self.num_workers = max(1, min(self.num_workers, num_envs))
+        base = num_envs // self.num_workers
+        rem = num_envs % self.num_workers
+        self.worker_env_counts = [base + (1 if i < rem else 0) for i in range(self.num_workers)]
+        self.worker_offsets = np.cumsum([0, *self.worker_env_counts[:-1]], dtype=np.int64)
+        self._obs_buffers: dict[str, bytearray] = {}
         cmd = ["cargo", "run"]
         if release:
             cmd.append("--release")
         cmd += ["--manifest-path", str(RL_TOOLS_MANIFEST), "--bin", "rl_env"]
+        self.procs = [self._start_proc(cmd, pf_particles) for _ in self.worker_env_counts]
+        self._closed = False
+        self.obs = self.reset(seed_start, seed_stride, fixed_m, fixed_u)
+
+    def _buffer(self, name: str, size: int) -> bytearray:
+        buf = self._obs_buffers.get(name)
+        if buf is None or len(buf) != size:
+            buf = bytearray(size)
+            self._obs_buffers[name] = buf
+        return buf
+
+    def _start_proc(self, cmd: list[str], pf_particles: int) -> subprocess.Popen[bytes]:
         env = os.environ.copy()
         env["AHC061_PF_PARTICLES"] = str(pf_particles)
-        self.proc = subprocess.Popen(
+        env.setdefault("AHC061_ENCODE_THREADS", "16")
+        return subprocess.Popen(
             cmd,
             cwd=str(ROOT),
             env=env,
@@ -48,8 +69,6 @@ class RustVecEnv:
             text=False,
             bufsize=0,
         )
-        self._closed = False
-        self.obs = self.reset(seed_start, seed_stride, fixed_m, fixed_u)
 
     def reset(
         self,
@@ -60,15 +79,26 @@ class RustVecEnv:
     ) -> dict[str, np.ndarray]:
         m = 0 if fixed_m is None else fixed_m
         u = 0 if fixed_u is None else fixed_u
-        self._send(f"RESET {self.num_envs} {seed_start} {seed_stride} {m} {u}")
-        self.obs = self._read_obs()
+        for proc, count, offset in zip(
+            self.procs,
+            self.worker_env_counts,
+            self.worker_offsets,
+            strict=True,
+        ):
+            worker_seed_start = seed_start + int(offset) * seed_stride
+            self._send(proc, f"RESET {count} {worker_seed_start} {seed_stride} {m} {u}")
+        self.obs = self._read_obs_all()
         return self.obs
 
     def step(self, actions: np.ndarray) -> StepResult:
         if actions.shape != (self.num_envs,):
             raise ValueError(f"actions shape must be ({self.num_envs},), got {actions.shape}")
-        self._send("STEP " + " ".join(str(int(a)) for a in actions))
-        obs = self._read_obs()
+        start = 0
+        for proc, count in zip(self.procs, self.worker_env_counts, strict=True):
+            end = start + count
+            self._send_actions_binary(proc, actions[start:end])
+            start = end
+        obs = self._read_obs_all()
         self.obs = obs
         return StepResult(
             obs=obs,
@@ -78,65 +108,70 @@ class RustVecEnv:
         )
 
     def step_first_legal_noobs(self) -> None:
-        self._send("STEP_FIRST_LEGAL_NOOBS")
-        header = self._readline()
-        if header != "OK_NOOBS":
-            raise RuntimeError(f"unexpected rl_env noobs header: {header!r}")
+        for proc in self.procs:
+            self._send(proc, "STEP_FIRST_LEGAL_NOOBS")
+        for proc in self.procs:
+            header = self._readline(proc)
+            if header != "OK_NOOBS":
+                raise RuntimeError(f"unexpected rl_env noobs header: {header!r}")
 
     def bench_first_legal_internal(self, steps: int) -> tuple[int, float]:
-        self._send(f"BENCH_FIRST_LEGAL_INTERNAL {steps}")
-        header = self._readline()
-        parts = header.split()
-        if len(parts) != 3 or parts[0] != "OK_BENCH":
-            raise RuntimeError(f"unexpected rl_env bench header: {header!r}")
-        return int(parts[1]), float(parts[2])
+        for proc in self.procs:
+            self._send(proc, f"BENCH_FIRST_LEGAL_INTERNAL {steps}")
+        total_env_steps = 0
+        max_elapsed = 0.0
+        for proc in self.procs:
+            header = self._readline(proc)
+            parts = header.split()
+            if len(parts) != 3 or parts[0] != "OK_BENCH":
+                raise RuntimeError(f"unexpected rl_env bench header: {header!r}")
+            total_env_steps += int(parts[1])
+            max_elapsed = max(max_elapsed, float(parts[2]))
+        return total_env_steps, max_elapsed
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        try:
-            self._send("QUIT")
-        except Exception:
-            pass
-        if self.proc.stdin is not None:
-            self.proc.stdin.close()
-        self.proc.terminate()
-        self.proc.wait(timeout=5)
+        for proc in self.procs:
+            try:
+                self._send(proc, "QUIT")
+            except Exception:
+                pass
+        for proc in self.procs:
+            if proc.stdin is not None:
+                proc.stdin.close()
+            proc.terminate()
+            proc.wait(timeout=5)
 
-    def _send(self, line: str) -> None:
-        if self.proc.stdin is None:
+    def _send(self, proc: subprocess.Popen[bytes], line: str) -> None:
+        if proc.stdin is None:
             raise RuntimeError("rl_env stdin is closed")
-        self.proc.stdin.write((line + "\n").encode("ascii"))
-        self.proc.stdin.flush()
+        proc.stdin.write((line + "\n").encode("ascii"))
+        proc.stdin.flush()
 
-    def _readline(self) -> str:
-        if self.proc.stdout is None:
+    def _send_actions_binary(self, proc: subprocess.Popen[bytes], actions: np.ndarray) -> None:
+        if proc.stdin is None:
+            raise RuntimeError("rl_env stdin is closed")
+        action_bytes = np.asarray(actions, dtype=np.uint8, order="C")
+        proc.stdin.write(b"STEP_BIN\n")
+        proc.stdin.write(memoryview(action_bytes))
+        proc.stdin.flush()
+
+    def _readline(self, proc: subprocess.Popen[bytes]) -> str:
+        if proc.stdout is None:
             raise RuntimeError("rl_env stdout is closed")
-        line = self.proc.stdout.readline()
+        line = proc.stdout.readline()
         if not line:
             raise RuntimeError("rl_env stdout closed")
         return line.decode("ascii").strip()
 
-    def _read_exact(self, size: int) -> bytearray:
-        if self.proc.stdout is None:
-            raise RuntimeError("rl_env stdout is closed")
-        data = bytearray(size)
-        view = memoryview(data)
-        remaining = size
-        offset = 0
-        while remaining > 0:
-            read_size = self.proc.stdout.readinto(view[offset:])
-            if not read_size:
-                break
-            offset += read_size
-            remaining -= read_size
-        if remaining != 0:
-            raise RuntimeError(f"expected {size} bytes from rl_env, got {offset}")
-        return data
-
-    def _read_obs(self) -> dict[str, np.ndarray]:
-        header = self._readline()
+    def _read_obs_header(
+        self,
+        proc: subprocess.Popen[bytes],
+        expected_num_envs: int,
+    ) -> np.dtype:
+        header = self._readline(proc)
         if header.startswith("ERR"):
             raise RuntimeError(header)
         parts = header.split()
@@ -147,41 +182,95 @@ class RustVecEnv:
         planes = int(parts[2])
         height = int(parts[3])
         width = int(parts[4])
-        if nenv != self.num_envs:
-            raise RuntimeError(f"unexpected env count {nenv}, expected {self.num_envs}")
+        if nenv != expected_num_envs:
+            raise RuntimeError(f"unexpected env count {nenv}, expected {expected_num_envs}")
         if (planes, height, width) != (NUM_PLANES, BOARD_SIZE, BOARD_SIZE):
             raise RuntimeError(
                 f"unexpected encoded shape {(planes, height, width)}, "
                 f"expected {(NUM_PLANES, BOARD_SIZE, BOARD_SIZE)}"
             )
+        return planes_dtype
 
-        planes_size = nenv * NUM_PLANES * BOARD_SIZE * BOARD_SIZE * planes_dtype.itemsize
-        mask_size = nenv * BOARD_SIZE * BOARD_SIZE
-        reward_size = nenv * np.dtype("<f4").itemsize
-        done_size = nenv
-        score_size = nenv * np.dtype("<i8").itemsize
+    def _read_exact_into(self, proc: subprocess.Popen[bytes], view: memoryview) -> None:
+        if proc.stdout is None:
+            raise RuntimeError("rl_env stdout is closed")
+        remaining = len(view)
+        offset = 0
+        while remaining > 0:
+            read_size = proc.stdout.readinto(view[offset:])
+            if not read_size:
+                break
+            offset += read_size
+            remaining -= read_size
+        if remaining != 0:
+            raise RuntimeError(f"expected {len(view)} bytes from rl_env, got {offset}")
 
-        planes_arr = np.frombuffer(self._read_exact(planes_size), dtype=planes_dtype).reshape(
-            nenv,
-            NUM_PLANES,
-            BOARD_SIZE,
-            BOARD_SIZE,
-        )
-        mask_arr = np.frombuffer(self._read_exact(mask_size), dtype=np.uint8).reshape(
-            nenv,
-            BOARD_SIZE * BOARD_SIZE,
-        )
-        reward_arr = np.frombuffer(self._read_exact(reward_size), dtype="<f4")
-        done_arr = np.frombuffer(self._read_exact(done_size), dtype=np.uint8)
-        score_arr = np.frombuffer(self._read_exact(score_size), dtype="<i8")
-        end = self._readline()
-        if end != "END":
-            raise RuntimeError(f"expected END, got {end!r}")
+    def _read_obs_all(self) -> dict[str, np.ndarray]:
+        plane_itemsize: int | None = None
+        plane_dtype: np.dtype | None = None
+        headers: list[tuple[subprocess.Popen[bytes], int, np.dtype]] = []
+        for proc, count in zip(self.procs, self.worker_env_counts, strict=True):
+            dtype = self._read_obs_header(proc, count)
+            if plane_dtype is None:
+                plane_dtype = dtype
+                plane_itemsize = dtype.itemsize
+            elif dtype != plane_dtype:
+                raise RuntimeError(f"mixed plane dtypes from workers: {plane_dtype} and {dtype}")
+            headers.append((proc, count, dtype))
+
+        assert plane_dtype is not None
+        assert plane_itemsize is not None
+        per_env_planes_size = NUM_PLANES * BOARD_SIZE * BOARD_SIZE * plane_itemsize
+        per_env_mask_size = BOARD_SIZE * BOARD_SIZE
+        reward_itemsize = np.dtype("<f4").itemsize
+        score_itemsize = np.dtype("<i8").itemsize
+
+        planes_data = self._buffer("planes", self.num_envs * per_env_planes_size)
+        mask_data = self._buffer("mask", self.num_envs * per_env_mask_size)
+        reward_data = self._buffer("reward", self.num_envs * reward_itemsize)
+        done_data = self._buffer("done", self.num_envs)
+        score_data = self._buffer("score", self.num_envs * score_itemsize)
+
+        planes_view = memoryview(planes_data)
+        mask_view = memoryview(mask_data)
+        reward_view = memoryview(reward_data)
+        done_view = memoryview(done_data)
+        score_view = memoryview(score_data)
+
+        env_offset = 0
+        for proc, count, _ in headers:
+            plane_start = env_offset * per_env_planes_size
+            plane_end = plane_start + count * per_env_planes_size
+            mask_start = env_offset * per_env_mask_size
+            mask_end = mask_start + count * per_env_mask_size
+            reward_start = env_offset * reward_itemsize
+            reward_end = reward_start + count * reward_itemsize
+            score_start = env_offset * score_itemsize
+            score_end = score_start + count * score_itemsize
+
+            self._read_exact_into(proc, planes_view[plane_start:plane_end])
+            self._read_exact_into(proc, mask_view[mask_start:mask_end])
+            self._read_exact_into(proc, reward_view[reward_start:reward_end])
+            self._read_exact_into(proc, done_view[env_offset : env_offset + count])
+            self._read_exact_into(proc, score_view[score_start:score_end])
+            env_offset += count
+
+            end = self._readline(proc)
+            if end != "END":
+                raise RuntimeError(f"expected END, got {end!r}")
 
         return {
-            "planes": planes_arr,
-            "mask": mask_arr.astype(bool),
-            "reward": reward_arr,
-            "done": done_arr.astype(bool),
-            "score": score_arr,
+            "planes": np.frombuffer(planes_data, dtype=plane_dtype).reshape(
+                self.num_envs,
+                NUM_PLANES,
+                BOARD_SIZE,
+                BOARD_SIZE,
+            ),
+            "mask": np.frombuffer(mask_data, dtype=np.bool_).reshape(
+                self.num_envs,
+                BOARD_SIZE * BOARD_SIZE,
+            ),
+            "reward": np.frombuffer(reward_data, dtype="<f4"),
+            "done": np.frombuffer(done_data, dtype=np.bool_),
+            "score": np.frombuffer(score_data, dtype="<i8"),
         }
