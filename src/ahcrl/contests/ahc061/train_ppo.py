@@ -18,7 +18,7 @@ from .model import ActorCritic
 from .rust_vec_env import RustVecEnv
 
 ROOT = Path(__file__).resolve().parents[4]
-MODEL_DTYPE = torch.float16
+MODEL_DTYPE = torch.bfloat16
 DEFAULT_CONFIG: dict[str, Any] = {
     "num_envs": 64,
     "total_steps": 200_000,
