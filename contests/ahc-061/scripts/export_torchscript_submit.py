@@ -72,16 +72,21 @@ def export_torchscript(checkpoint_path: Path, config: dict[str, object]) -> byte
 
 def render_cpp(encoded_model: str, *, checkpoint_name: str, torchscript_size: int) -> str:
     encoded_chunks = c_string_literal_chunks(encoded_model)
-    return f"""#include <torch/script.h>
+    return f"""#include <ATen/Parallel.h>
+#include <torch/script.h>
 #include <torch/torch.h>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <queue>
+#include <random>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -302,7 +307,7 @@ torch::jit::script::Module load_model() {{
     return module;
 }}
 
-pair<int, int> choose_action(torch::jit::script::Module& module, const State& st) {{
+pair<int, int> choose_action(torch::jit::script::Module& module, const State& st, mt19937& rng) {{
     vector<pair<int, int>> candidates = get_candidates(st, 0);
     if (candidates.empty()) return st.pos[0];
     torch::NoGradGuard no_grad;
@@ -314,17 +319,19 @@ pair<int, int> choose_action(torch::jit::script::Module& module, const State& st
         .contiguous();
     auto acc = logits.accessor<float, 1>();
 
-    int best = candidates[0].first * N + candidates[0].second;
-    float best_score = acc[best];
+    float max_logit = -numeric_limits<float>::infinity();
     for (auto [x, y] : candidates) {{
         int idx = x * N + y;
-        float score = acc[idx];
-        if (score > best_score) {{
-            best_score = score;
-            best = idx;
-        }}
+        max_logit = max(max_logit, acc[idx]);
     }}
-    return {{best / N, best % N}};
+    vector<double> weights;
+    weights.reserve(candidates.size());
+    for (auto [x, y] : candidates) {{
+        int idx = x * N + y;
+        weights.push_back(exp(static_cast<double>(acc[idx] - max_logit)));
+    }}
+    discrete_distribution<int> dist(weights.begin(), weights.end());
+    return candidates[dist(rng)];
 }}
 
 }}  // namespace
@@ -332,6 +339,8 @@ pair<int, int> choose_action(torch::jit::script::Module& module, const State& st
 int main() {{
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
+    at::set_num_threads(1);
+    at::set_num_interop_threads(1);
 
     State st;
     int input_n = 0;
@@ -356,10 +365,13 @@ int main() {{
     }}
 
     auto module = load_model();
+    mt19937 rng(static_cast<uint32_t>(
+        chrono::steady_clock::now().time_since_epoch().count()
+    ));
 
     for (int t = 0; t < T; ++t) {{
         st.turn = t;
-        auto [x, y] = choose_action(module, st);
+        auto [x, y] = choose_action(module, st, rng);
         cout << x << ' ' << y << endl;
 
         for (int p = 0; p < st.m; ++p) {{
