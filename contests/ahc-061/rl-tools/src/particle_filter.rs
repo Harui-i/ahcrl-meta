@@ -24,7 +24,12 @@ pub struct MoveSummary {
 }
 
 impl MoveSummary {
-    pub fn new(input: &Input, state: &State, player: usize, observed: (usize, usize)) -> Option<Self> {
+    pub fn new(
+        input: &Input,
+        state: &State,
+        player: usize,
+        observed: (usize, usize),
+    ) -> Option<Self> {
         let candidates = get_candidates(input, state, player);
         let observed_idx = candidates.iter().position(|&xy| xy == observed)?;
         Some(Self {
@@ -74,7 +79,13 @@ impl ParticleFilterSmc {
         &self.weights
     }
 
-    pub fn update(&mut self, input: &Input, state: &State, player: usize, observed: (usize, usize)) {
+    pub fn update(
+        &mut self,
+        input: &Input,
+        state: &State,
+        player: usize,
+        observed: (usize, usize),
+    ) {
         let Some(summary) = MoveSummary::new(input, state, player, observed) else {
             return;
         };
@@ -128,19 +139,22 @@ impl ParticleFilterSmc {
         mean
     }
 
-    pub fn predictive_distribution(
-        &self,
-        input: &Input,
-        state: &State,
-        player: usize,
-    ) -> Vec<f32> {
+    pub fn predictive_distribution(&self, input: &Input, state: &State, player: usize) -> Vec<f32> {
         let candidates = get_candidates(input, state, player);
         let mut dist = vec![0.0_f64; input.N * input.N];
         if candidates.is_empty() {
             return vec![0.0; input.N * input.N];
         }
         for (particle, &weight) in self.particles.iter().zip(self.weights.iter()) {
-            add_policy_distribution(input, state, player, &candidates, particle, weight, &mut dist);
+            add_policy_distribution(
+                input,
+                state,
+                player,
+                &candidates,
+                particle,
+                weight,
+                &mut dist,
+            );
         }
         dist.into_iter().map(|v| v as f32).collect()
     }
@@ -183,7 +197,15 @@ impl ParticleFilterSmc {
                 wb: jitter_param(base.wb, mean.wb, std.wb, h, &mut self.rng, WA_MIN, WA_MAX),
                 wc: jitter_param(base.wc, mean.wc, std.wc, h, &mut self.rng, WA_MIN, WA_MAX),
                 wd: jitter_param(base.wd, mean.wd, std.wd, h, &mut self.rng, WA_MIN, WA_MAX),
-                eps: jitter_param(base.eps, mean.eps, std.eps, h, &mut self.rng, EPS_MIN, EPS_MAX),
+                eps: jitter_param(
+                    base.eps,
+                    mean.eps,
+                    std.eps,
+                    h,
+                    &mut self.rng,
+                    EPS_MIN,
+                    EPS_MAX,
+                ),
             });
             u += step;
         }

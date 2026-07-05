@@ -138,21 +138,43 @@ def timed_rollout(
 ) -> tuple[dict[str, np.ndarray], int]:
     totals: dict[str, float] = {}
     local_timer = timer if timer is not None else PhaseTimer(device=device, totals=totals)
-    obs_buf = []
-    action_buf = []
-    logprob_buf = []
-    reward_buf = []
-    done_buf = []
-    value_buf = []
-    mask_buf = []
-    score_buf = []
+    obs_shape = obs["planes"].shape[1:]
+    mask_shape = obs["mask"].shape[1:]
+    obs_buf = torch.empty(
+        (args.rollout_steps, args.num_envs, *obs_shape),
+        dtype=MODEL_DTYPE,
+        device=device,
+    )
+    action_buf = torch.empty((args.rollout_steps, args.num_envs), dtype=torch.int64, device=device)
+    logprob_buf = torch.empty(
+        (args.rollout_steps, args.num_envs),
+        dtype=torch.float32,
+        device=device,
+    )
+    reward_buf = torch.empty(
+        (args.rollout_steps, args.num_envs),
+        dtype=torch.float32,
+        device=device,
+    )
+    done_buf = torch.empty((args.rollout_steps, args.num_envs), dtype=torch.float32, device=device)
+    value_buf = torch.empty(
+        (args.rollout_steps, args.num_envs),
+        dtype=torch.float32,
+        device=device,
+    )
+    mask_buf = torch.empty(
+        (args.rollout_steps, args.num_envs, *mask_shape),
+        dtype=torch.bool,
+        device=device,
+    )
+    score_buf = torch.empty((args.rollout_steps, args.num_envs), dtype=torch.int64, device=device)
 
     def timed(phase: str, fn: Callable[[], Any]) -> Any:
         if not measure:
             return fn()
         return local_timer.measure(phase, fn)
 
-    for _ in range(args.rollout_steps):
+    for step_idx in range(args.rollout_steps):
         encoded = timed(
             "planes_to_device",
             lambda current_obs=obs: torch.from_numpy(current_obs["planes"]).to(
@@ -190,6 +212,7 @@ def timed_rollout(
         step = timed("env_step", lambda current_action_np=action_np: env.step(current_action_np))
 
         def store_buffers(
+            current_step_idx: int = step_idx,
             current_encoded: torch.Tensor = encoded,
             current_action: torch.Tensor = action,
             current_logprob: torch.Tensor = logprob,
@@ -197,14 +220,14 @@ def timed_rollout(
             current_mask: torch.Tensor = mask,
             current_step: Any = step,
         ) -> None:
-            obs_buf.append(current_encoded.cpu())
-            action_buf.append(current_action.cpu())
-            logprob_buf.append(current_logprob.cpu())
-            reward_buf.append(torch.from_numpy(current_step.reward.copy()))
-            done_buf.append(torch.from_numpy(current_step.done.astype(np.float32)))
-            value_buf.append(current_value.cpu())
-            mask_buf.append(current_mask.cpu())
-            score_buf.append(torch.from_numpy(current_step.score.copy()))
+            obs_buf[current_step_idx].copy_(current_encoded)
+            action_buf[current_step_idx].copy_(current_action)
+            logprob_buf[current_step_idx].copy_(current_logprob)
+            reward_buf[current_step_idx].copy_(torch.from_numpy(current_step.reward).to(device))
+            done_buf[current_step_idx].copy_(torch.from_numpy(current_step.done.astype(np.float32)))
+            value_buf[current_step_idx].copy_(current_value)
+            mask_buf[current_step_idx].copy_(current_mask)
+            score_buf[current_step_idx].copy_(torch.from_numpy(current_step.score).to(device))
 
         timed("rollout_store_cpu", store_buffers)
 
@@ -230,15 +253,15 @@ def timed_rollout(
     )
     next_value = timed(
         "bootstrap_inference",
-        lambda: model(next_encoded)[1].float().cpu(),
+        lambda: model(next_encoded)[1].float(),
     )
 
     def build_gae() -> None:
-        rewards = torch.stack(reward_buf)
-        dones = torch.stack(done_buf)
-        values = torch.stack(value_buf)
+        rewards = reward_buf
+        dones = done_buf
+        values = value_buf
         advantages = torch.zeros_like(rewards)
-        last_gae = torch.zeros(args.num_envs)
+        last_gae = torch.zeros(args.num_envs, device=device)
         for t in reversed(range(args.rollout_steps)):
             next_non_terminal = 1.0 - dones[t]
             next_values = next_value if t == args.rollout_steps - 1 else values[t + 1]
@@ -246,16 +269,16 @@ def timed_rollout(
             last_gae = delta + args.gamma * args.gae_lambda * next_non_terminal * last_gae
             advantages[t] = last_gae
         _ = {
-            "obs": torch.stack(obs_buf),
-            "actions": torch.stack(action_buf),
-            "logprobs": torch.stack(logprob_buf),
+            "obs": obs_buf,
+            "actions": action_buf,
+            "logprobs": logprob_buf,
             "rewards": rewards,
             "dones": dones,
             "values": values,
             "advantages": advantages,
             "returns": advantages + values,
-            "masks": torch.stack(mask_buf),
-            "scores": torch.stack(score_buf),
+            "masks": mask_buf,
+            "scores": score_buf,
         }
 
     timed("gae_and_stack", build_gae)

@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io::{self, BufRead, Write};
+use std::thread;
 use std::time::Instant;
 
 use ahc061_rl_tools::official_compat::get_candidates;
@@ -39,11 +40,8 @@ fn plane_idx(plane: usize, x: usize, y: usize) -> usize {
 }
 
 fn fill_plane(planes: &mut [f32], plane: usize, value: f32) {
-    for x in 0..BOARD_SIZE {
-        for y in 0..BOARD_SIZE {
-            planes[plane_idx(plane, x, y)] = value;
-        }
-    }
+    let start = plane * BOARD_SIZE * BOARD_SIZE;
+    planes[start..start + BOARD_SIZE * BOARD_SIZE].fill(value);
 }
 
 fn connected_component_mask(slot: &EnvSlot, player: usize) -> Vec<bool> {
@@ -82,15 +80,13 @@ fn reach_mask(slot: &EnvSlot, player: usize) -> Vec<bool> {
     mask
 }
 
-fn next_move_plane(slot: &EnvSlot, player: usize) -> Vec<f32> {
-    if player == 0 {
-        return reach_mask(slot, player)
-            .into_iter()
-            .map(|ok| if ok { 1.0 } else { 0.0 })
-            .collect();
+fn official_score_from_scores(scores: &[i64]) -> i64 {
+    let player0_score = scores[0];
+    let mut max_ai_score = 0_i64;
+    for &score in scores.iter().skip(1) {
+        max_ai_score = max_ai_score.max(score);
     }
-
-    slot.pfilters[player - 1].predictive_distribution(&slot.input, &slot.state, player)
+    (1e5 * (1.0 + player0_score as f64 / max_ai_score as f64).log2()).round() as i64
 }
 
 fn dist_to_sources(sources: &[bool]) -> Vec<f32> {
@@ -139,10 +135,19 @@ fn dist_to_sources(sources: &[bool]) -> Vec<f32> {
         .collect()
 }
 
-fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
+struct EncodedSlot {
+    plane_bytes: Vec<u8>,
+    mask: Vec<u8>,
+    reward: f32,
+    done: u8,
+    score: i64,
+}
+
+fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
     let mut planes = vec![0.0_f32; NUM_PLANES * BOARD_SIZE * BOARD_SIZE];
     let mut value_sum = 0.0_f32;
     let mut scores = vec![0.0_f32; slot.input.M];
+    let mut score_ints = vec![0_i64; slot.input.M];
 
     for x in 0..BOARD_SIZE {
         for y in 0..BOARD_SIZE {
@@ -150,10 +155,13 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
             value_sum += value;
             let owner = slot.state.owner[x][y];
             if owner >= 0 {
-                scores[owner as usize] += value * slot.state.level[x][y] as f32;
+                let player = owner as usize;
+                scores[player] += value * slot.state.level[x][y] as f32;
+                score_ints[player] += slot.input.V[x][y] as i64 * slot.state.level[x][y] as i64;
             }
         }
     }
+    let score = official_score_from_scores(&score_ints);
     let mean_value = (value_sum / (BOARD_SIZE * BOARD_SIZE) as f32).max(1.0);
     for x in 0..BOARD_SIZE {
         for y in 0..BOARD_SIZE {
@@ -228,10 +236,33 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
         (player0_score - max_ai_score) / total_capacity,
     );
 
-    let mask = slot
-        .mask()
-        .into_iter()
-        .map(|ok| if ok { 1_u8 } else { 0_u8 })
+    let comp_masks = (0..slot.input.M)
+        .map(|player| connected_component_mask(slot, player))
+        .collect::<Vec<_>>();
+    let reach_masks = (0..slot.input.M)
+        .map(|player| reach_mask(slot, player))
+        .collect::<Vec<_>>();
+    let mut next_move_planes = Vec::with_capacity(slot.input.M);
+    for player in 0..slot.input.M {
+        if player == 0 {
+            next_move_planes.push(
+                reach_masks[player]
+                    .iter()
+                    .map(|&ok| if ok { 1.0 } else { 0.0 })
+                    .collect(),
+            );
+        } else {
+            next_move_planes.push(slot.pfilters[player - 1].predictive_distribution(
+                &slot.input,
+                &slot.state,
+                player,
+            ));
+        }
+    }
+
+    let mask = reach_masks[0]
+        .iter()
+        .map(|&ok| if ok { 1_u8 } else { 0_u8 })
         .collect::<Vec<_>>();
     for x in 0..BOARD_SIZE {
         for y in 0..BOARD_SIZE {
@@ -239,6 +270,11 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
         }
     }
 
+    let posterior_means = slot
+        .pfilters
+        .iter()
+        .map(|pf| pf.posterior_mean())
+        .collect::<Vec<_>>();
     for player in 0..slot.input.M {
         let mapped_player = player_map[player];
         if mapped_player < MAX_PLAYERS {
@@ -250,7 +286,7 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
             let param_start = PLANE_ORACLE_PARAM_START + mapped_player * ORACLE_PARAMS_PER_PLAYER;
             for param_idx in 0..ORACLE_PARAMS_PER_PLAYER {
                 let value = if player > 0 {
-                    let mean = slot.pfilters[player - 1].posterior_mean();
+                    let mean = posterior_means[player - 1];
                     (match param_idx {
                         0 => mean.wa,
                         1 => mean.wb,
@@ -265,15 +301,6 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
                 fill_plane(&mut planes, param_start + param_idx, value);
             }
         }
-    }
-
-    let mut comp_masks = Vec::with_capacity(slot.input.M);
-    let mut reach_masks = Vec::with_capacity(slot.input.M);
-    let mut next_move_planes = Vec::with_capacity(slot.input.M);
-    for player in 0..slot.input.M {
-        comp_masks.push(connected_component_mask(slot, player));
-        reach_masks.push(reach_mask(slot, player));
-        next_move_planes.push(next_move_plane(slot, player));
     }
 
     for player in 0..slot.input.M {
@@ -364,35 +391,124 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
         }
     }
 
-    (planes, mask)
+    let mut plane_bytes = Vec::with_capacity(planes.len() * std::mem::size_of::<u16>());
+    for value in planes {
+        plane_bytes.extend_from_slice(&f32_to_f16_bits(value).to_le_bytes());
+    }
+
+    EncodedSlot {
+        plane_bytes,
+        mask,
+        reward: slot.reward as f32,
+        done: if slot.done { 1 } else { 0 },
+        score,
+    }
+}
+
+fn encode_slots(slots: &[EnvSlot]) -> Vec<EncodedSlot> {
+    let threads = std::env::var("AHC061_ENCODE_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&value| value > 0)
+        .unwrap_or_else(|| {
+            thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+        })
+        .min(slots.len().max(1));
+    if threads <= 1 || slots.len() <= 1 {
+        return slots.iter().map(encode_slot).collect();
+    }
+
+    let chunk_size = (slots.len() + threads - 1) / threads;
+    thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for (chunk_idx, chunk) in slots.chunks(chunk_size).enumerate() {
+            handles.push(scope.spawn(move || {
+                (
+                    chunk_idx,
+                    chunk.iter().map(encode_slot).collect::<Vec<EncodedSlot>>(),
+                )
+            }));
+        }
+        let mut chunks = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("encode worker panicked"))
+            .collect::<Vec<_>>();
+        chunks.sort_by_key(|(chunk_idx, _)| *chunk_idx);
+        let mut encoded = Vec::with_capacity(slots.len());
+        for (_, mut chunk) in chunks {
+            encoded.append(&mut chunk);
+        }
+        encoded
+    })
+}
+
+fn f32_to_f16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mant = bits & 0x7fffff;
+
+    if exp == 0xff {
+        if mant == 0 {
+            return sign | 0x7c00;
+        }
+        return sign | 0x7e00;
+    }
+
+    let half_exp = exp - 127 + 15;
+    if half_exp >= 0x1f {
+        return sign | 0x7c00;
+    }
+    if half_exp <= 0 {
+        if half_exp < -10 {
+            return sign;
+        }
+        let mantissa = mant | 0x800000;
+        let shift = (14 - half_exp) as u32;
+        let mut half_mant = (mantissa >> shift) as u16;
+        let round_bit = 1_u32 << (shift - 1);
+        if (mantissa & round_bit) != 0 {
+            half_mant = half_mant.wrapping_add(1);
+        }
+        return sign | half_mant;
+    }
+
+    let mut half = sign | ((half_exp as u16) << 10) | ((mant >> 13) as u16);
+    if (mant & 0x00001000) != 0 {
+        half = half.wrapping_add(1);
+    }
+    half
 }
 
 fn write_encoded_obs(slots: &[EnvSlot], out: &mut impl Write) -> io::Result<()> {
     writeln!(
         out,
-        "OK {} {} {} {}",
+        "OKF16 {} {} {} {}",
         slots.len(),
         NUM_PLANES,
         BOARD_SIZE,
         BOARD_SIZE
     )?;
-    let encoded = slots.iter().map(encode_slot).collect::<Vec<_>>();
-    for (planes, _) in &encoded {
-        for &value in planes {
-            out.write_all(&value.to_le_bytes())?;
-        }
+    let encoded = encode_slots(slots);
+    for item in &encoded {
+        out.write_all(&item.plane_bytes)?;
     }
-    for (_, mask) in &encoded {
-        out.write_all(mask)?;
+
+    let mut mask_bytes = Vec::with_capacity(encoded.len() * BOARD_SIZE * BOARD_SIZE);
+    for item in &encoded {
+        mask_bytes.extend_from_slice(&item.mask);
     }
-    for slot in slots {
-        out.write_all(&(slot.reward as f32).to_le_bytes())?;
+    out.write_all(&mask_bytes)?;
+    for item in &encoded {
+        out.write_all(&item.reward.to_le_bytes())?;
     }
-    for slot in slots {
-        out.write_all(&[if slot.done { 1 } else { 0 }])?;
+    for item in &encoded {
+        out.write_all(&[item.done])?;
     }
-    for slot in slots {
-        out.write_all(&slot.score().to_le_bytes())?;
+    for item in &encoded {
+        out.write_all(&item.score.to_le_bytes())?;
     }
     writeln!(out, "END")?;
     out.flush()

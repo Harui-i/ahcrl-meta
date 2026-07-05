@@ -118,20 +118,21 @@ class RustVecEnv:
             raise RuntimeError("rl_env stdout closed")
         return line.decode("ascii").strip()
 
-    def _read_exact(self, size: int) -> bytes:
+    def _read_exact(self, size: int) -> bytearray:
         if self.proc.stdout is None:
             raise RuntimeError("rl_env stdout is closed")
-        chunks = []
+        data = bytearray(size)
+        view = memoryview(data)
         remaining = size
+        offset = 0
         while remaining > 0:
-            chunk = self.proc.stdout.read(remaining)
-            if not chunk:
+            read_size = self.proc.stdout.readinto(view[offset:])
+            if not read_size:
                 break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        data = b"".join(chunks)
-        if len(data) != size:
-            raise RuntimeError(f"expected {size} bytes from rl_env, got {len(data)}")
+            offset += read_size
+            remaining -= read_size
+        if remaining != 0:
+            raise RuntimeError(f"expected {size} bytes from rl_env, got {offset}")
         return data
 
     def _read_obs(self) -> dict[str, np.ndarray]:
@@ -139,8 +140,9 @@ class RustVecEnv:
         if header.startswith("ERR"):
             raise RuntimeError(header)
         parts = header.split()
-        if len(parts) != 5 or parts[0] != "OK":
+        if len(parts) != 5 or parts[0] not in {"OK", "OKF16"}:
             raise RuntimeError(f"unexpected rl_env header: {header!r}")
+        planes_dtype = np.dtype("<f2") if parts[0] == "OKF16" else np.dtype("<f4")
         nenv = int(parts[1])
         planes = int(parts[2])
         height = int(parts[3])
@@ -153,13 +155,13 @@ class RustVecEnv:
                 f"expected {(NUM_PLANES, BOARD_SIZE, BOARD_SIZE)}"
             )
 
-        planes_size = nenv * NUM_PLANES * BOARD_SIZE * BOARD_SIZE * np.dtype("<f4").itemsize
+        planes_size = nenv * NUM_PLANES * BOARD_SIZE * BOARD_SIZE * planes_dtype.itemsize
         mask_size = nenv * BOARD_SIZE * BOARD_SIZE
         reward_size = nenv * np.dtype("<f4").itemsize
         done_size = nenv
         score_size = nenv * np.dtype("<i8").itemsize
 
-        planes_arr = np.frombuffer(self._read_exact(planes_size), dtype="<f4").reshape(
+        planes_arr = np.frombuffer(self._read_exact(planes_size), dtype=planes_dtype).reshape(
             nenv,
             NUM_PLANES,
             BOARD_SIZE,
@@ -177,9 +179,9 @@ class RustVecEnv:
             raise RuntimeError(f"expected END, got {end!r}")
 
         return {
-            "planes": planes_arr.copy(),
+            "planes": planes_arr,
             "mask": mask_arr.astype(bool),
-            "reward": reward_arr.copy(),
+            "reward": reward_arr,
             "done": done_arr.astype(bool),
-            "score": score_arr.copy(),
+            "score": score_arr,
         }
