@@ -53,9 +53,28 @@ class TinyActorCritic(nn.Module):
         return logits, value
 
 
-def test_update_model_runs_with_full_d4_augmentation() -> None:
+class CountingAdamW(torch.optim.AdamW):
+    step_count: int
+
+    def __init__(self, params: object, *, lr: float) -> None:
+        super().__init__(params, lr=lr)  # type: ignore[arg-type]
+        self.step_count = 0
+
+    def step(self, closure: object = None) -> object:  # type: ignore[override]
+        self.step_count += 1
+        return super().step(closure)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("symmetry_augmentation", "expected_steps"),
+    [("none", 1), ("full_d4", 8)],
+)
+def test_update_model_respects_symmetry_augmentation(
+    symmetry_augmentation: str,
+    expected_steps: int,
+) -> None:
     model = TinyActorCritic()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+    optimizer = CountingAdamW(model.parameters(), lr=0.001)
     rollout = {
         "obs": torch.randn(1, 2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE),
         "actions": torch.tensor([[0, BOARD_SIZE * BOARD_SIZE - 1]]),
@@ -71,6 +90,7 @@ def test_update_model_runs_with_full_d4_augmentation() -> None:
         value_coef=0.5,
         entropy_coef=0.01,
         max_grad_norm=0.5,
+        symmetry_augmentation=symmetry_augmentation,
     )
 
     stats = update_model(
@@ -91,3 +111,4 @@ def test_update_model_runs_with_full_d4_augmentation() -> None:
         "clip_frac",
     }
     assert torch.isfinite(model.policy).all()
+    assert optimizer.step_count == expected_steps

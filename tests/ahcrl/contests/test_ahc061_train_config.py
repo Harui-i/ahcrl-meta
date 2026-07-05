@@ -34,6 +34,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 "compile = false",
                 'artifact_dir = "tmp/artifacts"',
                 "checkpoint_interval_updates = 5",
+                'symmetry_augmentation = "full_d4"',
                 "wandb_enabled = true",
                 'wandb_project = "test-project"',
                 'wandb_name = "test-run"',
@@ -52,6 +53,8 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
             "3",
             "--model-block-type",
             "convnext",
+            "--symmetry-augmentation",
+            "none",
             "--compile",
         ]
     )
@@ -66,6 +69,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.compile is True
     assert args.artifact_dir == Path("tmp/artifacts")
     assert args.checkpoint_interval_updates == 5
+    assert args.symmetry_augmentation == "none"
     assert args.wandb_enabled is True
     assert args.wandb_project == "test-project"
     assert args.wandb_name == "test-run"
@@ -77,11 +81,32 @@ def test_parse_args_compile_defaults_to_true_and_can_be_disabled() -> None:
     assert parse_args(["--device", "cpu", "--no-compile"]).compile is False
 
 
+def test_parse_args_symmetry_augmentation_defaults_to_none_and_loads_toml(
+    tmp_path: Path,
+) -> None:
+    assert parse_args(["--device", "cpu"]).symmetry_augmentation == "none"
+
+    config_path = tmp_path / "ppo.toml"
+    config_path.write_text('[train]\nsymmetry_augmentation = "full_d4"\n')
+
+    args = parse_args(["--config", str(config_path), "--device", "cpu"])
+
+    assert args.symmetry_augmentation == "full_d4"
+
+
 def test_parse_args_rejects_unknown_toml_key(tmp_path: Path) -> None:
     config_path = tmp_path / "ppo.toml"
     config_path.write_text("[train]\nunknown = 1\n")
 
     with pytest.raises(ValueError, match="unknown config keys"):
+        parse_args(["--config", str(config_path)])
+
+
+def test_parse_args_rejects_unknown_symmetry_augmentation(tmp_path: Path) -> None:
+    config_path = tmp_path / "ppo.toml"
+    config_path.write_text('[train]\nsymmetry_augmentation = "d4"\n')
+
+    with pytest.raises(ValueError, match="symmetry_augmentation"):
         parse_args(["--config", str(config_path)])
 
 

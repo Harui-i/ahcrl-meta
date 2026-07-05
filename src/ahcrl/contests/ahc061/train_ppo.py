@@ -38,6 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "entropy_coef": 0.01,
     "value_coef": 0.5,
     "max_grad_norm": 0.5,
+    "symmetry_augmentation": "none",
     "artifact_dir": ROOT / "contests/ahc-061/artifacts/ppo",
     "checkpoint_interval_updates": 1,
     "model_channels": 64,
@@ -441,7 +442,8 @@ def update_model(
             mb_old_logprobs = old_logprobs[mb]
             mb_advantages = advantages[mb]
             mb_returns = returns[mb]
-            for transform_id in range(8):
+            transform_ids = range(8) if args.symmetry_augmentation == "full_d4" else range(1)
+            for transform_id in transform_ids:
                 aug_obs = _transform_board_d4(mb_obs, transform_id)
                 aug_masks = _transform_flat_board_d4(mb_masks, transform_id)
                 aug_actions = _transform_actions_d4(mb_actions, transform_id)
@@ -635,6 +637,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--entropy-coef", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--value-coef", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--max-grad-norm", type=float, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--symmetry-augmentation",
+        choices=("none", "full_d4"),
+        default=argparse.SUPPRESS,
+    )
     parser.add_argument("--artifact-dir", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--checkpoint-interval-updates", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-channels", type=int, default=argparse.SUPPRESS)
@@ -696,6 +703,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     if config["checkpoint_interval_updates"] <= 0:
         raise ValueError("checkpoint_interval_updates must be positive")
+    if config["symmetry_augmentation"] not in ("none", "full_d4"):
+        raise ValueError("symmetry_augmentation must be one of: none, full_d4")
     if config["device"] == "auto":
         config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
     return argparse.Namespace(**config)
