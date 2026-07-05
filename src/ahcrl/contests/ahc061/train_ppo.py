@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributions import Categorical
 
+from .encoder import BOARD_SIZE
 from .model import ActorCritic
 from .rust_vec_env import RustVecEnv
 
@@ -434,39 +435,82 @@ def update_model(
         perm = indices[torch.randperm(batch_size)]
         for start in range(0, batch_size, args.minibatch_size):
             mb = perm[start : start + args.minibatch_size].to(device)
-            logits, value = model(obs[mb])
-            logits = logits.float()
-            value = value.float()
-            logits = logits.masked_fill(~masks[mb], -1e9)
-            dist = Categorical(logits=logits)
-            new_logprobs = dist.log_prob(actions[mb])
-            entropy = dist.entropy().mean()
-            normalized_entropy = _normalized_entropy(dist.entropy(), masks[mb])
-            ratio = (new_logprobs - old_logprobs[mb]).exp()
-            pg1 = -advantages[mb] * ratio
-            pg2 = -advantages[mb] * torch.clamp(ratio, 1.0 - args.clip, 1.0 + args.clip)
-            policy_loss = torch.max(pg1, pg2).mean()
-            value_loss = F.mse_loss(value, returns[mb])
-            loss = policy_loss + args.value_coef * value_loss - args.entropy_coef * entropy
+            mb_obs = obs[mb]
+            mb_actions = actions[mb]
+            mb_masks = masks[mb]
+            mb_old_logprobs = old_logprobs[mb]
+            mb_advantages = advantages[mb]
+            mb_returns = returns[mb]
+            for transform_id in range(8):
+                aug_obs = _transform_board_d4(mb_obs, transform_id)
+                aug_masks = _transform_flat_board_d4(mb_masks, transform_id)
+                aug_actions = _transform_actions_d4(mb_actions, transform_id)
+                logits, value = model(aug_obs)
+                logits = logits.float()
+                value = value.float()
+                logits = logits.masked_fill(~aug_masks, -1e9)
+                dist = Categorical(logits=logits)
+                new_logprobs = dist.log_prob(aug_actions)
+                entropy_values = dist.entropy()
+                entropy = entropy_values.mean()
+                normalized_entropy = _normalized_entropy(entropy_values, aug_masks)
+                ratio = (new_logprobs - mb_old_logprobs).exp()
+                pg1 = -mb_advantages * ratio
+                pg2 = -mb_advantages * torch.clamp(ratio, 1.0 - args.clip, 1.0 + args.clip)
+                policy_loss = torch.max(pg1, pg2).mean()
+                value_loss = F.mse_loss(value, mb_returns)
+                loss = policy_loss + args.value_coef * value_loss - args.entropy_coef * entropy
 
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(grad_model.parameters(), args.max_grad_norm)
-            optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(grad_model.parameters(), args.max_grad_norm)
+                optimizer.step()
 
-            with torch.no_grad():
-                log_ratio = new_logprobs - old_logprobs[mb]
-                approx_kl = ((ratio - 1.0) - log_ratio).mean()
-                clip_frac = ((ratio - 1.0).abs() > args.clip).float().mean()
-            last_stats = {
-                "policy_loss": float(policy_loss.item()),
-                "value_loss": float(value_loss.item()),
-                "entropy": float(entropy.item()),
-                "normalized_entropy": float(normalized_entropy.item()),
-                "approx_kl": float(approx_kl.item()),
-                "clip_frac": float(clip_frac.item()),
-            }
+                with torch.no_grad():
+                    log_ratio = new_logprobs - mb_old_logprobs
+                    approx_kl = ((ratio - 1.0) - log_ratio).mean()
+                    clip_frac = ((ratio - 1.0).abs() > args.clip).float().mean()
+                last_stats = {
+                    "policy_loss": float(policy_loss.item()),
+                    "value_loss": float(value_loss.item()),
+                    "entropy": float(entropy.item()),
+                    "normalized_entropy": float(normalized_entropy.item()),
+                    "approx_kl": float(approx_kl.item()),
+                    "clip_frac": float(clip_frac.item()),
+                }
     return last_stats
+
+
+def _transform_board_d4(x: torch.Tensor, transform_id: int) -> torch.Tensor:
+    if transform_id < 0 or transform_id >= 8:
+        raise ValueError(f"transform_id must be in [0, 8), got {transform_id}")
+    transformed = torch.flip(x, dims=(-1,)) if transform_id >= 4 else x
+    rotations = transform_id % 4
+    if rotations:
+        transformed = torch.rot90(transformed, k=rotations, dims=(-2, -1))
+    return transformed
+
+
+def _transform_flat_board_d4(x: torch.Tensor, transform_id: int) -> torch.Tensor:
+    original_shape = x.shape
+    if original_shape[-1] != BOARD_SIZE * BOARD_SIZE:
+        raise ValueError(
+            f"flat board last dimension must be {BOARD_SIZE * BOARD_SIZE}, got {original_shape[-1]}"
+        )
+    board = x.reshape(*original_shape[:-1], BOARD_SIZE, BOARD_SIZE)
+    return _transform_board_d4(board, transform_id).reshape(original_shape)
+
+
+def _transform_actions_d4(actions: torch.Tensor, transform_id: int) -> torch.Tensor:
+    if transform_id < 0 or transform_id >= 8:
+        raise ValueError(f"transform_id must be in [0, 8), got {transform_id}")
+    x = torch.div(actions, BOARD_SIZE, rounding_mode="floor")
+    y = actions.remainder(BOARD_SIZE)
+    if transform_id >= 4:
+        y = BOARD_SIZE - 1 - y
+    for _ in range(transform_id % 4):
+        x, y = BOARD_SIZE - 1 - y, x
+    return x * BOARD_SIZE + y
 
 
 def _normalized_entropy(entropy: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
