@@ -89,7 +89,7 @@ def main() -> None:
         global_step = resume_state["global_step"]
         update = resume_state["update"]
         resume_seed_start = resume_state["next_seed_start"]
-        torch.set_rng_state(resume_state["torch_rng_state"])
+        torch.set_rng_state(resume_state["torch_rng_state"].cpu())
         np.random.set_state(resume_state["numpy_rng_state"])
         env.reset(resume_seed_start, args.seed_stride, args.fixed_m, args.fixed_u)
         obs = env.obs
