@@ -1,5 +1,5 @@
 [train]
-num_envs = 1024
+num_envs = 4096
 total_steps = 10000000
 rollout_steps = 100
 seed_start = 0
