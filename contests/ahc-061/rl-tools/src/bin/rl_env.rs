@@ -3,7 +3,7 @@ use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
 use ahc061_rl_tools::official_compat::get_candidates;
-use ahc061_rl_tools::vec_env::EnvSlot;
+use ahc061_rl_tools::vec_env::{EnvSlot, DEFAULT_PF_PARTICLES};
 
 const BOARD_SIZE: usize = 10;
 const MAX_PLAYERS: usize = 8;
@@ -82,48 +82,15 @@ fn reach_mask(slot: &EnvSlot, player: usize) -> Vec<bool> {
     mask
 }
 
-fn greedy_target_mask(slot: &EnvSlot, player: usize) -> Vec<bool> {
+fn next_move_plane(slot: &EnvSlot, player: usize) -> Vec<f32> {
     if player == 0 {
-        return reach_mask(slot, player);
+        return reach_mask(slot, player)
+            .into_iter()
+            .map(|ok| if ok { 1.0 } else { 0.0 })
+            .collect();
     }
 
-    let mut mask = vec![false; BOARD_SIZE * BOARD_SIZE];
-    let candidates = get_candidates(&slot.input, &slot.state, player);
-    if candidates.is_empty() {
-        return mask;
-    }
-
-    let ai_idx = player - 1;
-    let mut best_score = f64::NEG_INFINITY;
-    let mut candidate_scores = Vec::with_capacity(candidates.len());
-    for &(x, y) in &candidates {
-        let owner = slot.state.owner[x][y];
-        let level = slot.state.level[x][y];
-        let value = slot.input.V[x][y] as f64;
-        let score = if owner == -1 {
-            value * slot.input.wa[ai_idx]
-        } else if owner == player as i32 {
-            if level < slot.input.U {
-                value * slot.input.wb[ai_idx]
-            } else {
-                0.0
-            }
-        } else if level == 1 {
-            value * slot.input.wc[ai_idx]
-        } else {
-            value * slot.input.wd[ai_idx]
-        };
-        best_score = best_score.max(score);
-        candidate_scores.push(score);
-    }
-
-    let tolerance = 1e-9 * best_score.abs().max(1.0);
-    for (&(x, y), &score) in candidates.iter().zip(candidate_scores.iter()) {
-        if score >= best_score - tolerance {
-            mask[x * BOARD_SIZE + y] = true;
-        }
-    }
-    mask
+    slot.pfilters[player - 1].predictive_distribution(&slot.input, &slot.state, player)
 }
 
 fn dist_to_sources(sources: &[bool]) -> Vec<f32> {
@@ -283,13 +250,13 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
             let param_start = PLANE_ORACLE_PARAM_START + mapped_player * ORACLE_PARAMS_PER_PLAYER;
             for param_idx in 0..ORACLE_PARAMS_PER_PLAYER {
                 let value = if player > 0 {
-                    let ai = player - 1;
+                    let mean = slot.pfilters[player - 1].posterior_mean();
                     (match param_idx {
-                        0 => slot.input.wa[ai],
-                        1 => slot.input.wb[ai],
-                        2 => slot.input.wc[ai],
-                        3 => slot.input.wd[ai],
-                        4 => slot.input.eps[ai],
+                        0 => mean.wa,
+                        1 => mean.wb,
+                        2 => mean.wc,
+                        3 => mean.wd,
+                        4 => mean.eps,
                         _ => 0.0,
                     }) as f32
                 } else {
@@ -302,11 +269,11 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
 
     let mut comp_masks = Vec::with_capacity(slot.input.M);
     let mut reach_masks = Vec::with_capacity(slot.input.M);
-    let mut next_greedy_masks = Vec::with_capacity(slot.input.M);
+    let mut next_move_planes = Vec::with_capacity(slot.input.M);
     for player in 0..slot.input.M {
         comp_masks.push(connected_component_mask(slot, player));
         reach_masks.push(reach_mask(slot, player));
-        next_greedy_masks.push(greedy_target_mask(slot, player));
+        next_move_planes.push(next_move_plane(slot, player));
     }
 
     for player in 0..slot.input.M {
@@ -322,7 +289,7 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
             planes[plane_idx(PLANE_REACH_START + mapped_player, x, y)] =
                 reach_masks[player][idx] as u8 as f32;
             planes[plane_idx(PLANE_NEXT_GREEDY_START + mapped_player, x, y)] =
-                next_greedy_masks[player][idx] as u8 as f32;
+                next_move_planes[player][idx];
         }
 
         let mut owner_source = vec![false; BOARD_SIZE * BOARD_SIZE];
@@ -484,6 +451,11 @@ fn main() {
     let stdin = io::stdin();
     let mut stdout = io::BufWriter::new(io::stdout());
     let mut slots: Vec<EnvSlot> = vec![];
+    let pf_particles = std::env::var("AHC061_PF_PARTICLES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&value| value > 0)
+        .unwrap_or(DEFAULT_PF_PARTICLES);
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -519,10 +491,11 @@ fn main() {
                         (Ok(num_envs), Ok(seed_start), Ok(seed_stride), Ok(m_opt), Ok(u_opt)) => {
                             slots = (0..num_envs)
                                 .map(|i| {
-                                    EnvSlot::from_seed(
+                                    EnvSlot::from_seed_with_pf(
                                         seed_start + seed_stride * i as u64,
                                         m_opt,
                                         u_opt,
+                                        pf_particles,
                                     )
                                 })
                                 .collect();

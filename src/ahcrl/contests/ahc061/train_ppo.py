@@ -27,6 +27,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "seed_stride": 1,
     "fixed_m": None,
     "fixed_u": None,
+    "pf_particles": 16,
     "device": "auto",
     "compile": True,
     "lr": 3e-4,
@@ -80,6 +81,7 @@ def main() -> None:
         seed_stride=args.seed_stride,
         fixed_m=args.fixed_m,
         fixed_u=args.fixed_u,
+        pf_particles=args.pf_particles,
     )
 
     obs = env.obs
@@ -648,6 +650,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed-stride", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--fixed-m", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--fixed-u", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--pf-particles", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--device", default=argparse.SUPPRESS)
     parser.add_argument(
         "--compile",
@@ -736,6 +739,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     if config["checkpoint_interval_updates"] <= 0:
         raise ValueError("checkpoint_interval_updates must be positive")
+    if config["pf_particles"] <= 0:
+        raise ValueError("pf_particles must be positive")
     if config["symmetry_augmentation"] not in ("none", "full_d4"):
         raise ValueError("symmetry_augmentation must be one of: none, full_d4")
     if config["device"] == "auto":

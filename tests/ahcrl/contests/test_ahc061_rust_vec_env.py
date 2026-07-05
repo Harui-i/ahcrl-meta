@@ -7,6 +7,7 @@ from ahcrl.contests.ahc061.encoder import (
     PLANE_LEGAL_MASK,
     PLANE_M,
     PLANE_NEXT_GREEDY_START,
+    PLANE_ORACLE_PARAM_START,
     PLANE_PLAYER_AGG_START,
     PLANE_POS0_X_NORM,
     PLANE_POS0_Y_NORM,
@@ -47,6 +48,16 @@ def test_rust_vec_env_reset_and_step() -> None:
             obs["planes"][0, PLANE_NEXT_GREEDY_START].reshape(100).astype(bool),
             obs["mask"][0],
         )
+        player0_param_planes = obs["planes"][0, PLANE_ORACLE_PARAM_START : PLANE_ORACLE_PARAM_START + 5]
+        assert np.all(player0_param_planes == 0.0)
+        ai1_param_planes = obs["planes"][0, PLANE_ORACLE_PARAM_START + 5 : PLANE_ORACLE_PARAM_START + 10]
+        assert np.all(np.isfinite(ai1_param_planes))
+        assert np.all((0.3 <= ai1_param_planes[:4]) & (ai1_param_planes[:4] <= 1.0))
+        assert np.all((0.1 <= ai1_param_planes[4]) & (ai1_param_planes[4] <= 0.5))
+        ai1_next = obs["planes"][0, PLANE_NEXT_GREEDY_START + 1].reshape(100)
+        assert np.all(np.isfinite(ai1_next))
+        assert np.all(ai1_next >= 0.0)
+        np.testing.assert_allclose(ai1_next.sum(), 1.0, rtol=1e-5, atol=1e-5)
         assert np.all(obs["planes"][0, PLANE_COMP_START] <= obs["planes"][0, PLANE_REACH_START])
         assert obs["planes"][0, PLANE_DIST_CENTER, 0, 0] == np.float32(1.0)
         assert obs["planes"][0, PLANE_DIST_CENTER, 4, 4] == np.float32(1 / 9)

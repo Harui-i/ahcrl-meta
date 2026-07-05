@@ -4,6 +4,7 @@ total_steps = 10000000
 rollout_steps = 100
 seed_start = 0
 seed_stride = 1
+pf_particles = 16
 device = "cuda"
 compile = true
 lr = 0.0003

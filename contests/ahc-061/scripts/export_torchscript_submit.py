@@ -70,7 +70,13 @@ def export_torchscript(checkpoint_path: Path, config: dict[str, object]) -> byte
         return Path(f.name).read_bytes()
 
 
-def render_cpp(encoded_model: str, *, checkpoint_name: str, torchscript_size: int) -> str:
+def render_cpp(
+    encoded_model: str,
+    *,
+    checkpoint_name: str,
+    torchscript_size: int,
+    pf_particles: int,
+) -> str:
     encoded_chunks = c_string_literal_chunks(encoded_model)
     return f"""#include <ATen/Parallel.h>
 #include <torch/script.h>
@@ -101,6 +107,7 @@ constexpr int T = 100;
 constexpr int MAX_PLAYERS = 8;
 constexpr int MAX_LEVEL = 5;
 constexpr int NUM_PLANES = {NUM_PLANES};
+constexpr int PF_PARTICLES = {pf_particles};
 constexpr int ORACLE_PARAMS_PER_PLAYER = 5;
 constexpr int PLAYER_AGG_FEATURES = 4;
 constexpr int PLANE_M = 24;
@@ -261,7 +268,271 @@ array<int, MAX_PLAYERS> player_id_map(const array<float, MAX_PLAYERS>& scores, i
     return mapped;
 }}
 
-torch::Tensor encode(const State& st, const vector<pair<int, int>>& candidates) {{
+struct Particle {{
+    double wa = 0.0;
+    double wb = 0.0;
+    double wc = 0.0;
+    double wd = 0.0;
+    double eps = 0.0;
+}};
+
+struct SplitMix64 {{
+    uint64_t state;
+    bool has_spare = false;
+    double spare = 0.0;
+
+    explicit SplitMix64(uint64_t seed) : state(seed) {{}}
+
+    uint64_t next_u64() {{
+        state += 0x9e3779b97f4a7c15ULL;
+        uint64_t z = state;
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        return z ^ (z >> 31);
+    }}
+
+    double next_f64() {{
+        return static_cast<double>(next_u64() >> 11) * (1.0 / static_cast<double>(1ULL << 53));
+    }}
+
+    double uniform(double low, double high) {{
+        return low + (high - low) * next_f64();
+    }}
+
+    double normal() {{
+        if (has_spare) {{
+            has_spare = false;
+            return spare;
+        }}
+        double u1 = max(next_f64(), numeric_limits<double>::min());
+        double u2 = next_f64();
+        double radius = sqrt(-2.0 * log(u1));
+        double theta = 2.0 * acos(-1.0) * u2;
+        spare = radius * sin(theta);
+        has_spare = true;
+        return radius * cos(theta);
+    }}
+}};
+
+double particle_score(const State& st, int player, int x, int y, const Particle& particle) {{
+    int owner = st.owner[x][y];
+    int level = st.level[x][y];
+    double value = static_cast<double>(st.values[x][y]);
+    if (owner == -1) return value * particle.wa;
+    if (owner == player) return level < st.u ? value * particle.wb : 0.0;
+    if (level == 1) return value * particle.wc;
+    return value * particle.wd;
+}}
+
+void add_policy_distribution(
+    const State& st,
+    int player,
+    const vector<pair<int, int>>& candidates,
+    const Particle& particle,
+    double weight,
+    array<double, N * N>& dist
+) {{
+    if (candidates.empty()) return;
+    double random_prob = particle.eps / static_cast<double>(candidates.size());
+    for (auto [x, y] : candidates) dist[x * N + y] += weight * random_prob;
+
+    vector<double> scores;
+    scores.reserve(candidates.size());
+    double best_score = -numeric_limits<double>::infinity();
+    for (auto [x, y] : candidates) {{
+        double score = particle_score(st, player, x, y, particle);
+        best_score = max(best_score, score);
+        scores.push_back(score);
+    }}
+    double tolerance = 1e-9 * max(abs(best_score), 1.0);
+    int best_count = 0;
+    for (double score : scores) {{
+        if (score >= best_score - tolerance) ++best_count;
+    }}
+    best_count = max(best_count, 1);
+    double greedy_prob = (1.0 - particle.eps) / static_cast<double>(best_count);
+    for (int i = 0; i < static_cast<int>(candidates.size()); ++i) {{
+        if (scores[i] >= best_score - tolerance) {{
+            auto [x, y] = candidates[i];
+            dist[x * N + y] += weight * greedy_prob;
+        }}
+    }}
+}}
+
+struct ParticleFilterSmc {{
+    vector<Particle> particles;
+    vector<double> weights;
+    SplitMix64 rng;
+
+    ParticleFilterSmc(int n, uint64_t seed) : rng(seed) {{
+        n = max(n, 1);
+        particles.reserve(n);
+        for (int i = 0; i < n; ++i) {{
+            particles.push_back(Particle{{
+                rng.uniform(0.3, 1.0),
+                rng.uniform(0.3, 1.0),
+                rng.uniform(0.3, 1.0),
+                rng.uniform(0.3, 1.0),
+                rng.uniform(0.1, 0.5),
+            }});
+        }}
+        weights.assign(n, 1.0 / static_cast<double>(n));
+    }}
+
+    Particle mean() const {{
+        Particle m;
+        for (int i = 0; i < static_cast<int>(particles.size()); ++i) {{
+            m.wa += weights[i] * particles[i].wa;
+            m.wb += weights[i] * particles[i].wb;
+            m.wc += weights[i] * particles[i].wc;
+            m.wd += weights[i] * particles[i].wd;
+            m.eps += weights[i] * particles[i].eps;
+        }}
+        return m;
+    }}
+
+    Particle stddev(const Particle& m) const {{
+        Particle v;
+        for (int i = 0; i < static_cast<int>(particles.size()); ++i) {{
+            v.wa += weights[i] * pow(particles[i].wa - m.wa, 2);
+            v.wb += weights[i] * pow(particles[i].wb - m.wb, 2);
+            v.wc += weights[i] * pow(particles[i].wc - m.wc, 2);
+            v.wd += weights[i] * pow(particles[i].wd - m.wd, 2);
+            v.eps += weights[i] * pow(particles[i].eps - m.eps, 2);
+        }}
+        return Particle{{sqrt(max(v.wa, 0.0)), sqrt(max(v.wb, 0.0)), sqrt(max(v.wc, 0.0)),
+                        sqrt(max(v.wd, 0.0)), sqrt(max(v.eps, 0.0))}};
+    }}
+
+    double ess() const {{
+        double sum_sq = 0.0;
+        for (double w : weights) sum_sq += w * w;
+        return sum_sq <= 0.0 ? 0.0 : 1.0 / sum_sq;
+    }}
+
+    void update(const State& st, int player, pair<int, int> observed) {{
+        vector<pair<int, int>> candidates = get_candidates(st, player);
+        auto it = find(candidates.begin(), candidates.end(), observed);
+        if (it == candidates.end() || candidates.empty()) return;
+        int obs_idx = static_cast<int>(it - candidates.begin());
+
+        vector<double> logs;
+        logs.reserve(particles.size());
+        double max_log = -numeric_limits<double>::infinity();
+        for (int i = 0; i < static_cast<int>(particles.size()); ++i) {{
+            array<double, N * N> dist{{}};
+            add_policy_distribution(st, player, candidates, particles[i], 1.0, dist);
+            auto [x, y] = candidates[obs_idx];
+            double prob = max(dist[x * N + y], 1e-300);
+            double log_w = log(max(weights[i], 1e-300)) + log(prob);
+            max_log = max(max_log, log_w);
+            logs.push_back(log_w);
+        }}
+
+        double sum = 0.0;
+        for (int i = 0; i < static_cast<int>(weights.size()); ++i) {{
+            weights[i] = exp(logs[i] - max_log);
+            sum += weights[i];
+        }}
+        if (!isfinite(sum) || sum <= 0.0) {{
+            fill(weights.begin(), weights.end(), 1.0 / static_cast<double>(weights.size()));
+            return;
+        }}
+        for (double& w : weights) w /= sum;
+        if (ess() < 0.5 * static_cast<double>(particles.size())) resample();
+    }}
+
+    void resample() {{
+        int n = static_cast<int>(particles.size());
+        Particle m = mean();
+        Particle s = stddev(m);
+        vector<double> cumulative(n);
+        partial_sum(weights.begin(), weights.end(), cumulative.begin());
+        cumulative.back() = 1.0;
+        double step = 1.0 / static_cast<double>(n);
+        double u = rng.next_f64() * step;
+        double a = 0.98;
+        double h = sqrt(1.0 - a * a);
+        int idx = 0;
+        vector<Particle> next;
+        next.reserve(n);
+        auto jitter = [&](double value, double mean_value, double sd, double low, double high) {{
+            double center = a * value + (1.0 - a) * mean_value;
+            return min(high, max(low, center + h * sd * rng.normal()));
+        }};
+        for (int i = 0; i < n; ++i) {{
+            while (idx + 1 < n && cumulative[idx] < u) ++idx;
+            Particle p = particles[idx];
+            next.push_back(Particle{{
+                jitter(p.wa, m.wa, s.wa, 0.3, 1.0),
+                jitter(p.wb, m.wb, s.wb, 0.3, 1.0),
+                jitter(p.wc, m.wc, s.wc, 0.3, 1.0),
+                jitter(p.wd, m.wd, s.wd, 0.3, 1.0),
+                jitter(p.eps, m.eps, s.eps, 0.1, 0.5),
+            }});
+            u += step;
+        }}
+        particles = move(next);
+        fill(weights.begin(), weights.end(), 1.0 / static_cast<double>(n));
+    }}
+
+    array<float, N * N> predictive_distribution(const State& st, int player) const {{
+        array<double, N * N> tmp{{}};
+        vector<pair<int, int>> candidates = get_candidates(st, player);
+        for (int i = 0; i < static_cast<int>(particles.size()); ++i) {{
+            add_policy_distribution(st, player, candidates, particles[i], weights[i], tmp);
+        }}
+        array<float, N * N> out{{}};
+        for (int i = 0; i < N * N; ++i) out[i] = static_cast<float>(tmp[i]);
+        return out;
+    }}
+}};
+
+array<unsigned char, N * N> reach_mask(const State& st, int player) {{
+    array<unsigned char, N * N> mask{{}};
+    for (auto [x, y] : get_candidates(st, player)) mask[x * N + y] = 1;
+    return mask;
+}}
+
+array<float, N * N> dist_to_sources(const array<unsigned char, N * N>& sources) {{
+    constexpr int INF = 1 << 20;
+    array<int, N * N> dist;
+    dist.fill(INF);
+    bool has_source = false;
+    for (int idx = 0; idx < N * N; ++idx) {{
+        if (sources[idx]) {{
+            dist[idx] = 0;
+            has_source = true;
+        }}
+    }}
+    array<float, N * N> out{{}};
+    if (!has_source) {{
+        out.fill(1.0f);
+        return out;
+    }}
+    for (int x = 0; x < N; ++x) {{
+        for (int y = 0; y < N; ++y) {{
+            int idx = x * N + y;
+            if (x > 0) dist[idx] = min(dist[idx], dist[(x - 1) * N + y] + 1);
+            if (y > 0) dist[idx] = min(dist[idx], dist[x * N + y - 1] + 1);
+        }}
+    }}
+    for (int x = N - 1; x >= 0; --x) {{
+        for (int y = N - 1; y >= 0; --y) {{
+            int idx = x * N + y;
+            if (x + 1 < N) dist[idx] = min(dist[idx], dist[(x + 1) * N + y] + 1);
+            if (y + 1 < N) dist[idx] = min(dist[idx], dist[x * N + y + 1] + 1);
+        }}
+    }}
+    for (int idx = 0; idx < N * N; ++idx) out[idx] = dist[idx] >= INF ? 1.0f : dist[idx] / 18.0f;
+    return out;
+}}
+
+torch::Tensor encode(
+    const State& st,
+    const vector<pair<int, int>>& candidates,
+    const vector<ParticleFilterSmc>& pfilters
+) {{
     vector<float> planes(NUM_PLANES * N * N, 0.0f);
     auto at = [&](int plane, int x, int y) -> float& {{
         return planes[(plane * N + x) * N + y];
@@ -331,9 +602,60 @@ torch::Tensor encode(const State& st, const vector<pair<int, int>>& candidates) 
                     at(PLANE_PLAYER_SCORE_START + mp, i, j) = normalized_score;
                 }}
             }}
+            int param_start = PLANE_ORACLE_PARAM_START + mp * ORACLE_PARAMS_PER_PLAYER;
+            Particle params = p > 0 ? pfilters[p - 1].mean() : Particle{{}};
+            array<float, ORACLE_PARAMS_PER_PLAYER> values{{
+                static_cast<float>(params.wa),
+                static_cast<float>(params.wb),
+                static_cast<float>(params.wc),
+                static_cast<float>(params.wd),
+                static_cast<float>(params.eps),
+            }};
+            for (int k = 0; k < ORACLE_PARAMS_PER_PLAYER; ++k) {{
+                for (int i = 0; i < N; ++i) {{
+                    for (int j = 0; j < N; ++j) at(param_start + k, i, j) = values[k];
+                }}
+            }}
         }}
     }}
-    // 本番入力ではAI内部パラメータは観測できないため、oracle parameter planesは0のままにする。
+
+    vector<array<unsigned char, N * N>> comp_masks;
+    vector<array<unsigned char, N * N>> reach_masks;
+    vector<array<float, N * N>> next_planes;
+    comp_masks.reserve(st.m);
+    reach_masks.reserve(st.m);
+    next_planes.reserve(st.m);
+    for (int p = 0; p < st.m; ++p) {{
+        comp_masks.push_back(connected_component_mask(st, p));
+        reach_masks.push_back(reach_mask(st, p));
+        if (p == 0) {{
+            array<float, N * N> own_next{{}};
+            for (int idx = 0; idx < N * N; ++idx) own_next[idx] = reach_masks.back()[idx] ? 1.0f : 0.0f;
+            next_planes.push_back(own_next);
+        }} else {{
+            next_planes.push_back(pfilters[p - 1].predictive_distribution(st, p));
+        }}
+    }}
+
+    for (int p = 0; p < st.m; ++p) {{
+        int mp = mapped[p];
+        if (mp < 0 || mp >= MAX_PLAYERS) continue;
+        array<unsigned char, N * N> owner_sources{{}};
+        for (int i = 0; i < N; ++i) {{
+            for (int j = 0; j < N; ++j) owner_sources[i * N + j] = st.owner[i][j] == p;
+        }}
+        auto dist_owner = dist_to_sources(owner_sources);
+        auto dist_comp = dist_to_sources(comp_masks[p]);
+        for (int idx = 0; idx < N * N; ++idx) {{
+            int i = idx / N;
+            int j = idx % N;
+            at(PLANE_COMP_START + mp, i, j) = comp_masks[p][idx] ? 1.0f : 0.0f;
+            at(PLANE_REACH_START + mp, i, j) = reach_masks[p][idx] ? 1.0f : 0.0f;
+            at(PLANE_NEXT_GREEDY_START + mp, i, j) = next_planes[p][idx];
+            at(PLANE_DIST_OWNER_START + mp, i, j) = dist_owner[idx];
+            at(PLANE_DIST_COMP_START + mp, i, j) = dist_comp[idx];
+        }}
+    }}
 
     const float inv_board_span = 1.0f / static_cast<float>(N - 1);
     const float pos0_x_norm = static_cast<float>(st.pos[0].first) * inv_board_span;
@@ -354,7 +676,6 @@ torch::Tensor encode(const State& st, const vector<pair<int, int>>& candidates) 
     for (int p = 0; p < st.m; ++p) {{
         int mp = mapped[p];
         if (mp < 0 || mp >= MAX_PLAYERS) continue;
-        auto comp = connected_component_mask(st, p);
         float owner_level_sum = 0.0f;
         float owner_level_value_sum = 0.0f;
         float comp_level_sum = 0.0f;
@@ -367,7 +688,7 @@ torch::Tensor encode(const State& st, const vector<pair<int, int>>& candidates) 
                     owner_level_sum += level;
                     owner_level_value_sum += level_value;
                 }}
-                if (comp[i * N + j]) {{
+                if (comp_masks[p][i * N + j]) {{
                     comp_level_sum += level;
                     comp_level_value_sum += level_value;
                 }}
@@ -400,11 +721,16 @@ torch::jit::script::Module load_model() {{
     return module;
 }}
 
-pair<int, int> choose_action(torch::jit::script::Module& module, const State& st, mt19937& rng) {{
+pair<int, int> choose_action(
+    torch::jit::script::Module& module,
+    const State& st,
+    const vector<ParticleFilterSmc>& pfilters,
+    mt19937& rng
+) {{
     vector<pair<int, int>> candidates = get_candidates(st, 0);
     if (candidates.empty()) return st.pos[0];
     torch::NoGradGuard no_grad;
-    torch::Tensor input = encode(st, candidates);
+    torch::Tensor input = encode(st, candidates, pfilters);
     auto output = module.forward({{input}}).toTuple();
     torch::Tensor logits = output->elements()[0].toTensor()
         .to(torch::kFloat32)
@@ -458,18 +784,28 @@ int main() {{
     }}
 
     auto module = load_model();
+    vector<ParticleFilterSmc> pfilters;
+    pfilters.reserve(max(st.m - 1, 0));
+    for (int p = 1; p < st.m; ++p) {{
+        pfilters.emplace_back(PF_PARTICLES, 0xa0761d6478bd642fULL ^ (static_cast<uint64_t>(p) << 32));
+    }}
     mt19937 rng(static_cast<uint32_t>(
         chrono::steady_clock::now().time_since_epoch().count()
     ));
 
     for (int t = 0; t < T; ++t) {{
         st.turn = t;
-        auto [x, y] = choose_action(module, st, rng);
+        auto [x, y] = choose_action(module, st, pfilters, rng);
         cout << x << ' ' << y << endl;
 
+        vector<pair<int, int>> selected(st.m);
         for (int p = 0; p < st.m; ++p) {{
             int tx, ty;
             cin >> tx >> ty;
+            selected[p] = {{tx, ty}};
+        }}
+        for (int p = 1; p < st.m; ++p) {{
+            pfilters[p - 1].update(st, p, selected[p]);
         }}
         for (int p = 0; p < st.m; ++p) {{
             cin >> st.pos[p].first >> st.pos[p].second;
@@ -491,6 +827,7 @@ def main() -> None:
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--pf-particles", type=int)
     args = parser.parse_args()
 
     run_dir = args.run_dir
@@ -508,6 +845,7 @@ def main() -> None:
                 "latest",
             ),
             torchscript_size=len(torchscript),
+            pf_particles=int(args.pf_particles or config.get("pf_particles", 16)),
         )
     )
     print(f"checkpoint={checkpoint}")

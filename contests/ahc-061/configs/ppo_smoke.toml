@@ -6,6 +6,7 @@ seed_start = 0
 seed_stride = 1
 fixed_m = 4
 fixed_u = 3
+pf_particles = 16
 device = "cpu"
 compile = false
 lr = 0.0003

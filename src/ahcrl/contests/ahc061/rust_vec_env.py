@@ -1,3 +1,4 @@
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,16 +27,21 @@ class RustVecEnv:
         seed_stride: int = 1,
         fixed_m: int | None = None,
         fixed_u: int | None = None,
+        pf_particles: int = 16,
         release: bool = True,
     ) -> None:
         self.num_envs = num_envs
+        self.pf_particles = pf_particles
         cmd = ["cargo", "run"]
         if release:
             cmd.append("--release")
         cmd += ["--manifest-path", str(RL_TOOLS_MANIFEST), "--bin", "rl_env"]
+        env = os.environ.copy()
+        env["AHC061_PF_PARTICLES"] = str(pf_particles)
         self.proc = subprocess.Popen(
             cmd,
             cwd=str(ROOT),
+            env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=None,

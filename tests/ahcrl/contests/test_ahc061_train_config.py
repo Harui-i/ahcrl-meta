@@ -27,6 +27,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 "[train]",
                 "num_envs = 8",
                 "total_steps = 1024",
+                "pf_particles = 32",
                 "model_channels = 32",
                 "model_blocks = 2",
                 'model_block_type = "residual"',
@@ -61,6 +62,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
 
     assert args.num_envs == 4
     assert args.total_steps == 1024
+    assert args.pf_particles == 32
     assert args.model_channels == 32
     assert args.model_blocks == 3
     assert args.model_block_type == "convnext"
@@ -79,6 +81,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
 def test_parse_args_compile_defaults_to_true_and_can_be_disabled() -> None:
     assert parse_args(["--device", "cpu"]).compile is True
     assert parse_args(["--device", "cpu", "--no-compile"]).compile is False
+    assert parse_args(["--device", "cpu"]).pf_particles == 16
 
 
 def test_parse_args_symmetry_augmentation_defaults_to_none_and_loads_toml(
