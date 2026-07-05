@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 use std::io::{self, BufRead, Write};
-use std::thread;
 use std::time::Instant;
 
 use ahc061_rl_tools::official_compat::get_candidates;
 use ahc061_rl_tools::vec_env::{EnvSlot, DEFAULT_PF_PARTICLES};
+use rayon::prelude::*;
 
 const BOARD_SIZE: usize = 10;
 const MAX_PLAYERS: usize = 8;
@@ -406,42 +406,7 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
 }
 
 fn encode_slots(slots: &[EnvSlot]) -> Vec<EncodedSlot> {
-    let threads = std::env::var("AHC061_ENCODE_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|&value| value > 0)
-        .unwrap_or_else(|| {
-            thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1)
-        })
-        .min(slots.len().max(1));
-    if threads <= 1 || slots.len() <= 1 {
-        return slots.iter().map(encode_slot).collect();
-    }
-
-    let chunk_size = (slots.len() + threads - 1) / threads;
-    thread::scope(|scope| {
-        let mut handles = Vec::new();
-        for (chunk_idx, chunk) in slots.chunks(chunk_size).enumerate() {
-            handles.push(scope.spawn(move || {
-                (
-                    chunk_idx,
-                    chunk.iter().map(encode_slot).collect::<Vec<EncodedSlot>>(),
-                )
-            }));
-        }
-        let mut chunks = handles
-            .into_iter()
-            .map(|handle| handle.join().expect("encode worker panicked"))
-            .collect::<Vec<_>>();
-        chunks.sort_by_key(|(chunk_idx, _)| *chunk_idx);
-        let mut encoded = Vec::with_capacity(slots.len());
-        for (_, mut chunk) in chunks {
-            encoded.append(&mut chunk);
-        }
-        encoded
-    })
+    slots.par_iter().map(encode_slot).collect()
 }
 
 fn f32_to_f16_bits(value: f32) -> u16 {
@@ -564,6 +529,7 @@ fn parse_opt_usize(token: &str) -> Result<Option<usize>, String> {
 }
 
 fn main() {
+    init_rayon_pool();
     let stdin = io::stdin();
     let mut stdout = io::BufWriter::new(io::stdout());
     let mut slots: Vec<EnvSlot> = vec![];
@@ -659,5 +625,24 @@ fn main() {
             let _ = writeln!(stdout, "ERR {}", err);
             let _ = stdout.flush();
         }
+    }
+}
+
+fn init_rayon_pool() {
+    let Some(threads) = std::env::var("AHC061_ENCODE_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&value| value > 0)
+    else {
+        return;
+    };
+    if let Err(err) = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build_global()
+    {
+        eprintln!(
+            "warning: failed to initialize rayon global thread pool: {}",
+            err
+        );
     }
 }
