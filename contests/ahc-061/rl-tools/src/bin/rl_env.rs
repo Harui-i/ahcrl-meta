@@ -9,7 +9,8 @@ const BOARD_SIZE: usize = 10;
 const MAX_PLAYERS: usize = 8;
 const MAX_LEVEL: usize = 5;
 const ORACLE_PARAMS_PER_PLAYER: usize = 5;
-const NUM_PLANES: usize = 118;
+const PLAYER_AGG_FEATURES: usize = 4;
+const NUM_PLANES: usize = 154;
 const PLANE_M: usize = 24;
 const PLANE_U: usize = 25;
 const PLANE_SCORE_RATIO: usize = 26;
@@ -23,6 +24,15 @@ const PLANE_NEXT_GREEDY_START: usize = PLANE_REACH_START + MAX_PLAYERS;
 const PLANE_DIST_OWNER_START: usize = PLANE_NEXT_GREEDY_START + MAX_PLAYERS;
 const PLANE_DIST_COMP_START: usize = PLANE_DIST_OWNER_START + MAX_PLAYERS;
 const PLANE_DIST_CENTER: usize = PLANE_DIST_COMP_START + MAX_PLAYERS;
+const PLANE_X_NORM: usize = PLANE_DIST_CENTER + 1;
+const PLANE_Y_NORM: usize = PLANE_X_NORM + 1;
+const PLANE_POS0_X_NORM: usize = PLANE_Y_NORM + 1;
+const PLANE_POS0_Y_NORM: usize = PLANE_POS0_X_NORM + 1;
+const PLANE_PLAYER_AGG_START: usize = PLANE_POS0_Y_NORM + 1;
+const PLAYER_AGG_OWNER_LEVEL_SUM: usize = 0;
+const PLAYER_AGG_OWNER_LEVEL_VALUE_SUM: usize = 1;
+const PLAYER_AGG_COMP_LEVEL_SUM: usize = 2;
+const PLAYER_AGG_COMP_LEVEL_VALUE_SUM: usize = 3;
 
 fn plane_idx(plane: usize, x: usize, y: usize) -> usize {
     plane * BOARD_SIZE * BOARD_SIZE + x * BOARD_SIZE + y
@@ -329,13 +339,61 @@ fn encode_slot(slot: &EnvSlot) -> (Vec<f32>, Vec<u8>) {
             planes[plane_idx(PLANE_DIST_OWNER_START + mapped_player, x, y)] = dist_owner[idx];
             planes[plane_idx(PLANE_DIST_COMP_START + mapped_player, x, y)] = dist_comp[idx];
         }
+
+        let mut owner_level_sum = 0.0_f32;
+        let mut owner_level_value_sum = 0.0_f32;
+        let mut comp_level_sum = 0.0_f32;
+        let mut comp_level_value_sum = 0.0_f32;
+        for idx in 0..BOARD_SIZE * BOARD_SIZE {
+            let x = idx / BOARD_SIZE;
+            let y = idx % BOARD_SIZE;
+            let level = slot.state.level[x][y] as f32;
+            let level_value = level * slot.input.V[x][y] as f32;
+            if slot.state.owner[x][y] == player as i32 {
+                owner_level_sum += level;
+                owner_level_value_sum += level_value;
+            }
+            if comp_masks[player][idx] {
+                comp_level_sum += level;
+                comp_level_value_sum += level_value;
+            }
+        }
+
+        let level_capacity = (BOARD_SIZE * BOARD_SIZE * slot.input.U.max(1)) as f32;
+        let agg_start = PLANE_PLAYER_AGG_START + mapped_player * PLAYER_AGG_FEATURES;
+        fill_plane(
+            &mut planes,
+            agg_start + PLAYER_AGG_OWNER_LEVEL_SUM,
+            owner_level_sum / level_capacity.max(1.0),
+        );
+        fill_plane(
+            &mut planes,
+            agg_start + PLAYER_AGG_OWNER_LEVEL_VALUE_SUM,
+            owner_level_value_sum / total_capacity,
+        );
+        fill_plane(
+            &mut planes,
+            agg_start + PLAYER_AGG_COMP_LEVEL_SUM,
+            comp_level_sum / level_capacity.max(1.0),
+        );
+        fill_plane(
+            &mut planes,
+            agg_start + PLAYER_AGG_COMP_LEVEL_VALUE_SUM,
+            comp_level_value_sum / total_capacity,
+        );
     }
 
+    let (pos0_x, pos0_y) = slot.state.pos[0];
+    let inv_board_span = 1.0_f32 / (BOARD_SIZE - 1) as f32;
     for x in 0..BOARD_SIZE {
         for y in 0..BOARD_SIZE {
             let dx = (x as f32 - 4.5).abs();
             let dy = (y as f32 - 4.5).abs();
             planes[plane_idx(PLANE_DIST_CENTER, x, y)] = (dx + dy) / 9.0;
+            planes[plane_idx(PLANE_X_NORM, x, y)] = x as f32 * inv_board_span;
+            planes[plane_idx(PLANE_Y_NORM, x, y)] = y as f32 * inv_board_span;
+            planes[plane_idx(PLANE_POS0_X_NORM, x, y)] = pos0_x as f32 * inv_board_span;
+            planes[plane_idx(PLANE_POS0_Y_NORM, x, y)] = pos0_y as f32 * inv_board_span;
         }
     }
 

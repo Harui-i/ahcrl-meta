@@ -102,6 +102,7 @@ constexpr int MAX_PLAYERS = 8;
 constexpr int MAX_LEVEL = 5;
 constexpr int NUM_PLANES = {NUM_PLANES};
 constexpr int ORACLE_PARAMS_PER_PLAYER = 5;
+constexpr int PLAYER_AGG_FEATURES = 4;
 constexpr int PLANE_M = 24;
 constexpr int PLANE_U = 25;
 constexpr int PLANE_SCORE_RATIO = 26;
@@ -109,6 +110,21 @@ constexpr int PLANE_SCORE_DIFF = 27;
 constexpr int PLANE_LEGAL_MASK = 28;
 constexpr int PLANE_PLAYER_SCORE_START = 29;
 constexpr int PLANE_ORACLE_PARAM_START = PLANE_PLAYER_SCORE_START + MAX_PLAYERS;
+constexpr int PLANE_COMP_START = PLANE_ORACLE_PARAM_START + MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER;
+constexpr int PLANE_REACH_START = PLANE_COMP_START + MAX_PLAYERS;
+constexpr int PLANE_NEXT_GREEDY_START = PLANE_REACH_START + MAX_PLAYERS;
+constexpr int PLANE_DIST_OWNER_START = PLANE_NEXT_GREEDY_START + MAX_PLAYERS;
+constexpr int PLANE_DIST_COMP_START = PLANE_DIST_OWNER_START + MAX_PLAYERS;
+constexpr int PLANE_DIST_CENTER = PLANE_DIST_COMP_START + MAX_PLAYERS;
+constexpr int PLANE_X_NORM = PLANE_DIST_CENTER + 1;
+constexpr int PLANE_Y_NORM = PLANE_X_NORM + 1;
+constexpr int PLANE_POS0_X_NORM = PLANE_Y_NORM + 1;
+constexpr int PLANE_POS0_Y_NORM = PLANE_POS0_X_NORM + 1;
+constexpr int PLANE_PLAYER_AGG_START = PLANE_POS0_Y_NORM + 1;
+constexpr int PLAYER_AGG_OWNER_LEVEL_SUM = 0;
+constexpr int PLAYER_AGG_OWNER_LEVEL_VALUE_SUM = 1;
+constexpr int PLAYER_AGG_COMP_LEVEL_SUM = 2;
+constexpr int PLAYER_AGG_COMP_LEVEL_VALUE_SUM = 3;
 
 const string kBase91Alphabet =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -192,6 +208,32 @@ vector<pair<int, int>> get_candidates(const State& st, int player) {{
         }}
     }}
     return reachable;
+}}
+
+array<unsigned char, N * N> connected_component_mask(const State& st, int player) {{
+    array<unsigned char, N * N> mask{{}};
+    auto [sx, sy] = st.pos[player];
+    if (st.owner[sx][sy] != player) return mask;
+
+    queue<pair<int, int>> q;
+    mask[sx * N + sy] = 1;
+    q.push({{sx, sy}});
+    constexpr int dx[4] = {{0, 1, 0, -1}};
+    constexpr int dy[4] = {{1, 0, -1, 0}};
+    while (!q.empty()) {{
+        auto [x, y] = q.front();
+        q.pop();
+        for (int d = 0; d < 4; ++d) {{
+            int nx = x + dx[d];
+            int ny = y + dy[d];
+            bool in_bounds = 0 <= nx && nx < N && 0 <= ny && ny < N;
+            if (in_bounds && !mask[nx * N + ny] && st.owner[nx][ny] == player) {{
+                mask[nx * N + ny] = 1;
+                q.push({{nx, ny}});
+            }}
+        }}
+    }}
+    return mask;
 }}
 
 array<float, MAX_PLAYERS> player_scores(const State& st) {{
@@ -292,6 +334,57 @@ torch::Tensor encode(const State& st, const vector<pair<int, int>>& candidates) 
         }}
     }}
     // 本番入力ではAI内部パラメータは観測できないため、oracle parameter planesは0のままにする。
+
+    const float inv_board_span = 1.0f / static_cast<float>(N - 1);
+    const float pos0_x_norm = static_cast<float>(st.pos[0].first) * inv_board_span;
+    const float pos0_y_norm = static_cast<float>(st.pos[0].second) * inv_board_span;
+    for (int i = 0; i < N; ++i) {{
+        for (int j = 0; j < N; ++j) {{
+            float dx = abs(static_cast<float>(i) - 4.5f);
+            float dy = abs(static_cast<float>(j) - 4.5f);
+            at(PLANE_DIST_CENTER, i, j) = (dx + dy) / 9.0f;
+            at(PLANE_X_NORM, i, j) = static_cast<float>(i) * inv_board_span;
+            at(PLANE_Y_NORM, i, j) = static_cast<float>(j) * inv_board_span;
+            at(PLANE_POS0_X_NORM, i, j) = pos0_x_norm;
+            at(PLANE_POS0_Y_NORM, i, j) = pos0_y_norm;
+        }}
+    }}
+
+    const float level_capacity = max(static_cast<float>(N * N * max(st.u, 1)), 1.0f);
+    for (int p = 0; p < st.m; ++p) {{
+        int mp = mapped[p];
+        if (mp < 0 || mp >= MAX_PLAYERS) continue;
+        auto comp = connected_component_mask(st, p);
+        float owner_level_sum = 0.0f;
+        float owner_level_value_sum = 0.0f;
+        float comp_level_sum = 0.0f;
+        float comp_level_value_sum = 0.0f;
+        for (int i = 0; i < N; ++i) {{
+            for (int j = 0; j < N; ++j) {{
+                float level = static_cast<float>(st.level[i][j]);
+                float level_value = level * static_cast<float>(st.values[i][j]);
+                if (st.owner[i][j] == p) {{
+                    owner_level_sum += level;
+                    owner_level_value_sum += level_value;
+                }}
+                if (comp[i * N + j]) {{
+                    comp_level_sum += level;
+                    comp_level_value_sum += level_value;
+                }}
+            }}
+        }}
+        int agg_start = PLANE_PLAYER_AGG_START + mp * PLAYER_AGG_FEATURES;
+        for (int i = 0; i < N; ++i) {{
+            for (int j = 0; j < N; ++j) {{
+                at(agg_start + PLAYER_AGG_OWNER_LEVEL_SUM, i, j) = owner_level_sum / level_capacity;
+                at(agg_start + PLAYER_AGG_OWNER_LEVEL_VALUE_SUM, i, j) =
+                    owner_level_value_sum / total_capacity;
+                at(agg_start + PLAYER_AGG_COMP_LEVEL_SUM, i, j) = comp_level_sum / level_capacity;
+                at(agg_start + PLAYER_AGG_COMP_LEVEL_VALUE_SUM, i, j) =
+                    comp_level_value_sum / total_capacity;
+            }}
+        }}
+    }}
 
     return torch::from_blob(planes.data(), {{1, NUM_PLANES, N, N}}, torch::kFloat32)
         .to(torch::kBFloat16);

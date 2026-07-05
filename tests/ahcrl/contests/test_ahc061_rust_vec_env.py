@@ -7,8 +7,18 @@ from ahcrl.contests.ahc061.encoder import (
     PLANE_LEGAL_MASK,
     PLANE_M,
     PLANE_NEXT_GREEDY_START,
+    PLANE_PLAYER_AGG_START,
+    PLANE_POS0_X_NORM,
+    PLANE_POS0_Y_NORM,
     PLANE_REACH_START,
     PLANE_U,
+    PLANE_X_NORM,
+    PLANE_Y_NORM,
+    PLAYER_AGG_COMP_LEVEL_SUM,
+    PLAYER_AGG_COMP_LEVEL_VALUE_SUM,
+    PLAYER_AGG_FEATURES,
+    PLAYER_AGG_OWNER_LEVEL_SUM,
+    PLAYER_AGG_OWNER_LEVEL_VALUE_SUM,
 )
 from ahcrl.contests.ahc061.rust_vec_env import RustVecEnv
 
@@ -40,6 +50,30 @@ def test_rust_vec_env_reset_and_step() -> None:
         assert np.all(obs["planes"][0, PLANE_COMP_START] <= obs["planes"][0, PLANE_REACH_START])
         assert obs["planes"][0, PLANE_DIST_CENTER, 0, 0] == np.float32(1.0)
         assert obs["planes"][0, PLANE_DIST_CENTER, 4, 4] == np.float32(1 / 9)
+        assert obs["planes"][0, PLANE_X_NORM, 0, 0] == np.float32(0.0)
+        assert obs["planes"][0, PLANE_X_NORM, 9, 0] == np.float32(1.0)
+        assert obs["planes"][0, PLANE_Y_NORM, 0, 0] == np.float32(0.0)
+        assert obs["planes"][0, PLANE_Y_NORM, 0, 9] == np.float32(1.0)
+
+        pos0_idx = int(np.flatnonzero(obs["planes"][0, 15].reshape(100))[0])
+        pos0_x, pos0_y = divmod(pos0_idx, 10)
+        assert obs["planes"][0, PLANE_POS0_X_NORM, 0, 0] == np.float32(pos0_x / 9)
+        assert obs["planes"][0, PLANE_POS0_Y_NORM, 0, 0] == np.float32(pos0_y / 9)
+
+        player0_agg = PLANE_PLAYER_AGG_START
+        assert obs["planes"][0, player0_agg + PLAYER_AGG_OWNER_LEVEL_SUM, 0, 0] == np.float32(
+            1 / 300
+        )
+        assert (
+            obs["planes"][0, player0_agg + PLAYER_AGG_COMP_LEVEL_SUM, 0, 0]
+            == obs["planes"][0, player0_agg + PLAYER_AGG_OWNER_LEVEL_SUM, 0, 0]
+        )
+        assert obs["planes"][0, player0_agg + PLAYER_AGG_OWNER_LEVEL_VALUE_SUM, 0, 0] > 0
+        assert (
+            obs["planes"][0, player0_agg + PLAYER_AGG_COMP_LEVEL_VALUE_SUM, 0, 0]
+            == obs["planes"][0, player0_agg + PLAYER_AGG_OWNER_LEVEL_VALUE_SUM, 0, 0]
+        )
+        assert PLAYER_AGG_FEATURES == 4
         assert obs["mask"][0].any()
         action = int(np.flatnonzero(obs["mask"][0])[0])
         step = env.step(np.array([action], dtype=np.int64))
