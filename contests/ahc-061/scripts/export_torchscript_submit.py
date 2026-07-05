@@ -76,6 +76,7 @@ def render_cpp(
     checkpoint_name: str,
     torchscript_size: int,
     pf_particles: int,
+    temperature: float,
 ) -> str:
     encoded_chunks = c_string_literal_chunks(encoded_model)
     return f"""#include <ATen/Parallel.h>
@@ -108,6 +109,7 @@ constexpr int MAX_PLAYERS = 8;
 constexpr int MAX_LEVEL = 5;
 constexpr int NUM_PLANES = {NUM_PLANES};
 constexpr int PF_PARTICLES = {pf_particles};
+constexpr double ACTION_TEMPERATURE = {temperature:.17g};
 constexpr int ORACLE_PARAMS_PER_PLAYER = 5;
 constexpr int PLAYER_AGG_FEATURES = 4;
 constexpr int PLANE_M = 24;
@@ -738,6 +740,19 @@ pair<int, int> choose_action(
         .contiguous();
     auto acc = logits.accessor<float, 1>();
 
+    if (ACTION_TEMPERATURE <= 0.0) {{
+        pair<int, int> best = candidates[0];
+        float best_logit = -numeric_limits<float>::infinity();
+        for (auto [x, y] : candidates) {{
+            int idx = x * N + y;
+            if (acc[idx] > best_logit) {{
+                best_logit = acc[idx];
+                best = {{x, y}};
+            }}
+        }}
+        return best;
+    }}
+
     float max_logit = -numeric_limits<float>::infinity();
     for (auto [x, y] : candidates) {{
         int idx = x * N + y;
@@ -747,7 +762,7 @@ pair<int, int> choose_action(
     weights.reserve(candidates.size());
     for (auto [x, y] : candidates) {{
         int idx = x * N + y;
-        weights.push_back(exp(static_cast<double>(acc[idx] - max_logit)));
+        weights.push_back(exp(static_cast<double>(acc[idx] - max_logit) / ACTION_TEMPERATURE));
     }}
     discrete_distribution<int> dist(weights.begin(), weights.end());
     return candidates[dist(rng)];
@@ -828,6 +843,12 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--pf-particles", type=int)
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Softmax sampling temperature. Use <= 0 for greedy argmax.",
+    )
     args = parser.parse_args()
 
     run_dir = args.run_dir
@@ -846,6 +867,7 @@ def main() -> None:
             ),
             torchscript_size=len(torchscript),
             pf_particles=int(args.pf_particles or config.get("pf_particles", 16)),
+            temperature=args.temperature,
         )
     )
     print(f"checkpoint={checkpoint}")
