@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributions import Categorical
 
-from .encoder import BOARD_SIZE
+from .encoder import BOARD_SIZE, MAX_LEVEL, MAX_PLAYERS, PLANE_M, PLANE_U
 from .model import ActorCritic
 from .rust_vec_env import RustVecEnv
 
@@ -166,6 +166,8 @@ def main() -> None:
                         f"step={global_step}",
                         f"fps={log_metrics['summary/fps']:.1f}",
                         f"mean_final_score={log_metrics['train/final_mean_score']:.1f}",
+                        f"min_final_score={log_metrics['train/final_min_score']:.1f}",
+                        f"max_final_score={log_metrics['train/final_max_score']:.1f}",
                         f"mean_reward={log_metrics['train/mean_reward']:.5f}",
                         f"policy_loss={stats['policy_loss']:.5f}",
                         f"value_loss={stats['value_loss']:.5f}",
@@ -200,8 +202,11 @@ def collect_rollout(
     value_buf = []
     mask_buf = []
     score_buf = []
+    m_buf = []
+    u_buf = []
 
     for _ in range(args.rollout_steps):
+        m_values, u_values = _extract_m_u_from_obs(obs)
         encoded = torch.from_numpy(obs["planes"]).to(device=device, dtype=MODEL_DTYPE)
         mask = torch.from_numpy(obs["mask"]).to(device)
         with torch.no_grad():
@@ -222,6 +227,8 @@ def collect_rollout(
         value_buf.append(value.cpu())
         mask_buf.append(mask.cpu())
         score_buf.append(torch.from_numpy(step.score.copy()))
+        m_buf.append(torch.from_numpy(m_values.copy()))
+        u_buf.append(torch.from_numpy(u_values.copy()))
 
         obs = step.obs
         if step.done.any():
@@ -264,9 +271,17 @@ def collect_rollout(
         "returns": returns,
         "masks": torch.stack(mask_buf),
         "scores": torch.stack(score_buf),
+        "m_values": torch.stack(m_buf),
+        "u_values": torch.stack(u_buf),
         "last_obs": obs,
         "next_seed_start": next_seed_start,
     }
+
+
+def _extract_m_u_from_obs(obs: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    m_values = np.rint(obs["planes"][:, PLANE_M, 0, 0] * MAX_PLAYERS).astype(np.int64)
+    u_values = np.rint(obs["planes"][:, PLANE_U, 0, 0] * MAX_LEVEL).astype(np.int64)
+    return m_values, u_values
 
 
 def _initial_next_seed_start(args: argparse.Namespace) -> int:
@@ -561,6 +576,7 @@ def build_log_metrics(
     checkpoint_path: Path | None,
 ) -> dict[str, float | int | str]:
     scores = rollout["scores"].float()
+    final_scores = scores[-1]
     rewards = rollout["rewards"].float()
     dones = rollout["dones"].float()
     values = rollout["values"].float()
@@ -575,7 +591,7 @@ def build_log_metrics(
         else 1.0 - (returns - values).var(unbiased=False) / return_variance
     )
 
-    return {
+    metrics: dict[str, float | int | str] = {
         "summary/cumulative_env_steps": global_step,
         "summary/updates": update,
         "summary/elapsed_sec": elapsed,
@@ -583,7 +599,9 @@ def build_log_metrics(
         "train/mean_score": float(scores.mean().item()),
         "train/max_score": float(scores.max().item()),
         "train/min_score": float(scores.min().item()),
-        "train/final_mean_score": float(scores[-1].mean().item()),
+        "train/final_mean_score": float(final_scores.mean().item()),
+        "train/final_max_score": float(final_scores.max().item()),
+        "train/final_min_score": float(final_scores.min().item()),
         "train/mean_reward": float(rewards.mean().item()),
         "train/sum_reward": float(rewards.sum().item()),
         "train/done_count": int(dones.sum().item()),
@@ -601,6 +619,21 @@ def build_log_metrics(
         "train/clip_fraction": stats["clip_frac"],
         "checkpoint/path": checkpoint,
     }
+    if "m_values" in rollout:
+        final_m_values = rollout["m_values"][-1].long()
+        for m_value in torch.unique(final_m_values).tolist():
+            selector = final_m_values == m_value
+            metrics[f"train/final_mean_score_by_m/m_{m_value}"] = float(
+                final_scores[selector].mean().item()
+            )
+    if "u_values" in rollout:
+        final_u_values = rollout["u_values"][-1].long()
+        for u_value in torch.unique(final_u_values).tolist():
+            selector = final_u_values == u_value
+            metrics[f"train/final_mean_score_by_u/u_{u_value}"] = float(
+                final_scores[selector].mean().item()
+            )
+    return metrics
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

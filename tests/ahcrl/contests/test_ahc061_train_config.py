@@ -200,6 +200,8 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
         "advantages": torch.tensor([[1.0, -1.0], [0.5, -0.5]]),
         "returns": torch.tensor([[1.5, 1.6], [1.7, 1.8]]),
         "masks": torch.ones(2, 2, 10),
+        "m_values": torch.tensor([[2, 3], [2, 3]]),
+        "u_values": torch.tensor([[1, 2], [1, 1]]),
     }
     stats = {
         "policy_loss": 0.01,
@@ -224,6 +226,11 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
     assert metrics["summary/fps"] == 64.0
     assert metrics["train/mean_score"] == 4.0
     assert metrics["train/final_mean_score"] == 6.0
+    assert metrics["train/final_min_score"] == 5.0
+    assert metrics["train/final_max_score"] == 7.0
+    assert metrics["train/final_mean_score_by_m/m_2"] == 5.0
+    assert metrics["train/final_mean_score_by_m/m_3"] == 7.0
+    assert metrics["train/final_mean_score_by_u/u_1"] == 6.0
     assert metrics["train/mean_reward"] == pytest.approx(0.25)
     assert metrics["train/explained_variance"] == pytest.approx(1.0)
     assert metrics["loss/policy"] == 0.01
