@@ -215,6 +215,9 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
         "clip_frac": 0.05,
         "grad_norm": 0.06,
         "weight_norm": 0.07,
+        "trunk_feature_norm_mean": 0.08,
+        "trunk_feature_norm_std": 0.09,
+        "trunk_feature_norm_max": 0.10,
     }
 
     metrics = build_log_metrics(
@@ -242,6 +245,9 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
     assert metrics["train/normalized_entropy"] == 0.5
     assert metrics["model/grad_norm"] == 0.06
     assert metrics["model/weight_norm"] == 0.07
+    assert metrics["model/trunk_feature_norm_mean"] == 0.08
+    assert metrics["model/trunk_feature_norm_std"] == 0.09
+    assert metrics["model/trunk_feature_norm_max"] == 0.10
     assert metrics["checkpoint/path"] == "checkpoint.pt"
 
 

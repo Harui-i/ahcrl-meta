@@ -510,6 +510,9 @@ def update_model(
         return stat_sums
     stats = {key: value / stat_weight for key, value in stat_sums.items()}
     stats["weight_norm"] = _parameter_l2_norm(grad_model)
+    if isinstance(grad_model, ActorCritic):
+        feature_stats = grad_model.trunk_feature_norm_stats(obs[: args.minibatch_size])
+        stats.update(feature_stats)
     return stats
 
 
@@ -642,6 +645,9 @@ def build_log_metrics(
         "train/clip_fraction": stats["clip_frac"],
         "model/grad_norm": stats["grad_norm"],
         "model/weight_norm": stats["weight_norm"],
+        "model/trunk_feature_norm_mean": stats.get("trunk_feature_norm_mean", float("nan")),
+        "model/trunk_feature_norm_std": stats.get("trunk_feature_norm_std", float("nan")),
+        "model/trunk_feature_norm_max": stats.get("trunk_feature_norm_max", float("nan")),
         "checkpoint/path": checkpoint,
     }
     if "m_values" in rollout:
@@ -707,7 +713,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-blocks", type=int, default=argparse.SUPPRESS)
     parser.add_argument(
         "--model-block-type",
-        choices=("convnext", "residual"),
+        choices=("convnext", "residual", "spherical_convnext"),
         default=argparse.SUPPRESS,
     )
     parser.add_argument(

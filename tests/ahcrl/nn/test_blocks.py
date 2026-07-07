@@ -1,7 +1,13 @@
 import pytest
 import torch
 
-from ahcrl.nn import ConvNeXtBlock, ResidualBlock, make_group_norm
+from ahcrl.nn import (
+    ConvNeXtBlock,
+    HypersphericalFeatureNorm,
+    ResidualBlock,
+    SphericalConvNeXtBlock,
+    make_group_norm,
+)
 
 
 def test_residual_block_preserves_shape() -> None:
@@ -62,6 +68,41 @@ def test_convnext_block_rejects_invalid_kernel_size(kernel_size: int) -> None:
 def test_convnext_block_rejects_negative_layer_scale() -> None:
     with pytest.raises(ValueError, match="layer_scale_init"):
         ConvNeXtBlock(channels=8, layer_scale_init=-1e-6)
+
+
+def test_hyperspherical_feature_norm_preserves_shape_and_returns_finite_values() -> None:
+    norm = HypersphericalFeatureNorm(channels=8)
+    x = torch.randn(4, 8, 12, 16)
+
+    y = norm(x)
+
+    assert y.shape == x.shape
+    assert torch.isfinite(y).all()
+
+
+def test_hyperspherical_feature_norm_initializes_norm_near_sqrt_channels() -> None:
+    norm = HypersphericalFeatureNorm(channels=8)
+    x = torch.randn(4, 8, 12, 16)
+
+    y = norm(x)
+    feature_norm = y.float().pow(2).sum(dim=1).sqrt()
+
+    assert feature_norm.mean().item() == pytest.approx(8**0.5, rel=1e-4)
+
+
+def test_spherical_convnext_block_preserves_shape() -> None:
+    block = SphericalConvNeXtBlock(channels=8)
+    x = torch.randn(4, 8, 12, 16)
+
+    y = block(x)
+
+    assert y.shape == x.shape
+    assert torch.isfinite(y).all()
+
+
+def test_spherical_convnext_block_rejects_non_positive_channels() -> None:
+    with pytest.raises(ValueError, match="channels"):
+        SphericalConvNeXtBlock(channels=0)
 
 
 @pytest.mark.parametrize(

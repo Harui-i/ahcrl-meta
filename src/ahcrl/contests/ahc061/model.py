@@ -2,7 +2,7 @@ import torch
 from torch import nn
 
 from ahcrl.contests.ahc061.encoder import NUM_PLANES
-from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock, make_group_norm
+from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock, SphericalConvNeXtBlock, make_group_norm
 
 
 class ActorCritic(nn.Module):
@@ -39,6 +39,16 @@ class ActorCritic(nn.Module):
         logits = self.policy(h)
         value = self.value(h, x).squeeze(-1)
         return logits, value
+
+    @torch.no_grad()
+    def trunk_feature_norm_stats(self, x: torch.Tensor) -> dict[str, float]:
+        h = self.trunk(x)
+        feature_norm = h.float().pow(2).sum(dim=1).sqrt()
+        return {
+            "trunk_feature_norm_mean": float(feature_norm.mean().item()),
+            "trunk_feature_norm_std": float(feature_norm.std(unbiased=False).item()),
+            "trunk_feature_norm_max": float(feature_norm.max().item()),
+        }
 
 
 class RichValueHead(nn.Module):
@@ -77,6 +87,8 @@ class RichValueHead(nn.Module):
 def _block_class(block_type: str) -> type[nn.Module]:
     if block_type == "convnext":
         return ConvNeXtBlock
+    if block_type == "spherical_convnext":
+        return SphericalConvNeXtBlock
     if block_type == "residual":
         return ResidualBlock
     raise ValueError(f"unknown block_type: {block_type}")

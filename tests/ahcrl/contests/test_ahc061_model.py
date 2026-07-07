@@ -7,7 +7,7 @@ from ahcrl.contests.ahc061.encoder import BOARD_SIZE, NUM_PLANES
 from ahcrl.contests.ahc061.model import ActorCritic
 
 
-@pytest.mark.parametrize("block_type", ["convnext", "residual"])
+@pytest.mark.parametrize("block_type", ["convnext", "residual", "spherical_convnext"])
 def test_actor_critic_output_shapes(block_type: str) -> None:
     model = ActorCritic(channels=8, blocks=2, block_type=block_type)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
@@ -37,6 +37,20 @@ def test_actor_critic_runs_with_bfloat16_weights_and_inputs() -> None:
 
     assert logits.dtype == torch.bfloat16
     assert value.dtype == torch.bfloat16
+
+
+def test_actor_critic_reports_trunk_feature_norm_stats() -> None:
+    model = ActorCritic(channels=8, blocks=1)
+    x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+
+    stats = model.trunk_feature_norm_stats(x)
+
+    assert set(stats) == {
+        "trunk_feature_norm_mean",
+        "trunk_feature_norm_std",
+        "trunk_feature_norm_max",
+    }
+    assert all(value >= 0.0 for value in stats.values())
 
 
 def test_value_head_receives_gradients() -> None:
