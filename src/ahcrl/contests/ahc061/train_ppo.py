@@ -41,8 +41,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "entropy_coef": 0.01,
     "value_coef": 0.5,
     "max_grad_norm": 0.5,
-    "reward_scale_mode": "none",
+    "reward_scale_mode": "simbav2",
     "reward_scale_epsilon": 1e-8,
+    "reward_scale_g_max": 5.0,
     "obs_norm_mode": "none",
     "obs_norm_epsilon": 1e-8,
     "weight_projection": False,
@@ -66,7 +67,7 @@ STATE_FILE_NAME = "state.json"
 CONFIG_FILE_NAME = "config.json"
 
 
-class RunningRewardScaler:
+class ImmediateRewardScaler:
     def __init__(self, *, epsilon: float) -> None:
         if epsilon <= 0.0:
             raise ValueError(f"epsilon must be positive, got {epsilon}")
@@ -75,7 +76,11 @@ class RunningRewardScaler:
         self.mean = 0.0
         self.m2 = 0.0
 
-    def update_and_scale(self, rewards: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+    def update_and_scale(
+        self,
+        rewards: torch.Tensor,
+        dones: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         values = rewards.float().flatten()
         batch_count = int(values.numel())
         if batch_count == 0:
@@ -131,6 +136,142 @@ class RunningRewardScaler:
         self.mean += delta * batch_count / total_count
         self.m2 += batch_m2 + delta * delta * self.count * batch_count / total_count
         self.count = total_count
+
+
+class RunningRewardScaler:
+    """SimbaV2-style reward scaler based on discounted-return running variance."""
+
+    def __init__(self, *, gamma: float, g_max: float, epsilon: float) -> None:
+        if not 0.0 <= gamma <= 1.0:
+            raise ValueError(f"gamma must be in [0, 1], got {gamma}")
+        if g_max <= 0.0:
+            raise ValueError(f"g_max must be positive, got {g_max}")
+        if epsilon <= 0.0:
+            raise ValueError(f"epsilon must be positive, got {epsilon}")
+        self.gamma = gamma
+        self.g_max = g_max
+        self.epsilon = epsilon
+        self.count = 0
+        self.mean = 0.0
+        self.m2 = 0.0
+        self.g_return: torch.Tensor | None = None
+        self.g_return_abs_max = 0.0
+
+    def update_and_scale(
+        self,
+        rewards: torch.Tensor,
+        dones: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        if dones is None:
+            raise ValueError("dones are required for SimbaV2 reward scaling")
+        if rewards.shape != dones.shape:
+            raise ValueError(
+                f"rewards and dones must have the same shape: {rewards.shape} != {dones.shape}"
+            )
+        if rewards.ndim != 2:
+            raise ValueError(
+                f"expected rewards with shape (steps, envs), got {rewards.ndim} dimensions"
+            )
+
+        reward_values = rewards.detach().float()
+        done_values = dones.detach().float()
+        if reward_values.numel() == 0:
+            return rewards, self.stats()
+
+        returns = self._current_returns(
+            num_envs=reward_values.shape[1],
+            device=reward_values.device,
+        )
+        return_steps = []
+        for reward_t, done_t in zip(reward_values, done_values, strict=True):
+            returns = self.gamma * (1.0 - done_t) * returns + reward_t
+            return_steps.append(returns.clone())
+
+        discounted_returns = torch.stack(return_steps)
+        values = discounted_returns.flatten()
+        batch_count = int(values.numel())
+        batch_mean = float(values.mean().item())
+        batch_m2 = float(values.sub(batch_mean).pow(2).sum().item())
+        self._merge(batch_count=batch_count, batch_mean=batch_mean, batch_m2=batch_m2)
+        self.g_return = returns.detach().cpu()
+        self.g_return_abs_max = max(self.g_return_abs_max, float(values.abs().max().item()))
+
+        scale = self.scale
+        return rewards / scale, self.stats()
+
+    @property
+    def variance(self) -> float:
+        if self.count <= 0:
+            return 0.0
+        return self.m2 / self.count
+
+    @property
+    def min_required_denominator(self) -> float:
+        return self.g_return_abs_max / self.g_max
+
+    @property
+    def scale(self) -> float:
+        return max((self.variance + self.epsilon) ** 0.5, self.min_required_denominator)
+
+    def stats(self) -> dict[str, float]:
+        return {
+            "reward_scale": self.scale,
+            "reward_running_mean": self.mean,
+            "reward_running_std": self.variance**0.5,
+            "reward_discounted_return_abs_max": self.g_return_abs_max,
+            "reward_scale_min_denominator": self.min_required_denominator,
+        }
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "count": self.count,
+            "mean": self.mean,
+            "m2": self.m2,
+            "epsilon": self.epsilon,
+            "gamma": self.gamma,
+            "g_max": self.g_max,
+            "g_return": None if self.g_return is None else self.g_return.tolist(),
+            "g_return_abs_max": self.g_return_abs_max,
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        self.count = int(state["count"])
+        self.mean = float(state["mean"])
+        self.m2 = float(state["m2"])
+        self.epsilon = float(state.get("epsilon", self.epsilon))
+        self.gamma = float(state.get("gamma", self.gamma))
+        self.g_max = float(state.get("g_max", self.g_max))
+        g_return = state.get("g_return")
+        self.g_return = (
+            None if g_return is None else torch.as_tensor(g_return, dtype=torch.float32).cpu()
+        )
+        self.g_return_abs_max = float(state.get("g_return_abs_max", 0.0))
+
+    def _current_returns(self, *, num_envs: int, device: torch.device) -> torch.Tensor:
+        if self.g_return is None:
+            return torch.zeros(num_envs, dtype=torch.float32, device=device)
+        if self.g_return.numel() != num_envs:
+            raise ValueError(
+                f"reward scaler state has {self.g_return.numel()} env returns, "
+                f"but rollout has {num_envs} envs"
+            )
+        return self.g_return.to(device=device, dtype=torch.float32)
+
+    def _merge(self, *, batch_count: int, batch_mean: float, batch_m2: float) -> None:
+        if self.count == 0:
+            self.count = batch_count
+            self.mean = batch_mean
+            self.m2 = batch_m2
+            return
+
+        total_count = self.count + batch_count
+        delta = batch_mean - self.mean
+        self.mean += delta * batch_count / total_count
+        self.m2 += batch_m2 + delta * delta * self.count * batch_count / total_count
+        self.count = total_count
+
+
+RewardScaler = RunningRewardScaler | ImmediateRewardScaler
 
 
 class RunningObservationNormalizer:
@@ -222,6 +363,20 @@ class RunningObservationNormalizer:
         self.count = total_count
 
 
+def create_reward_scaler(args: argparse.Namespace) -> RewardScaler | None:
+    if args.reward_scale_mode == "none":
+        return None
+    if args.reward_scale_mode == "running_std":
+        return ImmediateRewardScaler(epsilon=args.reward_scale_epsilon)
+    if args.reward_scale_mode == "simbav2":
+        return RunningRewardScaler(
+            gamma=args.gamma,
+            g_max=args.reward_scale_g_max,
+            epsilon=args.reward_scale_epsilon,
+        )
+    raise ValueError(f"unsupported reward_scale_mode: {args.reward_scale_mode}")
+
+
 def main() -> None:
     args = parse_args()
     args.run_dir = prepare_run_dir(args)
@@ -238,11 +393,7 @@ def main() -> None:
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, raw_model, device)
     optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
-    reward_scaler = (
-        RunningRewardScaler(epsilon=args.reward_scale_epsilon)
-        if args.reward_scale_mode == "running_std"
-        else None
-    )
+    reward_scaler = create_reward_scaler(args)
     obs_normalizer = (
         RunningObservationNormalizer(NUM_PLANES, epsilon=args.obs_norm_epsilon)
         if args.obs_norm_mode == "running_channel"
@@ -387,7 +538,7 @@ def collect_rollout(
     args: argparse.Namespace,
     device: torch.device,
     *,
-    reward_scaler: RunningRewardScaler | None = None,
+    reward_scaler: RewardScaler | None = None,
     obs_normalizer: RunningObservationNormalizer | None = None,
 ) -> dict[str, Any]:
     obs_buf = []
@@ -448,6 +599,7 @@ def collect_rollout(
         next_value = model(next_encoded)[1].float().cpu()
 
     rewards = torch.stack(reward_buf)
+    dones = torch.stack(done_buf)
     if reward_scaler is None:
         scaled_rewards = rewards
         reward_scale_stats = {
@@ -456,8 +608,7 @@ def collect_rollout(
             "reward_running_std": float(rewards.float().std(unbiased=False).item()),
         }
     else:
-        scaled_rewards, reward_scale_stats = reward_scaler.update_and_scale(rewards)
-    dones = torch.stack(done_buf)
+        scaled_rewards, reward_scale_stats = reward_scaler.update_and_scale(rewards, dones)
     values = torch.stack(value_buf)
     advantages = torch.zeros_like(rewards)
     last_gae = torch.zeros(args.num_envs)
@@ -576,7 +727,7 @@ def save_training_state(
     update: int,
     next_seed_start: int,
     wandb_run_id: str | None,
-    reward_scaler: RunningRewardScaler | None = None,
+    reward_scaler: RewardScaler | None = None,
     obs_normalizer: RunningObservationNormalizer | None = None,
 ) -> Path:
     checkpoints_dir = args.run_dir / "checkpoints"
@@ -901,6 +1052,12 @@ def build_log_metrics(
         "train/reward_running_std": float(
             rollout.get("reward_running_std", rewards.std(unbiased=False).item())
         ),
+        "train/reward_discounted_return_abs_max": float(
+            rollout.get("reward_discounted_return_abs_max", 0.0)
+        ),
+        "train/reward_scale_min_denominator": float(
+            rollout.get("reward_scale_min_denominator", 0.0)
+        ),
         "train/obs_norm_count": float(rollout.get("obs_norm_count", 0.0)),
         "train/obs_norm_mean_abs_max": float(rollout.get("obs_norm_mean_abs_max", 0.0)),
         "train/obs_norm_std_min": float(rollout.get("obs_norm_std_min", 1.0)),
@@ -983,10 +1140,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-grad-norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument(
         "--reward-scale-mode",
-        choices=("none", "running_std"),
+        choices=("none", "running_std", "simbav2"),
         default=argparse.SUPPRESS,
     )
     parser.add_argument("--reward-scale-epsilon", type=float, default=argparse.SUPPRESS)
+    parser.add_argument("--reward-scale-g-max", type=float, default=argparse.SUPPRESS)
     parser.add_argument(
         "--obs-norm-mode",
         choices=("none", "running_channel"),
@@ -1073,10 +1231,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("checkpoint_interval_updates must be positive")
     if config["pf_particles"] <= 0:
         raise ValueError("pf_particles must be positive")
-    if config["reward_scale_mode"] not in ("none", "running_std"):
-        raise ValueError("reward_scale_mode must be one of: none, running_std")
+    if config["reward_scale_mode"] not in ("none", "running_std", "simbav2"):
+        raise ValueError("reward_scale_mode must be one of: none, running_std, simbav2")
     if config["reward_scale_epsilon"] <= 0.0:
         raise ValueError("reward_scale_epsilon must be positive")
+    if config["reward_scale_g_max"] <= 0.0:
+        raise ValueError("reward_scale_g_max must be positive")
     if config["obs_norm_mode"] not in ("none", "running_channel"):
         raise ValueError("obs_norm_mode must be one of: none, running_channel")
     if config["obs_norm_epsilon"] <= 0.0:

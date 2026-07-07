@@ -8,6 +8,7 @@ from ahcrl.contests.ahc061.encoder import NUM_PLANES
 from ahcrl.contests.ahc061.model import ActorCritic
 from ahcrl.contests.ahc061.train_ppo import (
     MODEL_DTYPE,
+    ImmediateRewardScaler,
     RunningObservationNormalizer,
     RunningRewardScaler,
     _advance_seed_start,
@@ -42,6 +43,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 'symmetry_augmentation = "full_d4"',
                 'reward_scale_mode = "running_std"',
                 "reward_scale_epsilon = 0.001",
+                "reward_scale_g_max = 7.0",
                 'obs_norm_mode = "running_channel"',
                 "obs_norm_epsilon = 0.0001",
                 "weight_projection = true",
@@ -84,6 +86,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.symmetry_augmentation == "none"
     assert args.reward_scale_mode == "running_std"
     assert args.reward_scale_epsilon == 0.001
+    assert args.reward_scale_g_max == 7.0
     assert args.obs_norm_mode == "running_channel"
     assert args.obs_norm_epsilon == 0.0001
     assert args.weight_projection is False
@@ -144,6 +147,14 @@ def test_parse_args_rejects_non_positive_reward_scale_epsilon(tmp_path: Path) ->
     config_path.write_text("[train]\nreward_scale_epsilon = 0.0\n")
 
     with pytest.raises(ValueError, match="reward_scale_epsilon"):
+        parse_args(["--config", str(config_path)])
+
+
+def test_parse_args_rejects_non_positive_reward_scale_g_max(tmp_path: Path) -> None:
+    config_path = tmp_path / "ppo.toml"
+    config_path.write_text("[train]\nreward_scale_g_max = 0.0\n")
+
+    with pytest.raises(ValueError, match="reward_scale_g_max"):
         parse_args(["--config", str(config_path)])
 
 
@@ -236,6 +247,8 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
         "reward_scale": 0.1,
         "reward_running_mean": 0.25,
         "reward_running_std": 0.1118,
+        "reward_discounted_return_abs_max": 0.5,
+        "reward_scale_min_denominator": 0.2,
         "dones": torch.tensor([[0.0, 0.0], [1.0, 0.0]]),
         "values": torch.tensor([[0.5, 0.6], [0.7, 0.8]]),
         "advantages": torch.tensor([[1.0, -1.0], [0.5, -0.5]]),
@@ -286,6 +299,8 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
     assert metrics["train/reward_scale"] == pytest.approx(0.1)
     assert metrics["train/reward_running_mean"] == pytest.approx(0.25)
     assert metrics["train/reward_running_std"] == pytest.approx(0.1118)
+    assert metrics["train/reward_discounted_return_abs_max"] == pytest.approx(0.5)
+    assert metrics["train/reward_scale_min_denominator"] == pytest.approx(0.2)
     assert metrics["train/explained_variance"] == pytest.approx(1.0)
     assert metrics["loss/policy"] == 0.01
     assert metrics["train/normalized_entropy"] == 0.5
@@ -333,8 +348,11 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     args.run_dir.mkdir()
     model = ActorCritic(channels=8, blocks=1).to(dtype=MODEL_DTYPE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    reward_scaler = RunningRewardScaler(epsilon=1e-8)
-    reward_scaler.update_and_scale(torch.tensor([1.0, 2.0, 3.0]))
+    reward_scaler = RunningRewardScaler(gamma=0.5, g_max=5.0, epsilon=1e-8)
+    reward_scaler.update_and_scale(
+        torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+        torch.tensor([[0.0, 1.0], [0.0, 0.0]]),
+    )
     obs_normalizer = RunningObservationNormalizer(channels=NUM_PLANES, epsilon=1e-8)
     obs_normalizer.update(torch.ones(2, NUM_PLANES, 10, 10))
     torch.manual_seed(123)
@@ -379,8 +397,39 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
         assert torch.equal(left, right)
 
 
-def test_running_reward_scaler_divides_by_running_std_without_centering() -> None:
-    scaler = RunningRewardScaler(epsilon=1e-8)
+def test_running_reward_scaler_uses_discounted_return_variance_and_g_max_floor() -> None:
+    scaler = RunningRewardScaler(gamma=0.5, g_max=5.0, epsilon=1e-8)
+    rewards = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    dones = torch.tensor([[0.0, 1.0], [0.0, 0.0]])
+
+    scaled_rewards, stats = scaler.update_and_scale(rewards, dones)
+
+    discounted_returns = torch.tensor([[1.0, 2.0], [3.5, 5.0]])
+    expected_std = discounted_returns.std(unbiased=False)
+    expected_scale = max(float(torch.sqrt(expected_std.square() + torch.tensor(1e-8)).item()), 1.0)
+    assert stats["reward_running_mean"] == pytest.approx(float(discounted_returns.mean().item()))
+    assert stats["reward_running_std"] == pytest.approx(float(expected_std.item()))
+    assert stats["reward_discounted_return_abs_max"] == pytest.approx(5.0)
+    assert stats["reward_scale_min_denominator"] == pytest.approx(1.0)
+    assert stats["reward_scale"] == pytest.approx(expected_scale)
+    assert torch.allclose(scaled_rewards, rewards / expected_scale)
+
+
+def test_running_reward_scaler_state_round_trips() -> None:
+    scaler = RunningRewardScaler(gamma=0.5, g_max=5.0, epsilon=1e-8)
+    scaler.update_and_scale(
+        torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+        torch.tensor([[0.0, 1.0], [0.0, 0.0]]),
+    )
+
+    reloaded = RunningRewardScaler(gamma=0.9, g_max=1.0, epsilon=1.0)
+    reloaded.load_state_dict(scaler.state_dict())
+
+    assert reloaded.state_dict() == scaler.state_dict()
+
+
+def test_immediate_reward_scaler_divides_by_running_std_without_centering() -> None:
+    scaler = ImmediateRewardScaler(epsilon=1e-8)
     rewards = torch.tensor([1.0, 2.0, 3.0])
 
     scaled_rewards, stats = scaler.update_and_scale(rewards)
@@ -390,16 +439,6 @@ def test_running_reward_scaler_divides_by_running_std_without_centering() -> Non
     assert stats["reward_running_std"] == pytest.approx(float(expected_std.item()))
     assert stats["reward_scale"] == pytest.approx(float(expected_std.item()))
     assert torch.allclose(scaled_rewards, rewards / expected_std)
-
-
-def test_running_reward_scaler_state_round_trips() -> None:
-    scaler = RunningRewardScaler(epsilon=1e-8)
-    scaler.update_and_scale(torch.tensor([1.0, 2.0, 3.0]))
-
-    reloaded = RunningRewardScaler(epsilon=1.0)
-    reloaded.load_state_dict(scaler.state_dict())
-
-    assert reloaded.state_dict() == scaler.state_dict()
 
 
 def test_running_observation_normalizer_standardizes_per_channel() -> None:
