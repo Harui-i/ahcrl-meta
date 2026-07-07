@@ -6,6 +6,19 @@ import torch
 from torch import nn
 
 
+def make_group_norm(channels: int, *, max_groups: int = 8) -> nn.GroupNorm:
+    if channels <= 0:
+        raise ValueError(f"channels must be positive, got {channels}")
+    if max_groups <= 0:
+        raise ValueError(f"max_groups must be positive, got {max_groups}")
+
+    for groups in range(min(max_groups, channels), 0, -1):
+        if channels % groups == 0:
+            return nn.GroupNorm(groups, channels)
+
+    raise AssertionError("unreachable")
+
+
 class ResidualBlock(nn.Module):
     """Shape-preserving residual block for 2D convolutional features."""
 
@@ -16,10 +29,10 @@ class ResidualBlock(nn.Module):
 
         self.net = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(channels),
+            make_group_norm(channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(channels),
+            make_group_norm(channels),
         )
         self.activation = nn.ReLU(inplace=True)
 

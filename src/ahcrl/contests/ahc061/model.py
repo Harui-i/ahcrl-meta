@@ -2,7 +2,7 @@ import torch
 from torch import nn
 
 from ahcrl.contests.ahc061.encoder import NUM_PLANES
-from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock
+from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock, make_group_norm
 
 
 class ActorCritic(nn.Module):
@@ -17,13 +17,13 @@ class ActorCritic(nn.Module):
         block_cls = _block_class(block_type)
         self.trunk = nn.Sequential(
             nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(channels),
+            make_group_norm(channels),
             nn.ReLU(inplace=True),
             *[block_cls(channels) for _ in range(blocks)],
         )
         self.policy = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1, bias=False),
-            nn.BatchNorm2d(channels),
+            make_group_norm(channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(channels, 1, kernel_size=1),
             nn.Flatten(),
