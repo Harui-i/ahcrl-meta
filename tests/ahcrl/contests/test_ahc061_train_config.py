@@ -11,6 +11,7 @@ from ahcrl.contests.ahc061.train_ppo import (
     _advance_seed_start,
     _initial_next_seed_start,
     _normalized_entropy,
+    _parameter_norm_stats,
     build_log_metrics,
     config_for_save,
     load_initial_model,
@@ -245,6 +246,10 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
         "clip_frac": 0.05,
         "grad_norm": 0.06,
         "weight_norm": 0.07,
+        "linear_conv_weight_norm": 0.071,
+        "norm_affine_norm": 0.072,
+        "hyperspherical_scale_norm": 0.073,
+        "param_rms": 0.074,
         "trunk_feature_norm_mean": 0.08,
         "trunk_feature_norm_std": 0.09,
         "trunk_feature_norm_max": 0.10,
@@ -279,10 +284,29 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
     assert metrics["train/normalized_entropy"] == 0.5
     assert metrics["model/grad_norm"] == 0.06
     assert metrics["model/weight_norm"] == 0.07
+    assert metrics["model/linear_conv_weight_norm"] == 0.071
+    assert metrics["model/norm_affine_norm"] == 0.072
+    assert metrics["model/hyperspherical_scale_norm"] == 0.073
+    assert metrics["model/param_rms"] == 0.074
     assert metrics["model/trunk_feature_norm_mean"] == 0.08
     assert metrics["model/trunk_feature_norm_std"] == 0.09
     assert metrics["model/trunk_feature_norm_max"] == 0.10
     assert metrics["checkpoint/path"] == "checkpoint.pt"
+
+
+def test_parameter_norm_stats_separates_spherical_scale_from_total_norm() -> None:
+    convnext = ActorCritic(channels=8, blocks=1, block_type="convnext")
+    spherical = ActorCritic(channels=8, blocks=1, block_type="spherical_convnext")
+
+    convnext_stats = _parameter_norm_stats(convnext)
+    spherical_stats = _parameter_norm_stats(spherical)
+
+    assert convnext_stats["hyperspherical_scale_norm"] == 0.0
+    assert spherical_stats["hyperspherical_scale_norm"] > 0.0
+    assert spherical_stats["weight_norm"] > spherical_stats["hyperspherical_scale_norm"]
+    assert spherical_stats["param_rms"] > 0.0
+    assert spherical_stats["linear_conv_weight_norm"] > 0.0
+    assert convnext_stats["norm_affine_norm"] > 0.0
 
 
 def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -> None:

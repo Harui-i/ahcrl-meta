@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributions import Categorical
 
-from ahcrl.nn import project_hyperspherical_weights_
+from ahcrl.nn import HypersphericalFeatureNorm, project_hyperspherical_weights_
 
 from .encoder import BOARD_SIZE, MAX_LEVEL, MAX_PLAYERS, PLANE_M, PLANE_U
 from .model import ActorCritic
@@ -613,10 +613,10 @@ def update_model(
                 stat_sums["clip_frac"] += float(clip_frac.item()) * weight
                 stat_sums["grad_norm"] += float(grad_norm.item()) * weight
     if stat_weight == 0:
-        stat_sums["weight_norm"] = _parameter_l2_norm(grad_model)
+        stat_sums.update(_parameter_norm_stats(grad_model))
         return stat_sums
     stats = {key: value / stat_weight for key, value in stat_sums.items()}
-    stats["weight_norm"] = _parameter_l2_norm(grad_model)
+    stats.update(_parameter_norm_stats(grad_model))
     if isinstance(grad_model, ActorCritic):
         feature_stats = grad_model.trunk_feature_norm_stats(obs[: args.minibatch_size])
         stats.update(feature_stats)
@@ -624,11 +624,54 @@ def update_model(
 
 
 def _parameter_l2_norm(model: nn.Module) -> float:
+    return _parameter_norm_stats(model)["weight_norm"]
+
+
+def _parameter_norm_stats(model: nn.Module) -> dict[str, float]:
     with torch.no_grad():
-        norm_sq = torch.zeros((), device=next(model.parameters()).device)
-        for parameter in model.parameters():
-            norm_sq += parameter.detach().float().pow(2).sum()
-        return float(norm_sq.sqrt().item())
+        device = next(model.parameters()).device
+        total_sq = torch.zeros((), device=device)
+        linear_conv_sq = torch.zeros((), device=device)
+        norm_affine_sq = torch.zeros((), device=device)
+        hyperspherical_scale_sq = torch.zeros((), device=device)
+        parameter_count = 0
+
+        linear_conv_modules = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d)
+        norm_modules = (
+            nn.BatchNorm1d,
+            nn.BatchNorm2d,
+            nn.BatchNorm3d,
+            nn.GroupNorm,
+            nn.InstanceNorm1d,
+            nn.InstanceNorm2d,
+            nn.InstanceNorm3d,
+            nn.LayerNorm,
+        )
+        for module in model.modules():
+            for name, parameter in module.named_parameters(recurse=False):
+                values = parameter.detach().float()
+                parameter_sq = values.pow(2).sum()
+                total_sq += parameter_sq
+                parameter_count += parameter.numel()
+
+                if isinstance(module, HypersphericalFeatureNorm):
+                    hyperspherical_scale_sq += parameter_sq
+                elif isinstance(module, linear_conv_modules) and name == "weight":
+                    linear_conv_sq += parameter_sq
+                elif isinstance(module, norm_modules):
+                    norm_affine_sq += parameter_sq
+
+        if parameter_count == 0:
+            param_rms = 0.0
+        else:
+            param_rms = float((total_sq / parameter_count).sqrt().item())
+        return {
+            "weight_norm": float(total_sq.sqrt().item()),
+            "linear_conv_weight_norm": float(linear_conv_sq.sqrt().item()),
+            "norm_affine_norm": float(norm_affine_sq.sqrt().item()),
+            "hyperspherical_scale_norm": float(hyperspherical_scale_sq.sqrt().item()),
+            "param_rms": param_rms,
+        }
 
 
 def _transform_board_d4(x: torch.Tensor, transform_id: int) -> torch.Tensor:
@@ -761,6 +804,10 @@ def build_log_metrics(
         "train/clip_fraction": stats["clip_frac"],
         "model/grad_norm": stats["grad_norm"],
         "model/weight_norm": stats["weight_norm"],
+        "model/linear_conv_weight_norm": stats["linear_conv_weight_norm"],
+        "model/norm_affine_norm": stats["norm_affine_norm"],
+        "model/hyperspherical_scale_norm": stats["hyperspherical_scale_norm"],
+        "model/param_rms": stats["param_rms"],
         "model/trunk_feature_norm_mean": stats.get("trunk_feature_norm_mean", float("nan")),
         "model/trunk_feature_norm_std": stats.get("trunk_feature_norm_std", float("nan")),
         "model/trunk_feature_norm_max": stats.get("trunk_feature_norm_max", float("nan")),

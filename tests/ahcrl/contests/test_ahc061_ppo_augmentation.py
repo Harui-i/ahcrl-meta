@@ -91,6 +91,7 @@ def test_update_model_respects_symmetry_augmentation(
         value_coef=0.5,
         entropy_coef=0.01,
         max_grad_norm=0.5,
+        weight_projection=False,
         symmetry_augmentation=symmetry_augmentation,
     )
 
@@ -112,9 +113,14 @@ def test_update_model_respects_symmetry_augmentation(
         "clip_frac",
         "grad_norm",
         "weight_norm",
+        "linear_conv_weight_norm",
+        "norm_affine_norm",
+        "hyperspherical_scale_norm",
+        "param_rms",
     }
     assert stats["grad_norm"] > 0.0
     assert stats["weight_norm"] > 0.0
+    assert stats["param_rms"] > 0.0
     assert torch.isfinite(model.policy).all()
     assert optimizer.step_count == expected_steps
 
@@ -138,6 +144,7 @@ def test_update_model_reports_average_clip_fraction_across_minibatches() -> None
         value_coef=0.5,
         entropy_coef=0.01,
         max_grad_norm=0.5,
+        weight_projection=False,
         symmetry_augmentation="none",
     )
 
