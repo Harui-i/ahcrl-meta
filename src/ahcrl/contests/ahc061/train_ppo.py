@@ -39,6 +39,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "entropy_coef": 0.01,
     "value_coef": 0.5,
     "max_grad_norm": 0.5,
+    "reward_scale_mode": "none",
+    "reward_scale_epsilon": 1e-8,
     "symmetry_augmentation": "none",
     "artifact_dir": ROOT / "contests/ahc-061/artifacts/ppo",
     "checkpoint_interval_updates": 1,
@@ -59,6 +61,73 @@ STATE_FILE_NAME = "state.json"
 CONFIG_FILE_NAME = "config.json"
 
 
+class RunningRewardScaler:
+    def __init__(self, *, epsilon: float) -> None:
+        if epsilon <= 0.0:
+            raise ValueError(f"epsilon must be positive, got {epsilon}")
+        self.epsilon = epsilon
+        self.count = 0
+        self.mean = 0.0
+        self.m2 = 0.0
+
+    def update_and_scale(self, rewards: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+        values = rewards.float().flatten()
+        batch_count = int(values.numel())
+        if batch_count == 0:
+            return rewards, self.stats()
+
+        batch_mean = float(values.mean().item())
+        batch_m2 = float(values.sub(batch_mean).pow(2).sum().item())
+        self._merge(batch_count=batch_count, batch_mean=batch_mean, batch_m2=batch_m2)
+
+        scale = self.scale
+        return rewards / scale, self.stats()
+
+    @property
+    def variance(self) -> float:
+        if self.count <= 0:
+            return 0.0
+        return self.m2 / self.count
+
+    @property
+    def scale(self) -> float:
+        return max(self.variance**0.5, self.epsilon)
+
+    def stats(self) -> dict[str, float]:
+        return {
+            "reward_scale": self.scale,
+            "reward_running_mean": self.mean,
+            "reward_running_std": self.variance**0.5,
+        }
+
+    def state_dict(self) -> dict[str, float | int]:
+        return {
+            "count": self.count,
+            "mean": self.mean,
+            "m2": self.m2,
+            "epsilon": self.epsilon,
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        self.count = int(state["count"])
+        self.mean = float(state["mean"])
+        self.m2 = float(state["m2"])
+        self.epsilon = float(state.get("epsilon", self.epsilon))
+
+    def _merge(self, *, batch_count: int, batch_mean: float, batch_m2: float) -> None:
+        if self.count == 0:
+            self.count = batch_count
+            self.mean = batch_mean
+            self.m2 = batch_m2
+            return
+
+        total_count = self.count + batch_count
+        delta = batch_mean - self.mean
+        self.mean += delta * batch_count / total_count
+        self.m2 += batch_m2 + delta * delta * self.count * batch_count / total_count
+        self.count = total_count
+
+
 def main() -> None:
     args = parse_args()
     args.run_dir = prepare_run_dir(args)
@@ -75,6 +144,11 @@ def main() -> None:
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, raw_model, device)
     optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
+    reward_scaler = (
+        RunningRewardScaler(epsilon=args.reward_scale_epsilon)
+        if args.reward_scale_mode == "running_std"
+        else None
+    )
     env = RustVecEnv(
         num_envs=args.num_envs,
         seed_start=args.seed_start,
@@ -92,6 +166,8 @@ def main() -> None:
         resume_state = load_training_state(args.resume_dir, raw_model, optimizer, device)
         global_step = resume_state["global_step"]
         update = resume_state["update"]
+        if reward_scaler is not None and resume_state["reward_scaler_state"] is not None:
+            reward_scaler.load_state_dict(resume_state["reward_scaler_state"])
         resume_seed_start = resume_state["next_seed_start"]
         torch.set_rng_state(resume_state["torch_rng_state"].cpu())
         np.random.set_state(resume_state["numpy_rng_state"])
@@ -118,7 +194,15 @@ def main() -> None:
             wandb_run_id=None if wandb_run is None else wandb_run.id,
         )
         while global_step < args.total_steps:
-            rollout = collect_rollout(model, env, obs, next_seed_start, args, device)
+            rollout = collect_rollout(
+                model,
+                env,
+                obs,
+                next_seed_start,
+                args,
+                device,
+                reward_scaler=reward_scaler,
+            )
             obs = rollout.pop("last_obs")
             next_seed_start = rollout.pop("next_seed_start")
             global_step += args.num_envs * args.rollout_steps
@@ -139,6 +223,7 @@ def main() -> None:
                     update=update,
                     next_seed_start=checkpoint_seed_start,
                     wandb_run_id=None if wandb_run is None else wandb_run.id,
+                    reward_scaler=reward_scaler,
                 )
                 obs = env.reset(
                     checkpoint_seed_start,
@@ -171,6 +256,7 @@ def main() -> None:
                         f"min_final_score={log_metrics['train/final_min_score']:.1f}",
                         f"max_final_score={log_metrics['train/final_max_score']:.1f}",
                         f"mean_reward={log_metrics['train/mean_reward']:.5f}",
+                        f"reward_scale={log_metrics['train/reward_scale']:.5f}",
                         f"policy_loss={stats['policy_loss']:.5f}",
                         f"value_loss={stats['value_loss']:.5f}",
                         f"entropy={stats['entropy']:.5f}",
@@ -197,6 +283,8 @@ def collect_rollout(
     next_seed_start: int,
     args: argparse.Namespace,
     device: torch.device,
+    *,
+    reward_scaler: RunningRewardScaler | None = None,
 ) -> dict[str, Any]:
     obs_buf = []
     action_buf = []
@@ -252,6 +340,15 @@ def collect_rollout(
         next_value = model(next_encoded)[1].float().cpu()
 
     rewards = torch.stack(reward_buf)
+    if reward_scaler is None:
+        scaled_rewards = rewards
+        reward_scale_stats = {
+            "reward_scale": 1.0,
+            "reward_running_mean": float(rewards.float().mean().item()),
+            "reward_running_std": float(rewards.float().std(unbiased=False).item()),
+        }
+    else:
+        scaled_rewards, reward_scale_stats = reward_scaler.update_and_scale(rewards)
     dones = torch.stack(done_buf)
     values = torch.stack(value_buf)
     advantages = torch.zeros_like(rewards)
@@ -259,7 +356,7 @@ def collect_rollout(
     for t in reversed(range(args.rollout_steps)):
         next_non_terminal = 1.0 - dones[t]
         next_values = next_value if t == args.rollout_steps - 1 else values[t + 1]
-        delta = rewards[t] + args.gamma * next_values * next_non_terminal - values[t]
+        delta = scaled_rewards[t] + args.gamma * next_values * next_non_terminal - values[t]
         last_gae = delta + args.gamma * args.gae_lambda * next_non_terminal * last_gae
         advantages[t] = last_gae
     returns = advantages + values
@@ -269,6 +366,7 @@ def collect_rollout(
         "actions": torch.stack(action_buf),
         "logprobs": torch.stack(logprob_buf),
         "rewards": rewards,
+        "scaled_rewards": scaled_rewards,
         "dones": dones,
         "values": values,
         "advantages": advantages,
@@ -279,6 +377,7 @@ def collect_rollout(
         "u_values": torch.stack(u_buf),
         "last_obs": obs,
         "next_seed_start": next_seed_start,
+        **reward_scale_stats,
     }
 
 
@@ -368,6 +467,7 @@ def save_training_state(
     update: int,
     next_seed_start: int,
     wandb_run_id: str | None,
+    reward_scaler: RunningRewardScaler | None = None,
 ) -> Path:
     checkpoints_dir = args.run_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
@@ -381,6 +481,7 @@ def save_training_state(
         "next_seed_start": next_seed_start,
         "torch_rng_state": torch.get_rng_state(),
         "numpy_rng_state": np.random.get_state(),
+        "reward_scaler": None if reward_scaler is None else reward_scaler.state_dict(),
     }
     torch.save(checkpoint, checkpoint_path)
     shutil.copy2(checkpoint_path, args.run_dir / LATEST_CHECKPOINT_NAME)
@@ -412,6 +513,7 @@ def load_training_state(
         "next_seed_start": int(checkpoint["next_seed_start"]),
         "torch_rng_state": checkpoint["torch_rng_state"],
         "numpy_rng_state": checkpoint["numpy_rng_state"],
+        "reward_scaler_state": checkpoint.get("reward_scaler"),
     }
 
 
@@ -604,6 +706,7 @@ def build_log_metrics(
     scores = rollout["scores"].float()
     final_scores = scores[-1]
     rewards = rollout["rewards"].float()
+    scaled_rewards = rollout.get("scaled_rewards", rollout["rewards"]).float()
     dones = rollout["dones"].float()
     values = rollout["values"].float()
     advantages = rollout["advantages"].float()
@@ -630,6 +733,14 @@ def build_log_metrics(
         "train/final_min_score": float(final_scores.min().item()),
         "train/mean_reward": float(rewards.mean().item()),
         "train/sum_reward": float(rewards.sum().item()),
+        "train/mean_scaled_reward": float(scaled_rewards.mean().item()),
+        "train/reward_scale": float(rollout.get("reward_scale", 1.0)),
+        "train/reward_running_mean": float(
+            rollout.get("reward_running_mean", rewards.mean().item())
+        ),
+        "train/reward_running_std": float(
+            rollout.get("reward_running_std", rewards.std(unbiased=False).item())
+        ),
         "train/done_count": int(dones.sum().item()),
         "train/mean_value": float(values.mean().item()),
         "train/mean_return": float(returns.mean().item()),
@@ -703,6 +814,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--value-coef", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--max-grad-norm", type=float, default=argparse.SUPPRESS)
     parser.add_argument(
+        "--reward-scale-mode",
+        choices=("none", "running_std"),
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument("--reward-scale-epsilon", type=float, default=argparse.SUPPRESS)
+    parser.add_argument(
         "--symmetry-augmentation",
         choices=("none", "full_d4"),
         default=argparse.SUPPRESS,
@@ -770,6 +887,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("checkpoint_interval_updates must be positive")
     if config["pf_particles"] <= 0:
         raise ValueError("pf_particles must be positive")
+    if config["reward_scale_mode"] not in ("none", "running_std"):
+        raise ValueError("reward_scale_mode must be one of: none, running_std")
+    if config["reward_scale_epsilon"] <= 0.0:
+        raise ValueError("reward_scale_epsilon must be positive")
     if config["symmetry_augmentation"] not in ("none", "full_d4"):
         raise ValueError("symmetry_augmentation must be one of: none, full_d4")
     if config["device"] == "auto":
