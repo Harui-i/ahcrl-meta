@@ -11,7 +11,7 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
-from .model import ActorCritic
+from .model import ActorCritic, ObservationNormalizedActorCritic
 from .rust_vec_env import RustVecEnv
 from .train_ppo import (
     MODEL_DTYPE,
@@ -72,8 +72,20 @@ def main(argv: list[str] | None = None) -> None:
     ).to(device=device, dtype=MODEL_DTYPE)
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, raw_model, device)
+    inference_model: nn.Module = raw_model
+    if args.obs_norm_mode == "running_channel":
+        if args.init_checkpoint is None:
+            raise ValueError("obs_norm_mode=running_channel requires --init-checkpoint")
+        obs_state = load_observation_normalizer_state(args.init_checkpoint, device)
+        inference_model = ObservationNormalizedActorCritic(
+            raw_model,
+            mean=cast(torch.Tensor, obs_state["mean"]),
+            variance=cast(torch.Tensor, obs_state["variance"]),
+            epsilon=float(obs_state["epsilon"]),
+        ).to(device=device)
     raw_model.eval()
-    model = cast(nn.Module, torch.compile(raw_model)) if args.compile else raw_model
+    inference_model.eval()
+    model = cast(nn.Module, torch.compile(inference_model)) if args.compile else inference_model
 
     env = RustVecEnv(
         num_envs=args.num_envs,
@@ -128,6 +140,27 @@ def main(argv: list[str] | None = None) -> None:
             print(f"profile_json={bench_args.profile_json}", flush=True)
     finally:
         env.close()
+
+
+def load_observation_normalizer_state(
+    checkpoint_path: Path,
+    device: torch.device,
+) -> dict[str, torch.Tensor | float]:
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    obs_state = checkpoint.get("obs_normalizer")
+    if obs_state is None:
+        raise ValueError("checkpoint does not contain obs_normalizer state")
+    count = int(obs_state["count"])
+    mean = obs_state["mean"].detach().float().to(device)
+    if count <= 0:
+        variance = torch.ones_like(mean)
+    else:
+        variance = obs_state["m2"].detach().float().to(device) / count
+    return {
+        "mean": mean,
+        "variance": variance,
+        "epsilon": float(obs_state.get("epsilon", 1e-8)),
+    }
 
 
 def timed_rollout(

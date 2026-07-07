@@ -15,7 +15,7 @@ from torch.distributions import Categorical
 
 from ahcrl.nn import HypersphericalFeatureNorm, Scaler, project_hyperspherical_weights_
 
-from .encoder import BOARD_SIZE, MAX_LEVEL, MAX_PLAYERS, PLANE_M, PLANE_U
+from .encoder import BOARD_SIZE, MAX_LEVEL, MAX_PLAYERS, NUM_PLANES, PLANE_M, PLANE_U
 from .model import ActorCritic
 from .rust_vec_env import RustVecEnv
 
@@ -43,6 +43,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_grad_norm": 0.5,
     "reward_scale_mode": "none",
     "reward_scale_epsilon": 1e-8,
+    "obs_norm_mode": "none",
+    "obs_norm_epsilon": 1e-8,
     "weight_projection": False,
     "symmetry_augmentation": "none",
     "artifact_dir": ROOT / "contests/ahc-061/artifacts/ppo",
@@ -131,6 +133,95 @@ class RunningRewardScaler:
         self.count = total_count
 
 
+class RunningObservationNormalizer:
+    """Channel-wise running standardization for NCHW observation planes."""
+
+    def __init__(self, channels: int, *, epsilon: float) -> None:
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        if epsilon <= 0.0:
+            raise ValueError(f"epsilon must be positive, got {epsilon}")
+        self.epsilon = epsilon
+        self.count = 0
+        self.mean = torch.zeros((1, channels, 1, 1), dtype=torch.float32)
+        self.m2 = torch.zeros((1, channels, 1, 1), dtype=torch.float32)
+
+    def update_and_normalize(self, observations: torch.Tensor) -> torch.Tensor:
+        self.update(observations)
+        return self.normalize(observations)
+
+    def update(self, observations: torch.Tensor) -> None:
+        if observations.ndim != 4:
+            raise ValueError(f"expected NCHW observations, got {observations.ndim} dimensions")
+        if observations.shape[1] != self.mean.shape[1]:
+            raise ValueError(f"expected {self.mean.shape[1]} channels, got {observations.shape[1]}")
+
+        values = observations.detach().float()
+        batch_count = int(values.shape[0] * values.shape[2] * values.shape[3])
+        if batch_count == 0:
+            return
+        batch_mean = values.mean(dim=(0, 2, 3), keepdim=True).cpu()
+        batch_m2 = values.sub(batch_mean.to(device=values.device)).pow(2).sum(
+            dim=(0, 2, 3),
+            keepdim=True,
+        ).cpu()
+        self._merge(batch_count=batch_count, batch_mean=batch_mean, batch_m2=batch_m2)
+
+    def normalize(self, observations: torch.Tensor) -> torch.Tensor:
+        mean = self.mean.to(device=observations.device)
+        variance = self.variance.to(device=observations.device)
+        normalized = (observations.float() - mean) / torch.sqrt(variance + self.epsilon)
+        return normalized.to(dtype=observations.dtype)
+
+    @property
+    def variance(self) -> torch.Tensor:
+        if self.count <= 0:
+            return torch.ones_like(self.mean)
+        return self.m2 / self.count
+
+    def stats(self) -> dict[str, float]:
+        variance = self.variance
+        return {
+            "obs_norm_count": float(self.count),
+            "obs_norm_mean_abs_max": float(self.mean.abs().max().item()),
+            "obs_norm_std_min": float(torch.sqrt(variance).min().item()),
+            "obs_norm_std_max": float(torch.sqrt(variance).max().item()),
+        }
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "count": self.count,
+            "mean": self.mean.clone(),
+            "m2": self.m2.clone(),
+            "epsilon": self.epsilon,
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        self.count = int(state["count"])
+        self.mean = state["mean"].detach().float().cpu().clone()
+        self.m2 = state["m2"].detach().float().cpu().clone()
+        self.epsilon = float(state.get("epsilon", self.epsilon))
+
+    def _merge(
+        self,
+        *,
+        batch_count: int,
+        batch_mean: torch.Tensor,
+        batch_m2: torch.Tensor,
+    ) -> None:
+        if self.count == 0:
+            self.count = batch_count
+            self.mean = batch_mean
+            self.m2 = batch_m2
+            return
+
+        total_count = self.count + batch_count
+        delta = batch_mean - self.mean
+        self.mean += delta * batch_count / total_count
+        self.m2 += batch_m2 + delta.pow(2) * self.count * batch_count / total_count
+        self.count = total_count
+
+
 def main() -> None:
     args = parse_args()
     args.run_dir = prepare_run_dir(args)
@@ -152,6 +243,11 @@ def main() -> None:
         if args.reward_scale_mode == "running_std"
         else None
     )
+    obs_normalizer = (
+        RunningObservationNormalizer(NUM_PLANES, epsilon=args.obs_norm_epsilon)
+        if args.obs_norm_mode == "running_channel"
+        else None
+    )
     env = RustVecEnv(
         num_envs=args.num_envs,
         seed_start=args.seed_start,
@@ -171,6 +267,8 @@ def main() -> None:
         update = resume_state["update"]
         if reward_scaler is not None and resume_state["reward_scaler_state"] is not None:
             reward_scaler.load_state_dict(resume_state["reward_scaler_state"])
+        if obs_normalizer is not None and resume_state["obs_normalizer_state"] is not None:
+            obs_normalizer.load_state_dict(resume_state["obs_normalizer_state"])
         resume_seed_start = resume_state["next_seed_start"]
         torch.set_rng_state(resume_state["torch_rng_state"].cpu())
         np.random.set_state(resume_state["numpy_rng_state"])
@@ -205,6 +303,7 @@ def main() -> None:
                 args,
                 device,
                 reward_scaler=reward_scaler,
+                obs_normalizer=obs_normalizer,
             )
             obs = rollout.pop("last_obs")
             next_seed_start = rollout.pop("next_seed_start")
@@ -227,6 +326,7 @@ def main() -> None:
                     next_seed_start=checkpoint_seed_start,
                     wandb_run_id=None if wandb_run is None else wandb_run.id,
                     reward_scaler=reward_scaler,
+                    obs_normalizer=obs_normalizer,
                 )
                 obs = env.reset(
                     checkpoint_seed_start,
@@ -288,6 +388,7 @@ def collect_rollout(
     device: torch.device,
     *,
     reward_scaler: RunningRewardScaler | None = None,
+    obs_normalizer: RunningObservationNormalizer | None = None,
 ) -> dict[str, Any]:
     obs_buf = []
     action_buf = []
@@ -303,6 +404,8 @@ def collect_rollout(
     for _ in range(args.rollout_steps):
         m_values, u_values = _extract_m_u_from_obs(obs)
         encoded = torch.from_numpy(obs["planes"]).to(device=device, dtype=MODEL_DTYPE)
+        if obs_normalizer is not None:
+            encoded = obs_normalizer.update_and_normalize(encoded)
         mask = torch.from_numpy(obs["mask"]).to(device)
         with torch.inference_mode():
             logits, value = model(encoded)
@@ -340,6 +443,8 @@ def collect_rollout(
             device=device,
             dtype=MODEL_DTYPE,
         )
+        if obs_normalizer is not None:
+            next_encoded = obs_normalizer.normalize(next_encoded)
         next_value = model(next_encoded)[1].float().cpu()
 
     rewards = torch.stack(reward_buf)
@@ -381,6 +486,7 @@ def collect_rollout(
         "last_obs": obs,
         "next_seed_start": next_seed_start,
         **reward_scale_stats,
+        **({} if obs_normalizer is None else obs_normalizer.stats()),
     }
 
 
@@ -471,6 +577,7 @@ def save_training_state(
     next_seed_start: int,
     wandb_run_id: str | None,
     reward_scaler: RunningRewardScaler | None = None,
+    obs_normalizer: RunningObservationNormalizer | None = None,
 ) -> Path:
     checkpoints_dir = args.run_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
@@ -485,6 +592,7 @@ def save_training_state(
         "torch_rng_state": torch.get_rng_state(),
         "numpy_rng_state": np.random.get_state(),
         "reward_scaler": None if reward_scaler is None else reward_scaler.state_dict(),
+        "obs_normalizer": None if obs_normalizer is None else obs_normalizer.state_dict(),
     }
     torch.save(checkpoint, checkpoint_path)
     shutil.copy2(checkpoint_path, args.run_dir / LATEST_CHECKPOINT_NAME)
@@ -517,6 +625,7 @@ def load_training_state(
         "torch_rng_state": checkpoint["torch_rng_state"],
         "numpy_rng_state": checkpoint["numpy_rng_state"],
         "reward_scaler_state": checkpoint.get("reward_scaler"),
+        "obs_normalizer_state": checkpoint.get("obs_normalizer"),
     }
 
 
@@ -792,6 +901,10 @@ def build_log_metrics(
         "train/reward_running_std": float(
             rollout.get("reward_running_std", rewards.std(unbiased=False).item())
         ),
+        "train/obs_norm_count": float(rollout.get("obs_norm_count", 0.0)),
+        "train/obs_norm_mean_abs_max": float(rollout.get("obs_norm_mean_abs_max", 0.0)),
+        "train/obs_norm_std_min": float(rollout.get("obs_norm_std_min", 1.0)),
+        "train/obs_norm_std_max": float(rollout.get("obs_norm_std_max", 1.0)),
         "train/done_count": int(dones.sum().item()),
         "train/mean_value": float(values.mean().item()),
         "train/mean_return": float(returns.mean().item()),
@@ -874,6 +987,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=argparse.SUPPRESS,
     )
     parser.add_argument("--reward-scale-epsilon", type=float, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--obs-norm-mode",
+        choices=("none", "running_channel"),
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument("--obs-norm-epsilon", type=float, default=argparse.SUPPRESS)
     parser.add_argument(
         "--weight-projection",
         dest="weight_projection",
@@ -958,6 +1077,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("reward_scale_mode must be one of: none, running_std")
     if config["reward_scale_epsilon"] <= 0.0:
         raise ValueError("reward_scale_epsilon must be positive")
+    if config["obs_norm_mode"] not in ("none", "running_channel"):
+        raise ValueError("obs_norm_mode must be one of: none, running_channel")
+    if config["obs_norm_epsilon"] <= 0.0:
+        raise ValueError("obs_norm_epsilon must be positive")
     if config["symmetry_augmentation"] not in ("none", "full_d4"):
         raise ValueError("symmetry_augmentation must be one of: none, full_d4")
     if config["device"] == "auto":

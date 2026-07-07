@@ -4,11 +4,12 @@ import argparse
 import json
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
 import torch
 
 from ahcrl.contests.ahc061.encoder import NUM_PLANES
-from ahcrl.contests.ahc061.model import ActorCritic
+from ahcrl.contests.ahc061.model import ActorCritic, ObservationNormalizedActorCritic
 
 BASE91_ALPHABET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -51,15 +52,33 @@ def c_string_literal_chunks(s: str, *, width: int = 120) -> str:
 
 
 def export_torchscript(checkpoint_path: Path, config: dict[str, object]) -> bytes:
-    model = ActorCritic(
-        channels=int(config["model_channels"]),
-        blocks=int(config["model_blocks"]),
+    base_model = ActorCritic(
+        channels=int(cast(Any, config["model_channels"])),
+        blocks=int(cast(Any, config["model_blocks"])),
         block_type=str(config["model_block_type"]),
     )
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
-    model.load_state_dict(state_dict)
-    model.to(dtype=torch.bfloat16)
+    base_model.load_state_dict(state_dict)
+    base_model.to(dtype=torch.bfloat16)
+    model: torch.nn.Module = base_model
+    obs_norm_mode = str(config.get("obs_norm_mode", "none"))
+    if obs_norm_mode == "running_channel":
+        obs_state = checkpoint.get("obs_normalizer")
+        if obs_state is None:
+            raise ValueError("checkpoint does not contain obs_normalizer state")
+        count = int(obs_state["count"])
+        mean = obs_state["mean"]
+        if count <= 0:
+            variance = torch.ones_like(mean, dtype=torch.float32)
+        else:
+            variance = obs_state["m2"].float() / count
+        model = ObservationNormalizedActorCritic(
+            base_model,
+            mean=mean,
+            variance=variance,
+            epsilon=float(obs_state.get("epsilon", config.get("obs_norm_epsilon", 1e-8))),
+        )
     model.eval()
     dummy = torch.zeros((1, NUM_PLANES, 10, 10), dtype=torch.bfloat16)
     with torch.no_grad():
@@ -632,7 +651,9 @@ torch::Tensor encode(
         reach_masks.push_back(reach_mask(st, p));
         if (p == 0) {{
             array<float, N * N> own_next{{}};
-            for (int idx = 0; idx < N * N; ++idx) own_next[idx] = reach_masks.back()[idx] ? 1.0f : 0.0f;
+            for (int idx = 0; idx < N * N; ++idx) {{
+                own_next[idx] = reach_masks.back()[idx] ? 1.0f : 0.0f;
+            }}
             next_planes.push_back(own_next);
         }} else {{
             next_planes.push_back(pfilters[p - 1].predictive_distribution(st, p));
@@ -802,7 +823,10 @@ int main() {{
     vector<ParticleFilterSmc> pfilters;
     pfilters.reserve(max(st.m - 1, 0));
     for (int p = 1; p < st.m; ++p) {{
-        pfilters.emplace_back(PF_PARTICLES, 0xa0761d6478bd642fULL ^ (static_cast<uint64_t>(p) << 32));
+        pfilters.emplace_back(
+            PF_PARTICLES,
+            0xa0761d6478bd642fULL ^ (static_cast<uint64_t>(p) << 32)
+        );
     }}
     mt19937 rng(static_cast<uint32_t>(
         chrono::steady_clock::now().time_since_epoch().count()

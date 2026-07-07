@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from typing import cast
 
 import torch
 from torch import nn
@@ -59,6 +60,32 @@ class ActorCritic(nn.Module):
             "trunk_feature_norm_std": float(feature_norm.std(unbiased=False).item()),
             "trunk_feature_norm_max": float(feature_norm.max().item()),
         }
+
+
+class ObservationNormalizedActorCritic(nn.Module):
+    """Apply frozen observation RSNorm before an ActorCritic model."""
+
+    def __init__(
+        self,
+        model: ActorCritic,
+        *,
+        mean: torch.Tensor,
+        variance: torch.Tensor,
+        epsilon: float,
+    ) -> None:
+        super().__init__()
+        if epsilon <= 0.0:
+            raise ValueError(f"epsilon must be positive, got {epsilon}")
+        self.model = model
+        self.register_buffer("mean", mean.detach().float().clone())
+        self.register_buffer("variance", variance.detach().float().clone())
+        self.epsilon = epsilon
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        mean = cast(torch.Tensor, self.mean)
+        variance = cast(torch.Tensor, self.variance)
+        y = (x.float() - mean) / torch.sqrt(variance + self.epsilon)
+        return self.model(y.to(dtype=x.dtype))
 
 
 class RichValueHead(nn.Module):

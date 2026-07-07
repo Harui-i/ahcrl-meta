@@ -4,9 +4,11 @@ from pathlib import Path
 import pytest
 import torch
 
+from ahcrl.contests.ahc061.encoder import NUM_PLANES
 from ahcrl.contests.ahc061.model import ActorCritic
 from ahcrl.contests.ahc061.train_ppo import (
     MODEL_DTYPE,
+    RunningObservationNormalizer,
     RunningRewardScaler,
     _advance_seed_start,
     _initial_next_seed_start,
@@ -40,6 +42,8 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 'symmetry_augmentation = "full_d4"',
                 'reward_scale_mode = "running_std"',
                 "reward_scale_epsilon = 0.001",
+                'obs_norm_mode = "running_channel"',
+                "obs_norm_epsilon = 0.0001",
                 "weight_projection = true",
                 "wandb_enabled = true",
                 'wandb_project = "test-project"',
@@ -80,6 +84,8 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.symmetry_augmentation == "none"
     assert args.reward_scale_mode == "running_std"
     assert args.reward_scale_epsilon == 0.001
+    assert args.obs_norm_mode == "running_channel"
+    assert args.obs_norm_epsilon == 0.0001
     assert args.weight_projection is False
     assert args.wandb_enabled is True
     assert args.wandb_project == "test-project"
@@ -92,6 +98,7 @@ def test_parse_args_compile_defaults_to_true_and_can_be_disabled() -> None:
     assert parse_args(["--device", "cpu", "--no-compile"]).compile is False
     assert parse_args(["--device", "cpu"]).pf_particles == 16
     assert parse_args(["--device", "cpu"]).weight_projection is False
+    assert parse_args(["--device", "cpu"]).obs_norm_mode == "none"
     assert parse_args(["--device", "cpu", "--weight-projection"]).weight_projection is True
 
 
@@ -328,6 +335,8 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     reward_scaler = RunningRewardScaler(epsilon=1e-8)
     reward_scaler.update_and_scale(torch.tensor([1.0, 2.0, 3.0]))
+    obs_normalizer = RunningObservationNormalizer(channels=NUM_PLANES, epsilon=1e-8)
+    obs_normalizer.update(torch.ones(2, NUM_PLANES, 10, 10))
     torch.manual_seed(123)
 
     checkpoint_path = save_training_state(
@@ -339,6 +348,7 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
         next_seed_start=64,
         wandb_run_id="abc123",
         reward_scaler=reward_scaler,
+        obs_normalizer=obs_normalizer,
     )
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -363,6 +373,8 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     assert state["update"] == 2
     assert state["next_seed_start"] == 64
     assert state["reward_scaler_state"] == reward_scaler.state_dict()
+    assert state["obs_normalizer_state"]["count"] == obs_normalizer.state_dict()["count"]
+    assert torch.equal(state["obs_normalizer_state"]["mean"], obs_normalizer.state_dict()["mean"])
     for left, right in zip(model.parameters(), reloaded_model.parameters(), strict=True):
         assert torch.equal(left, right)
 
@@ -388,6 +400,39 @@ def test_running_reward_scaler_state_round_trips() -> None:
     reloaded.load_state_dict(scaler.state_dict())
 
     assert reloaded.state_dict() == scaler.state_dict()
+
+
+def test_running_observation_normalizer_standardizes_per_channel() -> None:
+    normalizer = RunningObservationNormalizer(channels=2, epsilon=1e-8)
+    observations = torch.tensor(
+        [
+            [
+                [[1.0, 3.0], [5.0, 7.0]],
+                [[2.0, 2.0], [2.0, 2.0]],
+            ]
+        ]
+    )
+
+    normalized = normalizer.update_and_normalize(observations)
+
+    assert normalizer.count == 4
+    assert normalizer.mean.flatten().tolist() == pytest.approx([4.0, 2.0])
+    assert torch.allclose(normalized[:, 0].mean(), torch.tensor(0.0), atol=1e-6)
+    assert torch.allclose(normalized[:, 0].std(unbiased=False), torch.tensor(1.0), atol=1e-6)
+    assert torch.allclose(normalized[:, 1], torch.zeros_like(normalized[:, 1]))
+
+
+def test_running_observation_normalizer_state_round_trips() -> None:
+    normalizer = RunningObservationNormalizer(channels=2, epsilon=1e-8)
+    normalizer.update(torch.randn(3, 2, 4, 4))
+
+    reloaded = RunningObservationNormalizer(channels=2, epsilon=1.0)
+    reloaded.load_state_dict(normalizer.state_dict())
+
+    assert reloaded.count == normalizer.count
+    assert reloaded.epsilon == normalizer.epsilon
+    assert torch.equal(reloaded.mean, normalizer.mean)
+    assert torch.equal(reloaded.m2, normalizer.m2)
 
 
 def test_load_initial_model_loads_only_model_state(tmp_path: Path) -> None:
