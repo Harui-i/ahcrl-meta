@@ -858,7 +858,8 @@ def update_model(
                 optimizer.step()
                 if (
                     args.weight_projection
-                    or getattr(args, "model_block_type", "") == "spherical_convnext"
+                    or getattr(args, "model_block_type", "")
+                    in ("spherical_convnext", "spherical_global_context")
                 ):
                     project_hyperspherical_weights_(grad_model)
 
@@ -1174,7 +1175,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-blocks", type=int, default=argparse.SUPPRESS)
     parser.add_argument(
         "--model-block-type",
-        choices=("convnext", "per_cell_mlp", "residual", "spherical_convnext"),
+        choices=(
+            "convnext",
+            "per_cell_mlp",
+            "residual",
+            "spherical_convnext",
+            "spherical_global_context",
+        ),
         default=argparse.SUPPRESS,
     )
     parser.add_argument(

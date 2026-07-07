@@ -2,6 +2,7 @@
 
 from ahcrl.nn.blocks import (
     ConvNeXtBlock,
+    GlobalContextLERP2d,
     HyperEmbedder2d,
     HyperLinear,
     HyperMLP,
@@ -12,6 +13,7 @@ from ahcrl.nn.blocks import (
     Scaler,
     ShiftL2Norm,
     SphericalConvNeXtBlock,
+    SphericalGlobalContextBlock,
     l2_normalize,
     make_group_norm,
     project_hyperspherical_weights_,
@@ -20,6 +22,7 @@ from ahcrl.nn.blocks import (
 
 __all__ = [
     "ConvNeXtBlock",
+    "GlobalContextLERP2d",
     "HyperEmbedder2d",
     "HyperLinear",
     "HyperMLP",
@@ -30,6 +33,7 @@ __all__ = [
     "Scaler",
     "ShiftL2Norm",
     "SphericalConvNeXtBlock",
+    "SphericalGlobalContextBlock",
     "l2_normalize",
     "make_group_norm",
     "project_hyperspherical_weights_",
