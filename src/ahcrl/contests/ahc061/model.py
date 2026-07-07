@@ -7,6 +7,7 @@ from ahcrl.contests.ahc061.encoder import NUM_PLANES
 from ahcrl.nn.blocks import (
     ConvNeXtBlock,
     HyperEmbedder2d,
+    PerCellMLPBlock,
     ResidualBlock,
     SphericalConvNeXtBlock,
     make_group_norm,
@@ -117,6 +118,8 @@ def _make_trunk(
 def _block_factory(block_type: str, *, channels: int, blocks: int) -> Callable[[], nn.Module]:
     if block_type == "convnext":
         return lambda: ConvNeXtBlock(channels)
+    if block_type == "per_cell_mlp":
+        return lambda: PerCellMLPBlock(channels)
     if block_type == "spherical_convnext":
         alpha_init = 1.0 / (blocks + 1)
         return lambda: SphericalConvNeXtBlock(channels, alpha_init=alpha_init)

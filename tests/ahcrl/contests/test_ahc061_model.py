@@ -7,7 +7,10 @@ from ahcrl.contests.ahc061.encoder import BOARD_SIZE, NUM_PLANES
 from ahcrl.contests.ahc061.model import ActorCritic
 
 
-@pytest.mark.parametrize("block_type", ["convnext", "residual", "spherical_convnext"])
+@pytest.mark.parametrize(
+    "block_type",
+    ["convnext", "per_cell_mlp", "residual", "spherical_convnext"],
+)
 def test_actor_critic_output_shapes(block_type: str) -> None:
     model = ActorCritic(channels=8, blocks=2, block_type=block_type)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)

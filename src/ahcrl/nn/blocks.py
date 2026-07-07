@@ -98,6 +98,45 @@ class ConvNeXtBlock(nn.Module):
         return residual + y
 
 
+class PerCellMLPBlock(nn.Module):
+    """Shape-preserving per-cell channel MLP block without spatial mixing."""
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        expansion: int = 4,
+        layer_scale_init: float = 1e-6,
+    ) -> None:
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        if expansion <= 0:
+            raise ValueError(f"expansion must be positive, got {expansion}")
+        if layer_scale_init < 0.0:
+            raise ValueError(f"layer_scale_init must be non-negative, got {layer_scale_init}")
+
+        self.norm = nn.LayerNorm(channels)
+        hidden_channels = channels * expansion
+        self.pointwise = nn.Sequential(
+            nn.Linear(channels, hidden_channels),
+            nn.GELU(),
+            nn.Linear(hidden_channels, channels),
+        )
+        self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 4:
+            raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
+        residual = x
+        y = x.permute(0, 2, 3, 1)
+        y = self.norm(y)
+        y = self.pointwise(y)
+        y = self.layer_scale * y
+        y = y.permute(0, 3, 1, 2)
+        return residual + y
+
+
 class HypersphericalFeatureNorm(nn.Module):
     """Normalize per-cell channel features onto a learnable-radius sphere."""
 

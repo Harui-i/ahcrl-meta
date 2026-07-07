@@ -3,8 +3,12 @@ import torch
 
 from ahcrl.nn import (
     ConvNeXtBlock,
+    HyperEmbedder2d,
+    HyperLinear,
+    HyperMLP,
     HypersphericalFeatureNorm,
     LinearScaler,
+    PerCellMLPBlock,
     ResidualBlock,
     Scaler,
     ShiftL2Norm,
@@ -74,6 +78,38 @@ def test_convnext_block_rejects_invalid_kernel_size(kernel_size: int) -> None:
 def test_convnext_block_rejects_negative_layer_scale() -> None:
     with pytest.raises(ValueError, match="layer_scale_init"):
         ConvNeXtBlock(channels=8, layer_scale_init=-1e-6)
+
+
+def test_per_cell_mlp_block_preserves_shape() -> None:
+    block = PerCellMLPBlock(channels=8)
+    x = torch.randn(4, 8, 12, 16)
+
+    y = block(x)
+
+    assert y.shape == x.shape
+
+
+def test_per_cell_mlp_block_has_no_spatial_mixing_modules() -> None:
+    block = PerCellMLPBlock(channels=8)
+
+    convolutions = [module for module in block.modules() if isinstance(module, torch.nn.Conv2d)]
+
+    assert convolutions == []
+
+
+def test_per_cell_mlp_block_rejects_non_positive_channels() -> None:
+    with pytest.raises(ValueError, match="channels"):
+        PerCellMLPBlock(channels=0)
+
+
+def test_per_cell_mlp_block_rejects_non_positive_expansion() -> None:
+    with pytest.raises(ValueError, match="expansion"):
+        PerCellMLPBlock(channels=8, expansion=0)
+
+
+def test_per_cell_mlp_block_rejects_negative_layer_scale() -> None:
+    with pytest.raises(ValueError, match="layer_scale_init"):
+        PerCellMLPBlock(channels=8, layer_scale_init=-1e-6)
 
 
 def test_hyperspherical_feature_norm_preserves_shape_and_returns_finite_values() -> None:
@@ -157,24 +193,66 @@ def test_project_weight_to_unit_norm_projects_rows_in_place() -> None:
     assert torch.allclose(torch.linalg.vector_norm(weight, dim=1), torch.ones(2))
 
 
-def test_project_hyperspherical_weights_projects_linear_and_conv_weights() -> None:
+def test_project_hyperspherical_weights_projects_only_hyper_linear_weights() -> None:
     model = torch.nn.Sequential(
         torch.nn.Linear(4, 3),
         torch.nn.Conv2d(2, 5, kernel_size=3),
-        Scaler(3),
+        HyperLinear(4, 3),
     )
+    linear = model[0]
+    conv = model[1]
+    hyper = model[2]
+    assert isinstance(linear, torch.nn.Linear)
+    assert isinstance(conv, torch.nn.Conv2d)
+    assert isinstance(hyper, HyperLinear)
+    with torch.no_grad():
+        regular_linear_norm_before = torch.linalg.vector_norm(linear.weight.detach().float(), dim=1)
+        regular_conv_norm_before = torch.linalg.vector_norm(
+            conv.weight.detach().float().flatten(1),
+            dim=1,
+        )
+        hyper.weight.mul_(3.0)
 
     projected = project_hyperspherical_weights_(model)
 
-    linear = model[0]
-    conv = model[1]
-    assert isinstance(linear, torch.nn.Linear)
-    assert isinstance(conv, torch.nn.Conv2d)
-    linear_norm = torch.linalg.vector_norm(linear.weight.detach().float(), dim=1)
-    conv_norm = torch.linalg.vector_norm(conv.weight.detach().float().flatten(1), dim=1)
-    assert projected == 2
-    assert torch.allclose(linear_norm, torch.ones(3), rtol=1e-5)
-    assert torch.allclose(conv_norm, torch.ones(5), rtol=1e-5)
+    hyper_norm = torch.linalg.vector_norm(hyper.weight.detach().float(), dim=1)
+    regular_linear_norm_after = torch.linalg.vector_norm(linear.weight.detach().float(), dim=1)
+    regular_conv_norm_after = torch.linalg.vector_norm(
+        conv.weight.detach().float().flatten(1),
+        dim=1,
+    )
+    assert projected == 1
+    assert torch.allclose(hyper_norm, torch.ones(3), rtol=1e-5)
+    assert torch.allclose(regular_linear_norm_after, regular_linear_norm_before)
+    assert torch.allclose(regular_conv_norm_after, regular_conv_norm_before)
+
+
+def test_hyper_mlp_preserves_shape_and_normalizes_last_dimension() -> None:
+    mlp = HyperMLP(channels=8, expansion=2)
+    x = torch.randn(4, 12, 16, 8)
+
+    y = mlp(x)
+
+    assert y.shape == x.shape
+    assert torch.allclose(
+        torch.linalg.vector_norm(y.float(), dim=-1),
+        torch.ones(4, 12, 16),
+        rtol=1e-5,
+    )
+
+
+def test_hyper_embedder_2d_projects_each_cell_to_unit_sphere() -> None:
+    embedder = HyperEmbedder2d(in_channels=5, out_channels=8)
+    x = torch.randn(4, 5, 12, 16)
+
+    y = embedder(x)
+
+    assert y.shape == (4, 8, 12, 16)
+    assert torch.allclose(
+        torch.linalg.vector_norm(y.float(), dim=1),
+        torch.ones(4, 12, 16),
+        rtol=1e-5,
+    )
 
 
 def test_spherical_convnext_block_preserves_shape() -> None:
@@ -185,6 +263,20 @@ def test_spherical_convnext_block_preserves_shape() -> None:
 
     assert y.shape == x.shape
     assert torch.isfinite(y).all()
+    assert torch.allclose(
+        torch.linalg.vector_norm(y.float(), dim=1),
+        torch.ones(4, 12, 16),
+        rtol=1e-5,
+    )
+
+
+def test_spherical_convnext_block_alpha_scaler_initializes_to_alpha_init() -> None:
+    block = SphericalConvNeXtBlock(channels=8, alpha_init=0.25)
+    x = torch.ones(2, 3, 4, 8)
+
+    y = block.alpha_scaler(x)
+
+    assert torch.allclose(y, torch.full_like(x, 0.25))
 
 
 def test_spherical_convnext_block_rejects_non_positive_channels() -> None:

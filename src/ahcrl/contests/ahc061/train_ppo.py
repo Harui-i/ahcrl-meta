@@ -897,7 +897,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-blocks", type=int, default=argparse.SUPPRESS)
     parser.add_argument(
         "--model-block-type",
-        choices=("convnext", "residual", "spherical_convnext"),
+        choices=("convnext", "per_cell_mlp", "residual", "spherical_convnext"),
         default=argparse.SUPPRESS,
     )
     parser.add_argument(
