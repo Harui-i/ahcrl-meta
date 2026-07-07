@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributions import Categorical
 
-from ahcrl.nn import HypersphericalFeatureNorm, project_hyperspherical_weights_
+from ahcrl.nn import HypersphericalFeatureNorm, Scaler, project_hyperspherical_weights_
 
 from .encoder import BOARD_SIZE, MAX_LEVEL, MAX_PLAYERS, PLANE_M, PLANE_U
 from .model import ActorCritic
@@ -596,7 +596,10 @@ def update_model(
                     args.max_grad_norm,
                 )
                 optimizer.step()
-                if args.weight_projection:
+                if (
+                    args.weight_projection
+                    or getattr(args, "model_block_type", "") == "spherical_convnext"
+                ):
                     project_hyperspherical_weights_(grad_model)
 
                 with torch.no_grad():
@@ -654,7 +657,7 @@ def _parameter_norm_stats(model: nn.Module) -> dict[str, float]:
                 total_sq += parameter_sq
                 parameter_count += parameter.numel()
 
-                if isinstance(module, HypersphericalFeatureNorm):
+                if isinstance(module, HypersphericalFeatureNorm | Scaler):
                     hyperspherical_scale_sq += parameter_sq
                 elif isinstance(module, linear_conv_modules) and name == "weight":
                     linear_conv_sq += parameter_sq

@@ -1,8 +1,16 @@
+from collections.abc import Callable
+
 import torch
 from torch import nn
 
 from ahcrl.contests.ahc061.encoder import NUM_PLANES
-from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock, SphericalConvNeXtBlock, make_group_norm
+from ahcrl.nn.blocks import (
+    ConvNeXtBlock,
+    HyperEmbedder2d,
+    ResidualBlock,
+    SphericalConvNeXtBlock,
+    make_group_norm,
+)
 
 
 class ActorCritic(nn.Module):
@@ -14,12 +22,13 @@ class ActorCritic(nn.Module):
         block_type: str = "convnext",
     ) -> None:
         super().__init__()
-        block_cls = _block_class(block_type)
-        self.trunk = nn.Sequential(
-            nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False),
-            make_group_norm(channels),
-            nn.ReLU(inplace=True),
-            *[block_cls(channels) for _ in range(blocks)],
+        block_factory = _block_factory(block_type, channels=channels, blocks=blocks)
+        self.trunk = _make_trunk(
+            block_type=block_type,
+            in_channels=in_channels,
+            channels=channels,
+            blocks=blocks,
+            block_factory=block_factory,
         )
         self.policy = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1, bias=False),
@@ -31,7 +40,7 @@ class ActorCritic(nn.Module):
         self.value = RichValueHead(
             in_channels=in_channels,
             channels=channels,
-            block_cls=block_cls,
+            block_factory=block_factory,
         )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -57,10 +66,10 @@ class RichValueHead(nn.Module):
         *,
         in_channels: int,
         channels: int,
-        block_cls: type[nn.Module],
+        block_factory: Callable[[], nn.Module],
     ) -> None:
         super().__init__()
-        self.blocks = nn.Sequential(block_cls(channels), block_cls(channels))
+        self.blocks = nn.Sequential(block_factory(), block_factory())
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
         stats_channels = in_channels * 2
@@ -84,11 +93,33 @@ class RichValueHead(nn.Module):
         return self.mlp(features)
 
 
-def _block_class(block_type: str) -> type[nn.Module]:
-    if block_type == "convnext":
-        return ConvNeXtBlock
+def _make_trunk(
+    *,
+    block_type: str,
+    in_channels: int,
+    channels: int,
+    blocks: int,
+    block_factory: Callable[[], nn.Module],
+) -> nn.Sequential:
     if block_type == "spherical_convnext":
-        return SphericalConvNeXtBlock
+        return nn.Sequential(
+            HyperEmbedder2d(in_channels, channels),
+            *[block_factory() for _ in range(blocks)],
+        )
+    return nn.Sequential(
+        nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False),
+        make_group_norm(channels),
+        nn.ReLU(inplace=True),
+        *[block_factory() for _ in range(blocks)],
+    )
+
+
+def _block_factory(block_type: str, *, channels: int, blocks: int) -> Callable[[], nn.Module]:
+    if block_type == "convnext":
+        return lambda: ConvNeXtBlock(channels)
+    if block_type == "spherical_convnext":
+        alpha_init = 1.0 / (blocks + 1)
+        return lambda: SphericalConvNeXtBlock(channels, alpha_init=alpha_init)
     if block_type == "residual":
-        return ResidualBlock
+        return lambda: ResidualBlock(channels)
     raise ValueError(f"unknown block_type: {block_type}")

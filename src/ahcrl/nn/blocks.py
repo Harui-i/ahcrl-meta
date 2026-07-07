@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import nn
 
@@ -199,6 +201,16 @@ class LinearScaler(nn.Module):
         return y
 
 
+class HyperLinear(nn.Linear):
+    """Bias-free linear layer whose rows are constrained to the unit sphere."""
+
+    def __init__(self, in_features: int, out_features: int, *, eps: float = 1e-12) -> None:
+        super().__init__(in_features, out_features, bias=False)
+        self.eps = eps
+        nn.init.orthogonal_(self.weight)
+        project_weight_to_unit_norm_(self.weight, eps=eps)
+
+
 @torch.no_grad()
 def project_weight_to_unit_norm_(weight: torch.Tensor, *, eps: float = 1e-12) -> torch.Tensor:
     """Project each output weight vector onto the unit l2 sphere in-place."""
@@ -219,60 +231,144 @@ def project_weight_to_unit_norm_(weight: torch.Tensor, *, eps: float = 1e-12) ->
 
 @torch.no_grad()
 def project_hyperspherical_weights_(module: nn.Module, *, eps: float = 1e-12) -> int:
-    """Project Linear/Conv weights in a module tree and return the number projected."""
+    """Project hyperspherical linear weights in a module tree and return the count."""
 
     projected = 0
     for child in module.modules():
-        if isinstance(child, nn.Linear | nn.Conv1d | nn.Conv2d | nn.Conv3d):
+        if isinstance(child, HyperLinear):
             project_weight_to_unit_norm_(child.weight, eps=eps)
             projected += 1
     return projected
 
 
-class SphericalConvNeXtBlock(nn.Module):
-    """ConvNeXt-style block with hyperspherical channel-feature normalization."""
+class HyperMLP(nn.Module):
+    """SimbaV2 HyperMLP applied to the last dimension."""
 
     def __init__(
         self,
         channels: int,
         *,
         expansion: int = 4,
-        kernel_size: int = 3,
-        layer_scale_init: float = 1e-6,
+        scaler_init: float | None = None,
+        scaler_scale: float | None = None,
+        eps: float = 1e-8,
     ) -> None:
         super().__init__()
         if channels <= 0:
             raise ValueError(f"channels must be positive, got {channels}")
         if expansion <= 0:
             raise ValueError(f"expansion must be positive, got {expansion}")
-        if kernel_size <= 0 or kernel_size % 2 == 0:
-            raise ValueError(f"kernel_size must be a positive odd integer, got {kernel_size}")
-        if layer_scale_init < 0.0:
-            raise ValueError(f"layer_scale_init must be non-negative, got {layer_scale_init}")
+        if eps <= 0.0:
+            raise ValueError(f"eps must be positive, got {eps}")
 
-        self.depthwise = nn.Conv2d(
-            channels,
-            channels,
-            kernel_size=kernel_size,
-            padding=kernel_size // 2,
-            groups=channels,
-        )
-        self.pre_norm = HypersphericalFeatureNorm(channels)
         hidden_channels = channels * expansion
-        self.pointwise = nn.Sequential(
-            nn.Linear(channels, hidden_channels),
-            nn.GELU(),
-            nn.Linear(hidden_channels, channels),
+        default_scale = math.sqrt(2.0 / channels) / math.sqrt(expansion)
+        self.w1 = HyperLinear(channels, hidden_channels, eps=eps)
+        self.scaler = Scaler(
+            hidden_channels,
+            init=default_scale if scaler_init is None else scaler_init,
+            scale=default_scale if scaler_scale is None else scaler_scale,
         )
-        self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
-        self.post_norm = HypersphericalFeatureNorm(channels)
+        self.activation = nn.ReLU()
+        self.w2 = HyperLinear(hidden_channels, channels, eps=eps)
+        self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = self.w1(x)
+        y = self.scaler(y)
+        y = self.activation(y) + self.eps
+        y = self.w2(y)
+        return l2_normalize(y, dim=-1, eps=self.eps)
+
+
+class HyperEmbedder2d(nn.Module):
+    """SimbaV2 HyperEmbedder for per-cell 2D channel features."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        *,
+        shift_const: float = 3.0,
+        scaler_init: float | None = None,
+        scaler_scale: float | None = None,
+        eps: float = 1e-8,
+    ) -> None:
+        super().__init__()
+        if in_channels <= 0:
+            raise ValueError(f"in_channels must be positive, got {in_channels}")
+        if out_channels <= 0:
+            raise ValueError(f"out_channels must be positive, got {out_channels}")
+        if shift_const <= 0.0:
+            raise ValueError(f"shift_const must be positive, got {shift_const}")
+        if eps <= 0.0:
+            raise ValueError(f"eps must be positive, got {eps}")
+
+        default_scale = math.sqrt(2.0 / out_channels)
+        self.shift = ShiftL2Norm(shift_const=shift_const, dim=-1, eps=eps)
+        self.linear = HyperLinear(in_channels + 1, out_channels, eps=eps)
+        self.scaler = Scaler(
+            out_channels,
+            init=default_scale if scaler_init is None else scaler_init,
+            scale=default_scale if scaler_scale is None else scaler_scale,
+        )
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 4:
+            raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
+        y = x.permute(0, 2, 3, 1)
+        y = self.shift(y)
+        y = self.scaler(self.linear(y))
+        y = l2_normalize(y, dim=-1, eps=self.eps)
+        return y.permute(0, 3, 1, 2)
+
+
+class SphericalConvNeXtBlock(nn.Module):
+    """SimbaV2 HyperLERPBlock for per-cell 2D channel features."""
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        expansion: int = 4,
+        scaler_init: float | None = None,
+        scaler_scale: float | None = None,
+        alpha_init: float = 0.2,
+        alpha_scale: float | None = None,
+        eps: float = 1e-8,
+    ) -> None:
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        if expansion <= 0:
+            raise ValueError(f"expansion must be positive, got {expansion}")
+        if alpha_scale == 0.0:
+            raise ValueError("alpha_scale must be non-zero")
+        if eps <= 0.0:
+            raise ValueError(f"eps must be positive, got {eps}")
+
+        default_alpha_scale = 1.0 / math.sqrt(channels)
+        self.mlp = HyperMLP(
+            channels,
+            expansion=expansion,
+            scaler_init=scaler_init,
+            scaler_scale=scaler_scale,
+            eps=eps,
+        )
+        self.alpha_scaler = Scaler(
+            channels,
+            init=alpha_init,
+            scale=default_alpha_scale if alpha_scale is None else alpha_scale,
+        )
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 4:
+            raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
         residual = x
-        y = self.depthwise(x)
-        y = self.pre_norm(y)
-        y = y.permute(0, 2, 3, 1)
-        y = self.pointwise(y)
-        y = self.layer_scale * y
+        y = x.permute(0, 2, 3, 1)
+        y = self.mlp(y)
         y = y.permute(0, 3, 1, 2)
-        return self.post_norm(residual + y)
+        y = residual + self.alpha_scaler((y - residual).permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        return l2_normalize(y, dim=1, eps=self.eps)

@@ -2,6 +2,9 @@
 
 from ahcrl.nn.blocks import (
     ConvNeXtBlock,
+    HyperEmbedder2d,
+    HyperLinear,
+    HyperMLP,
     HypersphericalFeatureNorm,
     LinearScaler,
     ResidualBlock,
@@ -16,6 +19,9 @@ from ahcrl.nn.blocks import (
 
 __all__ = [
     "ConvNeXtBlock",
+    "HyperEmbedder2d",
+    "HyperLinear",
+    "HyperMLP",
     "HypersphericalFeatureNorm",
     "LinearScaler",
     "ResidualBlock",
