@@ -110,7 +110,11 @@ def test_update_model_respects_symmetry_augmentation(
         "normalized_entropy",
         "approx_kl",
         "clip_frac",
+        "grad_norm",
+        "weight_norm",
     }
+    assert stats["grad_norm"] > 0.0
+    assert stats["weight_norm"] > 0.0
     assert torch.isfinite(model.policy).all()
     assert optimizer.step_count == expected_steps
 

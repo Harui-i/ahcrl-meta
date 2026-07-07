@@ -213,6 +213,8 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
         "normalized_entropy": 0.5,
         "approx_kl": 0.04,
         "clip_frac": 0.05,
+        "grad_norm": 0.06,
+        "weight_norm": 0.07,
     }
 
     metrics = build_log_metrics(
@@ -238,6 +240,8 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
     assert metrics["train/explained_variance"] == pytest.approx(1.0)
     assert metrics["loss/policy"] == 0.01
     assert metrics["train/normalized_entropy"] == 0.5
+    assert metrics["model/grad_norm"] == 0.06
+    assert metrics["model/weight_norm"] == 0.07
     assert metrics["checkpoint/path"] == "checkpoint.pt"
 
 

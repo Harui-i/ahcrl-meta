@@ -57,6 +57,7 @@ RUNTIME_CONFIG_KEYS = {"config", "resume_dir", "run_dir", "init_checkpoint"}
 LATEST_CHECKPOINT_NAME = "checkpoint_latest.pt"
 STATE_FILE_NAME = "state.json"
 CONFIG_FILE_NAME = "config.json"
+WANDB_WATCH_LOG_FREQ = 100
 
 
 def main() -> None:
@@ -108,7 +109,11 @@ def main() -> None:
     started = time.time()
     wandb_run = None
     try:
-        wandb_run = init_wandb(args, wandb_run_id=get_wandb_run_id(args.run_dir))
+        wandb_run = init_wandb(
+            args,
+            model=raw_model,
+            wandb_run_id=get_wandb_run_id(args.run_dir),
+        )
         write_config(args)
         update_run_state(
             args.run_dir,
@@ -177,6 +182,8 @@ def main() -> None:
                         f"normalized_entropy={stats['normalized_entropy']:.5f}",
                         f"approx_kl={stats['approx_kl']:.5f}",
                         f"clip_frac={stats['clip_frac']:.5f}",
+                        f"grad_norm={stats['grad_norm']:.5f}",
+                        f"weight_norm={stats['weight_norm']:.5f}",
                         f"checkpoint={checkpoint_path}",
                     ]
                 ),
@@ -448,6 +455,7 @@ def update_model(
         "normalized_entropy": 0.0,
         "approx_kl": 0.0,
         "clip_frac": 0.0,
+        "grad_norm": 0.0,
     }
     stat_weight = 0
     for _ in range(args.epochs):
@@ -483,7 +491,10 @@ def update_model(
 
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(grad_model.parameters(), args.max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    grad_model.parameters(),
+                    args.max_grad_norm,
+                )
                 optimizer.step()
 
                 with torch.no_grad():
@@ -498,9 +509,21 @@ def update_model(
                 stat_sums["normalized_entropy"] += float(normalized_entropy.item()) * weight
                 stat_sums["approx_kl"] += float(approx_kl.item()) * weight
                 stat_sums["clip_frac"] += float(clip_frac.item()) * weight
+                stat_sums["grad_norm"] += float(grad_norm.item()) * weight
     if stat_weight == 0:
+        stat_sums["weight_norm"] = _parameter_l2_norm(grad_model)
         return stat_sums
-    return {key: value / stat_weight for key, value in stat_sums.items()}
+    stats = {key: value / stat_weight for key, value in stat_sums.items()}
+    stats["weight_norm"] = _parameter_l2_norm(grad_model)
+    return stats
+
+
+def _parameter_l2_norm(model: nn.Module) -> float:
+    with torch.no_grad():
+        norm_sq = torch.zeros((), device=next(model.parameters()).device)
+        for parameter in model.parameters():
+            norm_sq += parameter.detach().float().pow(2).sum()
+        return float(norm_sq.sqrt().item())
 
 
 def _transform_board_d4(x: torch.Tensor, transform_id: int) -> torch.Tensor:
@@ -546,7 +569,12 @@ def _normalized_entropy(entropy: torch.Tensor, mask: torch.Tensor) -> torch.Tens
     return normalized.mean()
 
 
-def init_wandb(args: argparse.Namespace, *, wandb_run_id: str | None = None) -> Any | None:
+def init_wandb(
+    args: argparse.Namespace,
+    *,
+    model: nn.Module,
+    wandb_run_id: str | None = None,
+) -> Any | None:
     if not args.wandb_enabled:
         return None
 
@@ -566,6 +594,7 @@ def init_wandb(args: argparse.Namespace, *, wandb_run_id: str | None = None) -> 
         id=wandb_run_id,
         resume="must" if wandb_run_id is not None else None,
     )
+    wandb.watch(model, log="all", log_freq=WANDB_WATCH_LOG_FREQ)
     wandb.define_metric("summary/cumulative_env_steps")
     wandb.define_metric("*", step_metric="summary/cumulative_env_steps")
     return run
@@ -622,6 +651,8 @@ def build_log_metrics(
         "train/normalized_entropy": stats["normalized_entropy"],
         "train/approx_kl": stats["approx_kl"],
         "train/clip_fraction": stats["clip_frac"],
+        "model/grad_norm": stats["grad_norm"],
+        "model/weight_norm": stats["weight_norm"],
         "checkpoint/path": checkpoint,
     }
     if "m_values" in rollout:
