@@ -227,7 +227,7 @@ def collect_rollout(
         reward_buf.append(torch.from_numpy(step.reward.copy()))
         done_buf.append(torch.from_numpy(step.done.astype(np.float32)))
         value_buf.append(value.cpu())
-        mask_buf.append(mask.cpu())
+        mask_buf.append(mask.cpu().clone())
         score_buf.append(torch.from_numpy(step.score.copy()))
         m_buf.append(torch.from_numpy(m_values.copy()))
         u_buf.append(torch.from_numpy(u_values.copy()))
@@ -441,7 +441,7 @@ def update_model(
 
     batch_size = obs.shape[0]
     indices = torch.arange(batch_size)
-    last_stats = {
+    stat_sums = {
         "policy_loss": 0.0,
         "value_loss": 0.0,
         "entropy": 0.0,
@@ -449,6 +449,7 @@ def update_model(
         "approx_kl": 0.0,
         "clip_frac": 0.0,
     }
+    stat_weight = 0
     for _ in range(args.epochs):
         perm = indices[torch.randperm(batch_size)]
         for start in range(0, batch_size, args.minibatch_size):
@@ -489,15 +490,17 @@ def update_model(
                     log_ratio = new_logprobs - mb_old_logprobs
                     approx_kl = ((ratio - 1.0) - log_ratio).mean()
                     clip_frac = ((ratio - 1.0).abs() > args.clip).float().mean()
-                last_stats = {
-                    "policy_loss": float(policy_loss.item()),
-                    "value_loss": float(value_loss.item()),
-                    "entropy": float(entropy.item()),
-                    "normalized_entropy": float(normalized_entropy.item()),
-                    "approx_kl": float(approx_kl.item()),
-                    "clip_frac": float(clip_frac.item()),
-                }
-    return last_stats
+                weight = int(mb_actions.numel())
+                stat_weight += weight
+                stat_sums["policy_loss"] += float(policy_loss.item()) * weight
+                stat_sums["value_loss"] += float(value_loss.item()) * weight
+                stat_sums["entropy"] += float(entropy.item()) * weight
+                stat_sums["normalized_entropy"] += float(normalized_entropy.item()) * weight
+                stat_sums["approx_kl"] += float(approx_kl.item()) * weight
+                stat_sums["clip_frac"] += float(clip_frac.item()) * weight
+    if stat_weight == 0:
+        return stat_sums
+    return {key: value / stat_weight for key, value in stat_sums.items()}
 
 
 def _transform_board_d4(x: torch.Tensor, transform_id: int) -> torch.Tensor:

@@ -1,4 +1,5 @@
 import argparse
+import math
 
 import pytest
 import torch
@@ -112,3 +113,37 @@ def test_update_model_respects_symmetry_augmentation(
     }
     assert torch.isfinite(model.policy).all()
     assert optimizer.step_count == expected_steps
+
+
+def test_update_model_reports_average_clip_fraction_across_minibatches() -> None:
+    model = TinyActorCritic()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.0)
+    uniform_logprob = -math.log(BOARD_SIZE * BOARD_SIZE)
+    rollout = {
+        "obs": torch.randn(1, 2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE),
+        "actions": torch.tensor([[0, 1]]),
+        "logprobs": torch.tensor([[uniform_logprob, uniform_logprob - math.log(2.0)]]),
+        "advantages": torch.tensor([[1.0, -1.0]]),
+        "returns": torch.tensor([[0.5, -0.5]]),
+        "masks": torch.ones(1, 2, BOARD_SIZE * BOARD_SIZE, dtype=torch.bool),
+    }
+    args = argparse.Namespace(
+        epochs=1,
+        minibatch_size=1,
+        clip=0.2,
+        value_coef=0.5,
+        entropy_coef=0.01,
+        max_grad_norm=0.5,
+        symmetry_augmentation="none",
+    )
+
+    stats = update_model(
+        model,
+        model,
+        optimizer,
+        rollout,
+        args,
+        torch.device("cpu"),
+    )
+
+    assert stats["clip_frac"] == pytest.approx(0.5)
