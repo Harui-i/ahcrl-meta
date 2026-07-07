@@ -13,6 +13,8 @@ import torch.nn.functional as F
 from torch import nn
 from torch.distributions import Categorical
 
+from ahcrl.nn import project_hyperspherical_weights_
+
 from .encoder import BOARD_SIZE, MAX_LEVEL, MAX_PLAYERS, PLANE_M, PLANE_U
 from .model import ActorCritic
 from .rust_vec_env import RustVecEnv
@@ -41,6 +43,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_grad_norm": 0.5,
     "reward_scale_mode": "none",
     "reward_scale_epsilon": 1e-8,
+    "weight_projection": False,
     "symmetry_augmentation": "none",
     "artifact_dir": ROOT / "contests/ahc-061/artifacts/ppo",
     "checkpoint_interval_updates": 1,
@@ -593,6 +596,8 @@ def update_model(
                     args.max_grad_norm,
                 )
                 optimizer.step()
+                if args.weight_projection:
+                    project_hyperspherical_weights_(grad_model)
 
                 with torch.no_grad():
                     log_ratio = new_logprobs - mb_old_logprobs
@@ -819,6 +824,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=argparse.SUPPRESS,
     )
     parser.add_argument("--reward-scale-epsilon", type=float, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--weight-projection",
+        dest="weight_projection",
+        action="store_true",
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-weight-projection",
+        dest="weight_projection",
+        action="store_false",
+        default=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--symmetry-augmentation",
         choices=("none", "full_d4"),

@@ -39,6 +39,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 'symmetry_augmentation = "full_d4"',
                 'reward_scale_mode = "running_std"',
                 "reward_scale_epsilon = 0.001",
+                "weight_projection = true",
                 "wandb_enabled = true",
                 'wandb_project = "test-project"',
                 'wandb_name = "test-run"',
@@ -59,6 +60,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
             "convnext",
             "--symmetry-augmentation",
             "none",
+            "--no-weight-projection",
             "--compile",
         ]
     )
@@ -77,6 +79,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.symmetry_augmentation == "none"
     assert args.reward_scale_mode == "running_std"
     assert args.reward_scale_epsilon == 0.001
+    assert args.weight_projection is False
     assert args.wandb_enabled is True
     assert args.wandb_project == "test-project"
     assert args.wandb_name == "test-run"
@@ -87,6 +90,8 @@ def test_parse_args_compile_defaults_to_true_and_can_be_disabled() -> None:
     assert parse_args(["--device", "cpu"]).compile is True
     assert parse_args(["--device", "cpu", "--no-compile"]).compile is False
     assert parse_args(["--device", "cpu"]).pf_particles == 16
+    assert parse_args(["--device", "cpu"]).weight_projection is False
+    assert parse_args(["--device", "cpu", "--weight-projection"]).weight_projection is True
 
 
 def test_parse_args_symmetry_augmentation_defaults_to_none_and_loads_toml(
