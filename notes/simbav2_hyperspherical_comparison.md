@@ -19,13 +19,13 @@ policy/value head が異なること、PPO の scalar value であり SimbaV2 �
 2. `SphericalConvNeXtBlock` は `HyperMLP -> residual + alpha * (transform - residual) -> l2 norm` になっており、公式の `HyperLERPBlock` に近い。
 3. `spherical_convnext` の学習時は optimizer step 後に hyperspherical weight projection が走る。
 
-一方、SimbaV2 の安定化パッケージとして見ると、主な未再現点は次。
+一方、SimbaV2 の安定化パッケージとして見ると、主な残差は次。
 
-1. 観測の running mean/std normalization、つまり RSNorm / `ObservationNormalizer` 相当がない。
+1. 観測 RSNorm は入ったが、公式の座標ごと `ObservationNormalizer` ではなく、D4 augmentation との相性を優先した channel-wise RSNorm になっている。
 2. reward scaling が公式実装と違う。公式は discounted return の running variance と `g_max` 下限を使うが、ローカルは即時報酬 std の簡易版で、しかもデフォルト無効。
 3. 現在の config は `model_block_type = "convnext"` なので、デフォルト実験ではこの SimbaV2 風 trunk 自体を使っていない。
 
-つまり、`spherical_convnext` の trunk だけを見れば「SimbaV2 風」と呼んでよい水準まで来ている。次に寄せるべきズレは block 内部ではなく、**観測 RSNorm と reward scaling**。
+つまり、`spherical_convnext` の trunk と観測 RSNorm まで含めると「SimbaV2 風」と呼んでよい水準まで来ている。次に寄せるべきズレは block 内部ではなく、主に **reward scaling** と、RSNorm を公式通り座標ごとにするかどうかの設計判断。
 
 ## SimbaV2 側の構造
 
@@ -187,7 +187,7 @@ if (
 
 注意点として、ローカルの projection 対象は `HyperLinear` のみ。公式の `regex="hyper_dense"` と意図は近いが、命名ではなく型で対象を選んでいる。
 
-## 観測前処理のズレ
+## 観測前処理
 
 SimbaV2 公式 config では `normalize_observation: true` で、agent wrapper の `ObservationNormalizer` が入る。
 
@@ -199,7 +199,7 @@ SimbaV2 公式 config では `normalize_observation: true` で、agent wrapper �
 
 を actor/critic に渡す。
 
-一方、ローカル AHC061 では、Rust encoder が plane を手作業でスケールしている。
+ローカル AHC061 では、Rust encoder が plane を手作業でスケールしている。
 
 例:
 - `M / MAX_PLAYERS`
@@ -208,12 +208,23 @@ SimbaV2 公式 config では `normalize_observation: true` で、agent wrapper �
 - distance や座標を board size で割る
 - legal mask や one-hot 系 plane
 
-これは入力値のレンジを整える意味では有用だが、公式 SimbaV2 の RSNorm / `ObservationNormalizer` とは別物。
+これは入力値のレンジを整える意味では有用だが、それだけでは公式 SimbaV2 の RSNorm / `ObservationNormalizer` とは別物だった。
 
-したがって `spherical_convnext` の実際の流れは次。
+現在は [`RunningObservationNormalizer`](/home/harui/CompetitiveProgramming/ahc/ahcrl-meta/src/ahcrl/contests/ahc061/train_ppo.py:133) が追加され、`obs_norm_mode = "running_channel"` で有効化できる。さらに [ppo_train.toml](/home/harui/CompetitiveProgramming/ahc/ahcrl-meta/contests/ahc-061/configs/ppo_train.toml:19) でもデフォルト有効になっている。
+
+ローカルの RSNorm は NCHW plane に対する channel-wise running mean/std normalization。
+
+```text
+mean, variance shape = (1, channels, 1, 1)
+stats update axes = batch, height, width
+normalized = (planes - running_mean) / sqrt(running_var + eps)
+```
+
+つまり `spherical_convnext` の現在の流れは次。
 
 ```text
 manual-scaled planes
+-> channel-wise running mean/std normalization
 -> concat const
 -> l2 norm
 -> HyperLinear
@@ -222,11 +233,11 @@ manual-scaled planes
 -> HyperLERP-like blocks
 ```
 
-公式推奨により近い流れは次。
+公式実装により忠実な流れは次。
 
 ```text
 manual-scaled or raw-ish planes
--> running mean/std observation normalization
+-> coordinate-wise running mean/std observation normalization
 -> concat const
 -> l2 norm
 -> HyperLinear
@@ -235,9 +246,11 @@ manual-scaled or raw-ish planes
 -> HyperLERP blocks
 ```
 
-つまり、ユーザーの記憶していた `RSNorm + concat const + L2Norm + Linear + Scaler + ...` で言うと、**`concat const` 以降は概ね入っているが、RSNorm がない**。
+したがって、ユーザーの記憶していた `RSNorm + concat const + L2Norm + Linear + Scaler + ...` で言うと、**現在は RSNorm も concat const 以降も入っている**。
 
-AHC の観測は plane ごとに意味が強く違うため、RSNorm を入れるなら少なくとも plane/channel ごとの running mean/std にするのが自然。空間位置ごとの統計まで持つか、channel 単位に集約するかは実験対象。
+ただし、公式との細かい違いは残る。公式の `ObservationNormalizer` は観測座標ごとの統計を持つ。一方、ローカルは D4 augmentation と可換にしやすいように channel-wise 統計にしている。AHC の観測は plane ごとに意味が強く違い、盤面回転・反転も使うため、これは意図的なローカル適応。
+
+推論・提出時は checkpoint の `obs_normalizer` state を使い、[`ObservationNormalizedActorCritic`](/home/harui/CompetitiveProgramming/ahc/ahcrl-meta/src/ahcrl/contests/ahc061/model.py:65) が frozen RSNorm をモデル前段に挟む。`export_torchscript_submit.py` と `benchmark_rollout.py` もこの state を読む。
 
 ## Reward Scaling のズレ
 
@@ -273,7 +286,14 @@ PPO では advantage normalization や value loss の扱いも絡むため、SAC
 
 ## デフォルト config の注意
 
-現在の [ppo_train.toml](/home/harui/CompetitiveProgramming/ahc/ahcrl-meta/contests/ahc-061/configs/ppo_train.toml:23) は:
+現在の [ppo_train.toml](/home/harui/CompetitiveProgramming/ahc/ahcrl-meta/contests/ahc-061/configs/ppo_train.toml:19) では、観測 RSNorm はデフォルト有効。
+
+```toml
+obs_norm_mode = "running_channel"
+obs_norm_epsilon = 1e-8
+```
+
+一方、model block はまだ:
 
 ```toml
 model_block_type = "convnext"
@@ -291,10 +311,10 @@ model_block_type = "spherical_convnext"
 
 ## 実装上の含意
 
-`spherical_convnext` 前提で、SimbaV2 trunk の再現度を上げる優先順位は次。
+`spherical_convnext` 前提で、SimbaV2 への再現度をさらに上げる優先順位は次。
 
-1. 観測 RSNorm / running mean-std normalization を追加する
-2. reward scaling を公式の discounted-return RMS + `g_max` 下限に寄せる
+1. reward scaling を公式の discounted-return RMS + `g_max` 下限に寄せる
+2. channel-wise RSNorm と coordinate-wise RSNorm の比較実験をする
 3. `spherical_convnext` という名前を `simbav2_trunk` などに整理するか検討する
 4. config に SimbaV2 風実験用 preset を作る
 
@@ -304,8 +324,9 @@ model_block_type = "spherical_convnext"
 - `SphericalConvNeXtBlock` の LERP 構造
 - `HyperMLP` の `ReLU + eps` と最終 L2Norm
 - `spherical_convnext` 使用時の weight projection
+- channel-wise 観測 RSNorm
 
-残差は「trunk の部品」よりも「trunk に入る前後の正規化と学習系」にある。
+残差は「trunk の部品」よりも「reward scaling と、RSNorm の粒度をどこまで公式に寄せるか」にある。
 
 ## 参照したローカル箇所
 
