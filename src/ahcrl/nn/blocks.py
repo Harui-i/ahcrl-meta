@@ -461,7 +461,9 @@ class GlobalContextLERP2d(nn.Module):
         if x.ndim != 4:
             raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
         avg_features = x.mean(dim=(-2, -1))
-        max_features = x.amax(dim=(-2, -1))
+        # Avoid x.amax(dim=(-2, -1)): on CUDA bfloat16 under torch.compile, its backward
+        # has produced NaN gradients through the upstream HyperEmbedder2d.
+        max_features = x.flatten(2).max(dim=2).values
         global_features = torch.cat([avg_features, max_features], dim=1)
         y = self.shift(global_features)
         y = self.w1(y)
