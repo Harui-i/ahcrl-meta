@@ -57,7 +57,6 @@ RUNTIME_CONFIG_KEYS = {"config", "resume_dir", "run_dir", "init_checkpoint"}
 LATEST_CHECKPOINT_NAME = "checkpoint_latest.pt"
 STATE_FILE_NAME = "state.json"
 CONFIG_FILE_NAME = "config.json"
-WANDB_WATCH_LOG_FREQ = 100
 
 
 def main() -> None:
@@ -109,11 +108,7 @@ def main() -> None:
     started = time.time()
     wandb_run = None
     try:
-        wandb_run = init_wandb(
-            args,
-            model=raw_model,
-            wandb_run_id=get_wandb_run_id(args.run_dir),
-        )
+        wandb_run = init_wandb(args, wandb_run_id=get_wandb_run_id(args.run_dir))
         write_config(args)
         update_run_state(
             args.run_dir,
@@ -569,12 +564,7 @@ def _normalized_entropy(entropy: torch.Tensor, mask: torch.Tensor) -> torch.Tens
     return normalized.mean()
 
 
-def init_wandb(
-    args: argparse.Namespace,
-    *,
-    model: nn.Module,
-    wandb_run_id: str | None = None,
-) -> Any | None:
+def init_wandb(args: argparse.Namespace, *, wandb_run_id: str | None = None) -> Any | None:
     if not args.wandb_enabled:
         return None
 
@@ -594,7 +584,6 @@ def init_wandb(
         id=wandb_run_id,
         resume="must" if wandb_run_id is not None else None,
     )
-    wandb.watch(model, log="all", log_freq=WANDB_WATCH_LOG_FREQ)
     wandb.define_metric("summary/cumulative_env_steps")
     wandb.define_metric("*", step_metric="summary/cumulative_env_steps")
     return run
