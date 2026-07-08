@@ -413,6 +413,78 @@ class SimbaV2Block(nn.Module):
         return l2_normalize(y, dim=1, eps=self.eps)
 
 
+class SphericalDepthwiseSimbaBlock(nn.Module):
+    """SimbaV2-style block with local depthwise spatial mixing before HyperMLP."""
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        expansion: int = 4,
+        kernel_size: int = 3,
+        scaler_init: float | None = None,
+        scaler_scale: float | None = None,
+        local_alpha_init: float = 0.05,
+        local_alpha_scale: float | None = None,
+        alpha_init: float = 0.2,
+        alpha_scale: float | None = None,
+        eps: float = 1e-8,
+    ) -> None:
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        if expansion <= 0:
+            raise ValueError(f"expansion must be positive, got {expansion}")
+        if kernel_size <= 0 or kernel_size % 2 == 0:
+            raise ValueError(f"kernel_size must be a positive odd integer, got {kernel_size}")
+        if local_alpha_scale == 0.0:
+            raise ValueError("local_alpha_scale must be non-zero")
+        if alpha_scale == 0.0:
+            raise ValueError("alpha_scale must be non-zero")
+        if eps <= 0.0:
+            raise ValueError(f"eps must be positive, got {eps}")
+
+        default_alpha_scale = 1.0 / math.sqrt(channels)
+        self.depthwise = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            groups=channels,
+            bias=False,
+        )
+        self.local_alpha_scaler = Scaler(
+            channels,
+            init=local_alpha_init,
+            scale=default_alpha_scale if local_alpha_scale is None else local_alpha_scale,
+        )
+        self.mlp = HyperMLP(
+            channels,
+            expansion=expansion,
+            scaler_init=scaler_init,
+            scaler_scale=scaler_scale,
+            eps=eps,
+        )
+        self.alpha_scaler = Scaler(
+            channels,
+            init=alpha_init,
+            scale=default_alpha_scale if alpha_scale is None else alpha_scale,
+        )
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 4:
+            raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
+        local_delta = self.depthwise(x)
+        local_delta = self.local_alpha_scaler(local_delta.permute(0, 2, 3, 1))
+        local = l2_normalize(x + local_delta.permute(0, 3, 1, 2), dim=1, eps=self.eps)
+        y = local.permute(0, 2, 3, 1)
+        y = self.mlp(y)
+        y = y.permute(0, 3, 1, 2)
+        y = x + self.alpha_scaler((y - x).permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        return l2_normalize(y, dim=1, eps=self.eps)
+
+
 class GlobalContextLERP2d(nn.Module):
     """Broadcast pooled global context and LERP per-cell features toward it."""
 

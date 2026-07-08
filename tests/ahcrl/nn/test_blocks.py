@@ -13,6 +13,7 @@ from ahcrl.nn import (
     Scaler,
     ShiftL2Norm,
     SimbaV2Block,
+    SphericalDepthwiseSimbaBlock,
     l2_normalize,
     make_group_norm,
     project_hyperspherical_weights_,
@@ -282,6 +283,58 @@ def test_simbav2_block_alpha_scaler_initializes_to_alpha_init() -> None:
 def test_simbav2_block_rejects_non_positive_channels() -> None:
     with pytest.raises(ValueError, match="channels"):
         SimbaV2Block(channels=0)
+
+
+def test_spherical_depthwise_simba_block_preserves_shape_and_normalizes_channels() -> None:
+    block = SphericalDepthwiseSimbaBlock(channels=8)
+    x = torch.randn(4, 8, 12, 16)
+
+    y = block(x)
+
+    assert y.shape == x.shape
+    assert torch.isfinite(y).all()
+    assert torch.allclose(
+        torch.linalg.vector_norm(y.float(), dim=1),
+        torch.ones(4, 12, 16),
+        rtol=1e-5,
+    )
+
+
+def test_spherical_depthwise_simba_block_uses_3x3_depthwise_by_default() -> None:
+    block = SphericalDepthwiseSimbaBlock(channels=8)
+
+    assert block.depthwise.kernel_size == (3, 3)
+    assert block.depthwise.padding == (1, 1)
+    assert block.depthwise.groups == 8
+    assert block.depthwise.bias is None
+
+
+def test_spherical_depthwise_simba_block_alpha_scalers_initialize_to_init_values() -> None:
+    block = SphericalDepthwiseSimbaBlock(
+        channels=8,
+        local_alpha_init=0.05,
+        alpha_init=0.25,
+    )
+    x = torch.ones(2, 3, 4, 8)
+
+    local_y = block.local_alpha_scaler(x)
+    y = block.alpha_scaler(x)
+
+    assert torch.allclose(local_y, torch.full_like(x, 0.05))
+    assert torch.allclose(y, torch.full_like(x, 0.25))
+
+
+def test_spherical_depthwise_simba_block_rejects_invalid_arguments() -> None:
+    with pytest.raises(ValueError, match="channels"):
+        SphericalDepthwiseSimbaBlock(channels=0)
+    with pytest.raises(ValueError, match="expansion"):
+        SphericalDepthwiseSimbaBlock(channels=8, expansion=0)
+    with pytest.raises(ValueError, match="kernel_size"):
+        SphericalDepthwiseSimbaBlock(channels=8, kernel_size=4)
+    with pytest.raises(ValueError, match="local_alpha_scale"):
+        SphericalDepthwiseSimbaBlock(channels=8, local_alpha_scale=0.0)
+    with pytest.raises(ValueError, match="alpha_scale"):
+        SphericalDepthwiseSimbaBlock(channels=8, alpha_scale=0.0)
 
 
 @pytest.mark.parametrize(

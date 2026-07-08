@@ -9,7 +9,13 @@ from ahcrl.contests.ahc061.model import ActorCritic
 
 @pytest.mark.parametrize(
     "block_type",
-    ["convnext", "per_cell_mlp", "residual", "simbav2_block"],
+    [
+        "convnext",
+        "per_cell_mlp",
+        "residual",
+        "simbav2_block",
+        "spherical_depthwise_simba",
+    ],
 )
 def test_actor_critic_output_shapes(block_type: str) -> None:
     model = ActorCritic(channels=8, blocks=2, block_type=block_type)

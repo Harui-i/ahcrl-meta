@@ -64,7 +64,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
             "--model-blocks",
             "3",
             "--model-block-type",
-            "convnext",
+            "spherical_depthwise_simba",
             "--symmetry-augmentation",
             "none",
             "--no-weight-projection",
@@ -77,7 +77,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.pf_particles == 32
     assert args.model_channels == 32
     assert args.model_blocks == 3
-    assert args.model_block_type == "convnext"
+    assert args.model_block_type == "spherical_depthwise_simba"
     assert not hasattr(args, "model_dtype")
     assert args.device == "cpu"
     assert args.compile is True
