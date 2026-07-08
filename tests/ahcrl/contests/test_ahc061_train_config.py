@@ -453,6 +453,22 @@ def test_running_reward_scaler_resets_state_after_terminal_step() -> None:
     assert scaler.g_return.tolist() == pytest.approx([0.0, 2.0])
 
 
+def test_running_reward_scaler_allows_zero_state_resize_after_terminal_rollout() -> None:
+    scaler = RunningRewardScaler(gamma=0.5, g_max=5.0, epsilon=1e-8)
+    scaler.update_and_scale(
+        torch.tensor([[1.0, 2.0]]),
+        torch.tensor([[1.0, 1.0]]),
+    )
+
+    scaler.update_and_scale(
+        torch.tensor([[3.0, 4.0, 5.0]]),
+        torch.tensor([[0.0, 0.0, 0.0]]),
+    )
+
+    assert scaler.g_return is not None
+    assert scaler.g_return.tolist() == pytest.approx([3.0, 4.0, 5.0])
+
+
 def test_grouped_reward_scaler_uses_separate_m_u_scales() -> None:
     scaler = GroupedRewardScaler(lambda: ImmediateRewardScaler(epsilon=1e-8))
     rewards = torch.tensor([[1.0, 10.0], [3.0, 30.0]])

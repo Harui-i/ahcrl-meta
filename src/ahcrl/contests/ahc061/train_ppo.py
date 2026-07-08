@@ -258,6 +258,8 @@ class RunningRewardScaler:
         if self.g_return is None:
             return torch.zeros(num_envs, dtype=torch.float32, device=device)
         if self.g_return.numel() != num_envs:
+            if bool(torch.all(self.g_return == 0.0).item()):
+                return torch.zeros(num_envs, dtype=torch.float32, device=device)
             raise ValueError(
                 f"reward scaler state has {self.g_return.numel()} env returns, "
                 f"but rollout has {num_envs} envs"
