@@ -6,18 +6,18 @@
 - 参照実装: <https://github.com/DAVIAN-Robotics/SimbaV2>
 - 論文: <https://arxiv.org/abs/2502.15280>
 
-このメモは、`model_block_type = "spherical_convnext"` を選んだ場合の trunk が SimbaV2 の推奨構造にどの程度寄っているかを整理する。
+このメモは、`model_block_type = "simbav2_block"` を選んだ場合の trunk が SimbaV2 の推奨構造にどの程度寄っているかを整理する。
 policy/value head が異なること、PPO の scalar value であり SimbaV2 公式の distributional critic ではないことは、このメモでは許容差分として扱う。
 
 ## 結論
 
-`spherical_convnext` 前提では、trunk の hyperspherical 構造は **SimbaV2 にかなり近い**。
+`simbav2_block` 前提では、trunk の hyperspherical 構造は **SimbaV2 にかなり近い**。
 
 特に次は公式実装とよく対応している。
 
 1. `HyperEmbedder2d` は `concat const -> l2 norm -> bias-free Linear -> Scaler -> l2 norm` になっている。
-2. `SphericalConvNeXtBlock` は `HyperMLP -> residual + alpha * (transform - residual) -> l2 norm` になっており、公式の `HyperLERPBlock` に近い。
-3. `spherical_convnext` の学習時は optimizer step 後に hyperspherical weight projection が走る。
+2. `SimbaV2Block` は `HyperMLP -> residual + alpha * (transform - residual) -> l2 norm` になっており、公式の `HyperLERPBlock` に近い。
+3. `simbav2_block` の学習時は optimizer step 後に hyperspherical weight projection が走る。
 
 一方、SimbaV2 の安定化パッケージとして見ると、主な残差は次。
 
@@ -25,7 +25,7 @@ policy/value head が異なること、PPO の scalar value であり SimbaV2 �
 2. reward scaling が公式実装と違う。公式は discounted return の running variance と `g_max` 下限を使うが、ローカルは即時報酬 std の簡易版で、しかもデフォルト無効。
 3. 現在の config は `model_block_type = "convnext"` なので、デフォルト実験ではこの SimbaV2 風 trunk 自体を使っていない。
 
-つまり、`spherical_convnext` の trunk と観測 RSNorm まで含めると「SimbaV2 風」と呼んでよい水準まで来ている。次に寄せるべきズレは block 内部ではなく、主に **reward scaling** と、RSNorm を公式通り座標ごとにするかどうかの設計判断。
+つまり、`simbav2_block` の trunk と観測 RSNorm まで含めると「SimbaV2 風」と呼んでよい水準まで来ている。次に寄せるべきズレは block 内部ではなく、主に **reward scaling** と、RSNorm を公式通り座標ごとにするかどうかの設計判断。
 
 ## SimbaV2 側の構造
 
@@ -143,9 +143,9 @@ x
 
 scaler の default も、`sqrt(2 / channels) / sqrt(expansion)` で、公式 `HyperLERPBlock` が `scaler_init / sqrt(expansion)` を渡す構造と対応している。
 
-### `SphericalConvNeXtBlock`
+### `SimbaV2Block`
 
-ローカルの [`SphericalConvNeXtBlock`](/home/harui/CompetitiveProgramming/ahc/ahcrl-meta/src/ahcrl/nn/blocks.py:367) は、名前は `ConvNeXt` のままだが、現行実装は公式の `HyperLERPBlock` に近い。
+ローカルの [`SimbaV2Block`](/home/harui/CompetitiveProgramming/ahc/ahcrl-meta/src/ahcrl/nn/blocks.py:367) は、現行実装が公式の `HyperLERPBlock` に近い。
 
 ローカル:
 
@@ -167,7 +167,7 @@ x = l2normalize(x)
 
 `alpha_init` は [model.py](/home/harui/CompetitiveProgramming/ahc/ahcrl-meta/src/ahcrl/contests/ahc061/model.py:119) で `1 / (blocks + 1)`、`alpha_scale` は block 側の default で `1 / sqrt(channels)`。これは公式 config の `alpha_init` / `alpha_scale` と対応している。
 
-古いメモでは「`SphericalConvNeXtBlock` は HyperLERPBlock ではない」と書いていたが、現行コードではその指摘はもう古い。
+古いメモでは「旧名のブロックは HyperLERPBlock ではない」と書いていたが、現行コードではその指摘はもう古い。
 
 ### 重み投影
 
@@ -178,12 +178,12 @@ x = l2normalize(x)
 ```python
 if (
     args.weight_projection
-    or getattr(args, "model_block_type", "") == "spherical_convnext"
+    or getattr(args, "model_block_type", "") == "simbav2_block"
 ):
     project_hyperspherical_weights_(grad_model)
 ```
 
-したがって、`spherical_convnext` の場合は `--weight-projection` を明示しなくても projection が走る。ここも公式に寄っている。
+したがって、`simbav2_block` の場合は `--weight-projection` を明示しなくても projection が走る。ここも公式に寄っている。
 
 注意点として、ローカルの projection 対象は `HyperLinear` のみ。公式の `regex="hyper_dense"` と意図は近いが、命名ではなく型で対象を選んでいる。
 
@@ -220,7 +220,7 @@ stats update axes = batch, height, width
 normalized = (planes - running_mean) / sqrt(running_var + eps)
 ```
 
-つまり `spherical_convnext` の現在の流れは次。
+つまり `simbav2_block` の現在の流れは次。
 
 ```text
 manual-scaled planes
@@ -299,31 +299,31 @@ obs_norm_epsilon = 1e-8
 model_block_type = "convnext"
 ```
 
-なので、通常の設定では `spherical_convnext` は使われない。
+なので、通常の設定では `simbav2_block` は使われない。
 
-`spherical_convnext` を評価するなら、少なくとも config または CLI で次を明示する必要がある。
+`simbav2_block` を評価するなら、少なくとも config または CLI で次を明示する必要がある。
 
 ```toml
-model_block_type = "spherical_convnext"
+model_block_type = "simbav2_block"
 ```
 
 この場合、weight projection は自動で有効になる。
 
 ## 実装上の含意
 
-`spherical_convnext` 前提で、SimbaV2 への再現度をさらに上げる優先順位は次。
+`simbav2_block` 前提で、SimbaV2 への再現度をさらに上げる優先順位は次。
 
 1. reward scaling を公式の discounted-return RMS + `g_max` 下限に寄せる
 2. channel-wise RSNorm と coordinate-wise RSNorm の比較実験をする
-3. `spherical_convnext` という名前を `simbav2_trunk` などに整理するか検討する
+3. `simbav2_block` という名前が運用上わかりやすいか確認する
 4. config に SimbaV2 風実験用 preset を作る
 
 逆に、次はすでに大きな問題ではない。
 
 - `HyperEmbedder2d` の `concat const -> L2 -> Linear -> Scaler -> L2`
-- `SphericalConvNeXtBlock` の LERP 構造
+- `SimbaV2Block` の LERP 構造
 - `HyperMLP` の `ReLU + eps` と最終 L2Norm
-- `spherical_convnext` 使用時の weight projection
+- `simbav2_block` 使用時の weight projection
 - channel-wise 観測 RSNorm
 
 残差は「trunk の部品」よりも「reward scaling と、RSNorm の粒度をどこまで公式に寄せるか」にある。

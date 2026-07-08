@@ -859,7 +859,7 @@ def update_model(
                 if (
                     args.weight_projection
                     or getattr(args, "model_block_type", "")
-                    in ("spherical_convnext", "spherical_global_context")
+                    in ("simbav2_block", "spherical_global_context")
                 ):
                     project_hyperspherical_weights_(grad_model)
 
@@ -1179,7 +1179,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "convnext",
             "per_cell_mlp",
             "residual",
-            "spherical_convnext",
+            "simbav2_block",
             "spherical_global_context",
         ),
         default=argparse.SUPPRESS,

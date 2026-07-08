@@ -363,7 +363,7 @@ class HyperEmbedder2d(nn.Module):
         return y.permute(0, 3, 1, 2)
 
 
-class SphericalConvNeXtBlock(nn.Module):
+class SimbaV2Block(nn.Module):
     """SimbaV2 HyperLERPBlock for per-cell 2D channel features."""
 
     def __init__(
@@ -493,7 +493,7 @@ class SphericalGlobalContextBlock(nn.Module):
         eps: float = 1e-8,
     ) -> None:
         super().__init__()
-        self.per_cell = SphericalConvNeXtBlock(
+        self.per_cell = SimbaV2Block(
             channels,
             expansion=expansion,
             scaler_init=scaler_init,

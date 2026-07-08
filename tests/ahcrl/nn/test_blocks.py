@@ -12,7 +12,7 @@ from ahcrl.nn import (
     ResidualBlock,
     Scaler,
     ShiftL2Norm,
-    SphericalConvNeXtBlock,
+    SimbaV2Block,
     l2_normalize,
     make_group_norm,
     project_hyperspherical_weights_,
@@ -255,8 +255,8 @@ def test_hyper_embedder_2d_projects_each_cell_to_unit_sphere() -> None:
     )
 
 
-def test_spherical_convnext_block_preserves_shape() -> None:
-    block = SphericalConvNeXtBlock(channels=8)
+def test_simbav2_block_preserves_shape() -> None:
+    block = SimbaV2Block(channels=8)
     x = torch.randn(4, 8, 12, 16)
 
     y = block(x)
@@ -270,8 +270,8 @@ def test_spherical_convnext_block_preserves_shape() -> None:
     )
 
 
-def test_spherical_convnext_block_alpha_scaler_initializes_to_alpha_init() -> None:
-    block = SphericalConvNeXtBlock(channels=8, alpha_init=0.25)
+def test_simbav2_block_alpha_scaler_initializes_to_alpha_init() -> None:
+    block = SimbaV2Block(channels=8, alpha_init=0.25)
     x = torch.ones(2, 3, 4, 8)
 
     y = block.alpha_scaler(x)
@@ -279,9 +279,9 @@ def test_spherical_convnext_block_alpha_scaler_initializes_to_alpha_init() -> No
     assert torch.allclose(y, torch.full_like(x, 0.25))
 
 
-def test_spherical_convnext_block_rejects_non_positive_channels() -> None:
+def test_simbav2_block_rejects_non_positive_channels() -> None:
     with pytest.raises(ValueError, match="channels"):
-        SphericalConvNeXtBlock(channels=0)
+        SimbaV2Block(channels=0)
 
 
 @pytest.mark.parametrize(

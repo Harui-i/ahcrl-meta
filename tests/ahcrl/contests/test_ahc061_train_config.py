@@ -318,7 +318,7 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
 
 def test_parameter_norm_stats_separates_spherical_scale_from_total_norm() -> None:
     convnext = ActorCritic(channels=8, blocks=1, block_type="convnext")
-    spherical = ActorCritic(channels=8, blocks=1, block_type="spherical_convnext")
+    spherical = ActorCritic(channels=8, blocks=1, block_type="simbav2_block")
 
     convnext_stats = _parameter_norm_stats(convnext)
     spherical_stats = _parameter_norm_stats(spherical)
