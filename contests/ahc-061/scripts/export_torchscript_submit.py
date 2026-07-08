@@ -8,8 +8,12 @@ from typing import Any, cast
 
 import torch
 
-from ahcrl.contests.ahc061.encoder import NUM_PLANES
-from ahcrl.contests.ahc061.model import ActorCritic, ObservationNormalizedActorCritic
+from ahcrl.contests.ahc061.encoder import MAX_LEVEL, MAX_PLAYERS, NUM_PLANES
+from ahcrl.contests.ahc061.model import (
+    ActorCritic,
+    GroupedObservationNormalizedActorCritic,
+    ObservationNormalizedActorCritic,
+)
 
 BASE91_ALPHABET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -67,18 +71,52 @@ def export_torchscript(checkpoint_path: Path, config: dict[str, object]) -> byte
         obs_state = checkpoint.get("obs_normalizer")
         if obs_state is None:
             raise ValueError("checkpoint does not contain obs_normalizer state")
-        count = int(obs_state["count"])
-        mean = obs_state["mean"]
-        if count <= 0:
-            variance = torch.ones_like(mean, dtype=torch.float32)
+        if obs_state.get("grouping") == "m_u":
+            global_state = obs_state["global"]
+            global_count = int(global_state["count"])
+            global_mean = global_state["mean"].float()
+            global_variance = (
+                torch.ones_like(global_mean, dtype=torch.float32)
+                if global_count <= 0
+                else global_state["m2"].float() / global_count
+            )
+            group_mean = torch.zeros(
+                (MAX_PLAYERS + 1, MAX_LEVEL + 1, global_mean.shape[1], 1, 1),
+                dtype=torch.float32,
+            )
+            group_variance = torch.ones_like(group_mean)
+            group_count = torch.zeros((MAX_PLAYERS + 1, MAX_LEVEL + 1), dtype=torch.long)
+            for key, group_state in obs_state.get("groups", {}).items():
+                m_raw, u_raw = key.split("_", maxsplit=1)
+                m_value = int(m_raw)
+                u_value = int(u_raw)
+                count = int(group_state["count"])
+                group_count[m_value, u_value] = count
+                group_mean[m_value, u_value] = group_state["mean"].float()
+                if count > 0:
+                    group_variance[m_value, u_value] = group_state["m2"].float() / count
+            model = GroupedObservationNormalizedActorCritic(
+                base_model,
+                global_mean=global_mean,
+                global_variance=global_variance,
+                group_mean=group_mean,
+                group_variance=group_variance,
+                group_count=group_count,
+                epsilon=float(obs_state.get("epsilon", global_state.get("epsilon", 1e-8))),
+            )
         else:
-            variance = obs_state["m2"].float() / count
-        model = ObservationNormalizedActorCritic(
-            base_model,
-            mean=mean,
-            variance=variance,
-            epsilon=float(obs_state.get("epsilon", config.get("obs_norm_epsilon", 1e-8))),
-        )
+            count = int(obs_state["count"])
+            mean = obs_state["mean"]
+            if count <= 0:
+                variance = torch.ones_like(mean, dtype=torch.float32)
+            else:
+                variance = obs_state["m2"].float() / count
+            model = ObservationNormalizedActorCritic(
+                base_model,
+                mean=mean,
+                variance=variance,
+                epsilon=float(obs_state.get("epsilon", config.get("obs_norm_epsilon", 1e-8))),
+            )
     model.eval()
     dummy = torch.zeros((1, NUM_PLANES, 10, 10), dtype=torch.bfloat16)
     with torch.no_grad():

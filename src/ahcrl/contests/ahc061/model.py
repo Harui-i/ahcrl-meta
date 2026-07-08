@@ -4,7 +4,7 @@ from typing import cast
 import torch
 from torch import nn
 
-from ahcrl.contests.ahc061.encoder import NUM_PLANES
+from ahcrl.contests.ahc061.encoder import MAX_LEVEL, MAX_PLAYERS, NUM_PLANES, PLANE_M, PLANE_U
 from ahcrl.nn.blocks import (
     ConvNeXtBlock,
     HyperEmbedder2d,
@@ -87,6 +87,55 @@ class ObservationNormalizedActorCritic(nn.Module):
         mean = cast(torch.Tensor, self.mean)
         variance = cast(torch.Tensor, self.variance)
         y = (x.float() - mean) / torch.sqrt(variance + self.epsilon)
+        return self.model(y.to(dtype=x.dtype))
+
+
+class GroupedObservationNormalizedActorCritic(nn.Module):
+    """Apply frozen per-(M,U) observation RSNorm before an ActorCritic model."""
+
+    def __init__(
+        self,
+        model: ActorCritic,
+        *,
+        global_mean: torch.Tensor,
+        global_variance: torch.Tensor,
+        group_mean: torch.Tensor,
+        group_variance: torch.Tensor,
+        group_count: torch.Tensor,
+        epsilon: float,
+    ) -> None:
+        super().__init__()
+        if epsilon <= 0.0:
+            raise ValueError(f"epsilon must be positive, got {epsilon}")
+        self.model = model
+        self.register_buffer("global_mean", global_mean.detach().float().clone())
+        self.register_buffer("global_variance", global_variance.detach().float().clone())
+        self.register_buffer("group_mean", group_mean.detach().float().clone())
+        self.register_buffer("group_variance", group_variance.detach().float().clone())
+        self.register_buffer("group_count", group_count.detach().long().clone())
+        self.epsilon = epsilon
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        m_values = torch.round(x[:, PLANE_M, 0, 0].float() * MAX_PLAYERS).long()
+        u_values = torch.round(x[:, PLANE_U, 0, 0].float() * MAX_LEVEL).long()
+        m_values = torch.clamp(m_values, 0, MAX_PLAYERS)
+        u_values = torch.clamp(u_values, 0, MAX_LEVEL)
+
+        group_count = cast(torch.Tensor, self.group_count)
+        has_group = group_count[m_values, u_values] > 0
+        group_mean = cast(torch.Tensor, self.group_mean)[m_values, u_values]
+        group_variance = cast(torch.Tensor, self.group_variance)[m_values, u_values]
+        global_mean = cast(torch.Tensor, self.global_mean)
+        global_variance = cast(torch.Tensor, self.global_variance)
+        mean = torch.where(has_group.view(-1, 1, 1, 1), group_mean, global_mean)
+        variance = torch.where(
+            has_group.view(-1, 1, 1, 1),
+            group_variance,
+            global_variance,
+        )
+        y = (x.float() - mean) / torch.sqrt(variance + self.epsilon)
+        y[:, PLANE_M] = x[:, PLANE_M].float()
+        y[:, PLANE_U] = x[:, PLANE_U].float()
         return self.model(y.to(dtype=x.dtype))
 
 

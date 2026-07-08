@@ -4,10 +4,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from ahcrl.contests.ahc061.encoder import NUM_PLANES
+from ahcrl.contests.ahc061.encoder import NUM_PLANES, PLANE_M, PLANE_U
 from ahcrl.contests.ahc061.model import ActorCritic
 from ahcrl.contests.ahc061.train_ppo import (
     MODEL_DTYPE,
+    GroupedObservationNormalizer,
+    GroupedRewardScaler,
     ImmediateRewardScaler,
     RunningObservationNormalizer,
     RunningRewardScaler,
@@ -46,6 +48,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
                 "reward_scale_g_max = 7.0",
                 'obs_norm_mode = "running_channel"',
                 "obs_norm_epsilon = 0.0001",
+                'normalization_grouping = "m_u"',
                 "weight_projection = true",
                 "wandb_enabled = true",
                 'wandb_project = "test-project"',
@@ -89,6 +92,7 @@ def test_parse_args_loads_toml_config_and_cli_overrides(tmp_path: Path) -> None:
     assert args.reward_scale_g_max == 7.0
     assert args.obs_norm_mode == "running_channel"
     assert args.obs_norm_epsilon == 0.0001
+    assert args.normalization_grouping == "m_u"
     assert args.weight_projection is False
     assert args.wandb_enabled is True
     assert args.wandb_project == "test-project"
@@ -102,6 +106,7 @@ def test_parse_args_compile_defaults_to_true_and_can_be_disabled() -> None:
     assert parse_args(["--device", "cpu"]).pf_particles == 16
     assert parse_args(["--device", "cpu"]).weight_projection is False
     assert parse_args(["--device", "cpu"]).obs_norm_mode == "none"
+    assert parse_args(["--device", "cpu"]).normalization_grouping == "none"
     assert parse_args(["--device", "cpu", "--weight-projection"]).weight_projection is True
 
 
@@ -139,6 +144,14 @@ def test_parse_args_rejects_unknown_reward_scale_mode(tmp_path: Path) -> None:
     config_path.write_text('[train]\nreward_scale_mode = "centered"\n')
 
     with pytest.raises(ValueError, match="reward_scale_mode"):
+        parse_args(["--config", str(config_path)])
+
+
+def test_parse_args_rejects_unknown_normalization_grouping(tmp_path: Path) -> None:
+    config_path = tmp_path / "ppo.toml"
+    config_path.write_text('[train]\nnormalization_grouping = "by_m"\n')
+
+    with pytest.raises(ValueError, match="normalization_grouping"):
         parse_args(["--config", str(config_path)])
 
 
@@ -428,6 +441,32 @@ def test_running_reward_scaler_state_round_trips() -> None:
     assert reloaded.state_dict() == scaler.state_dict()
 
 
+def test_running_reward_scaler_resets_state_after_terminal_step() -> None:
+    scaler = RunningRewardScaler(gamma=0.5, g_max=5.0, epsilon=1e-8)
+
+    scaler.update_and_scale(
+        torch.tensor([[1.0, 2.0]]),
+        torch.tensor([[1.0, 0.0]]),
+    )
+
+    assert scaler.g_return is not None
+    assert scaler.g_return.tolist() == pytest.approx([0.0, 2.0])
+
+
+def test_grouped_reward_scaler_uses_separate_m_u_scales() -> None:
+    scaler = GroupedRewardScaler(lambda: ImmediateRewardScaler(epsilon=1e-8))
+    rewards = torch.tensor([[1.0, 10.0], [3.0, 30.0]])
+    m_values = torch.tensor([[2, 3], [2, 3]])
+    u_values = torch.tensor([[1, 2], [1, 2]])
+
+    scaled, stats = scaler.update_and_scale(rewards, m_values=m_values, u_values=u_values)
+
+    assert scaled[:, 0].tolist() == pytest.approx([1.0, 3.0])
+    assert scaled[:, 1].tolist() == pytest.approx([1.0, 3.0])
+    assert stats["reward_scale_by_m_u/m_2_u_1"] == pytest.approx(1.0)
+    assert stats["reward_scale_by_m_u/m_3_u_2"] == pytest.approx(10.0)
+
+
 def test_immediate_reward_scaler_divides_by_running_std_without_centering() -> None:
     scaler = ImmediateRewardScaler(epsilon=1e-8)
     rewards = torch.tensor([1.0, 2.0, 3.0])
@@ -472,6 +511,30 @@ def test_running_observation_normalizer_state_round_trips() -> None:
     assert reloaded.epsilon == normalizer.epsilon
     assert torch.equal(reloaded.mean, normalizer.mean)
     assert torch.equal(reloaded.m2, normalizer.m2)
+
+
+def test_grouped_observation_normalizer_keeps_m_u_planes_raw() -> None:
+    normalizer = GroupedObservationNormalizer(channels=NUM_PLANES, epsilon=1e-8)
+    observations = torch.zeros((2, NUM_PLANES, 2, 2))
+    observations[0, 0] = 1.0
+    observations[1, 0] = 10.0
+    observations[0, PLANE_M] = 2.0 / 8.0
+    observations[1, PLANE_M] = 3.0 / 8.0
+    observations[0, PLANE_U] = 1.0 / 5.0
+    observations[1, PLANE_U] = 2.0 / 5.0
+    m_values = torch.tensor([2, 3])
+    u_values = torch.tensor([1, 2])
+
+    normalized = normalizer.update_and_normalize(
+        observations,
+        m_values=m_values,
+        u_values=u_values,
+    )
+
+    assert torch.equal(normalized[:, PLANE_M], observations[:, PLANE_M])
+    assert torch.equal(normalized[:, PLANE_U], observations[:, PLANE_U])
+    assert normalizer.group_normalizers[(2, 1)].count == 4
+    assert normalizer.group_normalizers[(3, 2)].count == 4
 
 
 def test_load_initial_model_loads_only_model_state(tmp_path: Path) -> None:

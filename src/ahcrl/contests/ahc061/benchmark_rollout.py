@@ -11,7 +11,12 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
-from .model import ActorCritic, ObservationNormalizedActorCritic
+from .encoder import MAX_LEVEL, MAX_PLAYERS
+from .model import (
+    ActorCritic,
+    GroupedObservationNormalizedActorCritic,
+    ObservationNormalizedActorCritic,
+)
 from .rust_vec_env import RustVecEnv
 from .train_ppo import (
     MODEL_DTYPE,
@@ -77,12 +82,23 @@ def main(argv: list[str] | None = None) -> None:
         if args.init_checkpoint is None:
             raise ValueError("obs_norm_mode=running_channel requires --init-checkpoint")
         obs_state = load_observation_normalizer_state(args.init_checkpoint, device)
-        inference_model = ObservationNormalizedActorCritic(
-            raw_model,
-            mean=cast(torch.Tensor, obs_state["mean"]),
-            variance=cast(torch.Tensor, obs_state["variance"]),
-            epsilon=float(obs_state["epsilon"]),
-        ).to(device=device)
+        if obs_state.get("grouping") == "m_u":
+            inference_model = GroupedObservationNormalizedActorCritic(
+                raw_model,
+                global_mean=cast(torch.Tensor, obs_state["global_mean"]),
+                global_variance=cast(torch.Tensor, obs_state["global_variance"]),
+                group_mean=cast(torch.Tensor, obs_state["group_mean"]),
+                group_variance=cast(torch.Tensor, obs_state["group_variance"]),
+                group_count=cast(torch.Tensor, obs_state["group_count"]),
+                epsilon=float(obs_state["epsilon"]),
+            ).to(device=device)
+        else:
+            inference_model = ObservationNormalizedActorCritic(
+                raw_model,
+                mean=cast(torch.Tensor, obs_state["mean"]),
+                variance=cast(torch.Tensor, obs_state["variance"]),
+                epsilon=float(obs_state["epsilon"]),
+            ).to(device=device)
     raw_model.eval()
     inference_model.eval()
     model = cast(nn.Module, torch.compile(inference_model)) if args.compile else inference_model
@@ -145,11 +161,47 @@ def main(argv: list[str] | None = None) -> None:
 def load_observation_normalizer_state(
     checkpoint_path: Path,
     device: torch.device,
-) -> dict[str, torch.Tensor | float]:
+) -> dict[str, Any]:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     obs_state = checkpoint.get("obs_normalizer")
     if obs_state is None:
         raise ValueError("checkpoint does not contain obs_normalizer state")
+    if obs_state.get("grouping") == "m_u":
+        global_state = obs_state["global"]
+        global_count = int(global_state["count"])
+        global_mean = global_state["mean"].detach().float().to(device)
+        global_variance = (
+            torch.ones_like(global_mean)
+            if global_count <= 0
+            else global_state["m2"].detach().float().to(device) / global_count
+        )
+        group_mean = torch.zeros(
+            (MAX_PLAYERS + 1, MAX_LEVEL + 1, global_mean.shape[1], 1, 1),
+            dtype=torch.float32,
+            device=device,
+        )
+        group_variance = torch.ones_like(group_mean)
+        group_count = torch.zeros((MAX_PLAYERS + 1, MAX_LEVEL + 1), dtype=torch.long, device=device)
+        for key, group_state in obs_state.get("groups", {}).items():
+            m_raw, u_raw = key.split("_", maxsplit=1)
+            m_value = int(m_raw)
+            u_value = int(u_raw)
+            count = int(group_state["count"])
+            group_count[m_value, u_value] = count
+            group_mean[m_value, u_value] = group_state["mean"].detach().float().to(device)
+            if count > 0:
+                group_variance[m_value, u_value] = (
+                    group_state["m2"].detach().float().to(device) / count
+                )
+        return {
+            "grouping": "m_u",
+            "global_mean": global_mean,
+            "global_variance": global_variance,
+            "group_mean": group_mean,
+            "group_variance": group_variance,
+            "group_count": group_count,
+            "epsilon": float(obs_state.get("epsilon", global_state.get("epsilon", 1e-8))),
+        }
     count = int(obs_state["count"])
     mean = obs_state["mean"].detach().float().to(device)
     if count <= 0:

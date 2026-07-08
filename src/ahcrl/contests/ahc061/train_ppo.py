@@ -46,6 +46,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "reward_scale_g_max": 5.0,
     "obs_norm_mode": "none",
     "obs_norm_epsilon": 1e-8,
+    "normalization_grouping": "none",
     "weight_projection": False,
     "symmetry_augmentation": "none",
     "artifact_dir": ROOT / "contests/ahc-061/artifacts/ppo",
@@ -80,6 +81,9 @@ class ImmediateRewardScaler:
         self,
         rewards: torch.Tensor,
         dones: torch.Tensor | None = None,
+        *,
+        m_values: torch.Tensor | None = None,
+        u_values: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         values = rewards.float().flatten()
         batch_count = int(values.numel())
@@ -161,6 +165,9 @@ class RunningRewardScaler:
         self,
         rewards: torch.Tensor,
         dones: torch.Tensor | None = None,
+        *,
+        m_values: torch.Tensor | None = None,
+        u_values: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         if dones is None:
             raise ValueError("dones are required for SimbaV2 reward scaling")
@@ -193,7 +200,7 @@ class RunningRewardScaler:
         batch_mean = float(values.mean().item())
         batch_m2 = float(values.sub(batch_mean).pow(2).sum().item())
         self._merge(batch_count=batch_count, batch_mean=batch_mean, batch_m2=batch_m2)
-        self.g_return = returns.detach().cpu()
+        self.g_return = (returns * (1.0 - done_values[-1])).detach().cpu()
         self.g_return_abs_max = max(self.g_return_abs_max, float(values.abs().max().item()))
 
         scale = self.scale
@@ -271,7 +278,81 @@ class RunningRewardScaler:
         self.count = total_count
 
 
-RewardScaler = RunningRewardScaler | ImmediateRewardScaler
+SingleRewardScaler = RunningRewardScaler | ImmediateRewardScaler
+
+
+class GroupedRewardScaler:
+    def __init__(self, factory: Any) -> None:
+        self.global_scaler: SingleRewardScaler = factory()
+        self.group_scalers: dict[tuple[int, int], SingleRewardScaler] = {}
+        self._factory = factory
+
+    def update_and_scale(
+        self,
+        rewards: torch.Tensor,
+        dones: torch.Tensor | None = None,
+        *,
+        m_values: torch.Tensor | None = None,
+        u_values: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        if m_values is None or u_values is None:
+            raise ValueError("m_values and u_values are required for grouped reward scaling")
+        if m_values.shape != rewards.shape or u_values.shape != rewards.shape:
+            raise ValueError(
+                "m_values and u_values must have the same shape as rewards for grouped scaling"
+            )
+        scaled, _ = self.global_scaler.update_and_scale(rewards, dones)
+        output = scaled.clone()
+        first_m = m_values[0].long()
+        first_u = u_values[0].long()
+        for key_tensor in torch.unique(torch.stack([first_m, first_u], dim=1), dim=0):
+            m_value = int(key_tensor[0].item())
+            u_value = int(key_tensor[1].item())
+            selector = (first_m == m_value) & (first_u == u_value)
+            if not bool(selector.any().item()):
+                continue
+            scaler = self.group_scalers.setdefault((m_value, u_value), self._factory())
+            group_rewards = rewards[:, selector]
+            group_dones = None if dones is None else dones[:, selector]
+            group_scaled, _ = scaler.update_and_scale(group_rewards, group_dones)
+            output[:, selector] = group_scaled
+        stats = self.stats()
+        return output, stats
+
+    def stats(self) -> dict[str, float]:
+        stats = self.global_scaler.stats()
+        for (m_value, u_value), scaler in sorted(self.group_scalers.items()):
+            group_stats = scaler.stats()
+            if "reward_scale" in group_stats:
+                stats[f"reward_scale_by_m_u/m_{m_value}_u_{u_value}"] = group_stats[
+                    "reward_scale"
+                ]
+        return stats
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "grouping": "m_u",
+            "global": self.global_scaler.state_dict(),
+            "groups": {
+                f"{m_value}_{u_value}": scaler.state_dict()
+                for (m_value, u_value), scaler in self.group_scalers.items()
+            },
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        if state.get("grouping") != "m_u":
+            self.global_scaler.load_state_dict(state)
+            return
+        self.global_scaler.load_state_dict(state["global"])
+        self.group_scalers = {}
+        for key, scaler_state in state.get("groups", {}).items():
+            m_raw, u_raw = key.split("_", maxsplit=1)
+            scaler = self._factory()
+            scaler.load_state_dict(scaler_state)
+            self.group_scalers[(int(m_raw), int(u_raw))] = scaler
+
+
+RewardScaler = SingleRewardScaler | GroupedRewardScaler
 
 
 class RunningObservationNormalizer:
@@ -363,9 +444,133 @@ class RunningObservationNormalizer:
         self.count = total_count
 
 
+class GroupedObservationNormalizer:
+    def __init__(self, channels: int, *, epsilon: float) -> None:
+        self.channels = channels
+        self.epsilon = epsilon
+        self.global_normalizer = RunningObservationNormalizer(channels, epsilon=epsilon)
+        self.group_normalizers: dict[tuple[int, int], RunningObservationNormalizer] = {}
+
+    def update_and_normalize(
+        self,
+        observations: torch.Tensor,
+        *,
+        m_values: torch.Tensor,
+        u_values: torch.Tensor,
+    ) -> torch.Tensor:
+        self.update(observations, m_values=m_values, u_values=u_values)
+        return self.normalize(observations, m_values=m_values, u_values=u_values)
+
+    def update(
+        self,
+        observations: torch.Tensor,
+        *,
+        m_values: torch.Tensor,
+        u_values: torch.Tensor,
+    ) -> None:
+        self._validate_group_values(observations, m_values, u_values)
+        self.global_normalizer.update(observations)
+        m_cpu = m_values.detach().long().cpu()
+        u_cpu = u_values.detach().long().cpu()
+        for key_tensor in torch.unique(torch.stack([m_cpu, u_cpu], dim=1), dim=0):
+            m_value = int(key_tensor[0].item())
+            u_value = int(key_tensor[1].item())
+            selector = (m_cpu == m_value) & (u_cpu == u_value)
+            if not bool(selector.any().item()):
+                continue
+            normalizer = self.group_normalizers.setdefault(
+                (m_value, u_value),
+                RunningObservationNormalizer(self.channels, epsilon=self.epsilon),
+            )
+            normalizer.update(observations[selector.to(device=observations.device)])
+
+    def normalize(
+        self,
+        observations: torch.Tensor,
+        *,
+        m_values: torch.Tensor,
+        u_values: torch.Tensor,
+    ) -> torch.Tensor:
+        self._validate_group_values(observations, m_values, u_values)
+        normalized = self.global_normalizer.normalize(observations)
+        m_cpu = m_values.detach().long().cpu()
+        u_cpu = u_values.detach().long().cpu()
+        for key_tensor in torch.unique(torch.stack([m_cpu, u_cpu], dim=1), dim=0):
+            m_value = int(key_tensor[0].item())
+            u_value = int(key_tensor[1].item())
+            normalizer = self.group_normalizers.get((m_value, u_value))
+            if normalizer is None or normalizer.count <= 0:
+                continue
+            selector = (m_cpu == m_value) & (u_cpu == u_value)
+            normalized[selector.to(device=observations.device)] = normalizer.normalize(
+                observations[selector.to(device=observations.device)]
+            )
+        normalized[:, PLANE_M] = observations[:, PLANE_M]
+        normalized[:, PLANE_U] = observations[:, PLANE_U]
+        return normalized
+
+    def stats(self) -> dict[str, float]:
+        stats = self.global_normalizer.stats()
+        for (m_value, u_value), normalizer in sorted(self.group_normalizers.items()):
+            stats[f"obs_norm_count_by_m_u/m_{m_value}_u_{u_value}"] = float(normalizer.count)
+        return stats
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "grouping": "m_u",
+            "global": self.global_normalizer.state_dict(),
+            "groups": {
+                f"{m_value}_{u_value}": normalizer.state_dict()
+                for (m_value, u_value), normalizer in self.group_normalizers.items()
+            },
+            "epsilon": self.epsilon,
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        if state.get("grouping") != "m_u":
+            self.global_normalizer.load_state_dict(state)
+            self.group_normalizers = {}
+            return
+        self.global_normalizer.load_state_dict(state["global"])
+        self.epsilon = float(state.get("epsilon", self.epsilon))
+        self.group_normalizers = {}
+        for key, normalizer_state in state.get("groups", {}).items():
+            m_raw, u_raw = key.split("_", maxsplit=1)
+            normalizer = RunningObservationNormalizer(self.channels, epsilon=self.epsilon)
+            normalizer.load_state_dict(normalizer_state)
+            self.group_normalizers[(int(m_raw), int(u_raw))] = normalizer
+
+    def _validate_group_values(
+        self,
+        observations: torch.Tensor,
+        m_values: torch.Tensor,
+        u_values: torch.Tensor,
+    ) -> None:
+        if observations.ndim != 4:
+            raise ValueError(f"expected NCHW observations, got {observations.ndim} dimensions")
+        if m_values.shape != (observations.shape[0],) or u_values.shape != (observations.shape[0],):
+            raise ValueError("m_values and u_values must have shape (batch,)")
+
+
+ObservationNormalizer = RunningObservationNormalizer | GroupedObservationNormalizer
+
+
 def create_reward_scaler(args: argparse.Namespace) -> RewardScaler | None:
     if args.reward_scale_mode == "none":
         return None
+    def factory() -> SingleRewardScaler:
+        if args.reward_scale_mode == "running_std":
+            return ImmediateRewardScaler(epsilon=args.reward_scale_epsilon)
+        if args.reward_scale_mode == "simbav2":
+            return RunningRewardScaler(
+                gamma=args.gamma,
+                g_max=args.reward_scale_g_max,
+                epsilon=args.reward_scale_epsilon,
+            )
+        raise ValueError(f"unsupported reward_scale_mode: {args.reward_scale_mode}")
+
+    if args.normalization_grouping == "m_u":
+        return GroupedRewardScaler(factory)
     if args.reward_scale_mode == "running_std":
         return ImmediateRewardScaler(epsilon=args.reward_scale_epsilon)
     if args.reward_scale_mode == "simbav2":
@@ -375,6 +580,16 @@ def create_reward_scaler(args: argparse.Namespace) -> RewardScaler | None:
             epsilon=args.reward_scale_epsilon,
         )
     raise ValueError(f"unsupported reward_scale_mode: {args.reward_scale_mode}")
+
+
+def create_obs_normalizer(args: argparse.Namespace) -> ObservationNormalizer | None:
+    if args.obs_norm_mode == "none":
+        return None
+    if args.obs_norm_mode != "running_channel":
+        raise ValueError(f"unsupported obs_norm_mode: {args.obs_norm_mode}")
+    if args.normalization_grouping == "m_u":
+        return GroupedObservationNormalizer(NUM_PLANES, epsilon=args.obs_norm_epsilon)
+    return RunningObservationNormalizer(NUM_PLANES, epsilon=args.obs_norm_epsilon)
 
 
 def main() -> None:
@@ -394,11 +609,7 @@ def main() -> None:
         load_initial_model(args.init_checkpoint, raw_model, device)
     optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
     reward_scaler = create_reward_scaler(args)
-    obs_normalizer = (
-        RunningObservationNormalizer(NUM_PLANES, epsilon=args.obs_norm_epsilon)
-        if args.obs_norm_mode == "running_channel"
-        else None
-    )
+    obs_normalizer = create_obs_normalizer(args)
     env = RustVecEnv(
         num_envs=args.num_envs,
         seed_start=args.seed_start,
@@ -539,7 +750,7 @@ def collect_rollout(
     device: torch.device,
     *,
     reward_scaler: RewardScaler | None = None,
-    obs_normalizer: RunningObservationNormalizer | None = None,
+    obs_normalizer: ObservationNormalizer | None = None,
 ) -> dict[str, Any]:
     obs_buf = []
     action_buf = []
@@ -556,7 +767,14 @@ def collect_rollout(
         m_values, u_values = _extract_m_u_from_obs(obs)
         encoded = torch.from_numpy(obs["planes"]).to(device=device, dtype=MODEL_DTYPE)
         if obs_normalizer is not None:
-            encoded = obs_normalizer.update_and_normalize(encoded)
+            if isinstance(obs_normalizer, GroupedObservationNormalizer):
+                encoded = obs_normalizer.update_and_normalize(
+                    encoded,
+                    m_values=torch.from_numpy(m_values).to(device=device),
+                    u_values=torch.from_numpy(u_values).to(device=device),
+                )
+            else:
+                encoded = obs_normalizer.update_and_normalize(encoded)
         mask = torch.from_numpy(obs["mask"]).to(device)
         with torch.inference_mode():
             logits, value = model(encoded)
@@ -595,7 +813,15 @@ def collect_rollout(
             dtype=MODEL_DTYPE,
         )
         if obs_normalizer is not None:
-            next_encoded = obs_normalizer.normalize(next_encoded)
+            next_m_values, next_u_values = _extract_m_u_from_obs(obs)
+            if isinstance(obs_normalizer, GroupedObservationNormalizer):
+                next_encoded = obs_normalizer.normalize(
+                    next_encoded,
+                    m_values=torch.from_numpy(next_m_values).to(device=device),
+                    u_values=torch.from_numpy(next_u_values).to(device=device),
+                )
+            else:
+                next_encoded = obs_normalizer.normalize(next_encoded)
         next_value = model(next_encoded)[1].float().cpu()
 
     rewards = torch.stack(reward_buf)
@@ -608,7 +834,12 @@ def collect_rollout(
             "reward_running_std": float(rewards.float().std(unbiased=False).item()),
         }
     else:
-        scaled_rewards, reward_scale_stats = reward_scaler.update_and_scale(rewards, dones)
+        scaled_rewards, reward_scale_stats = reward_scaler.update_and_scale(
+            rewards,
+            dones,
+            m_values=torch.stack(m_buf),
+            u_values=torch.stack(u_buf),
+        )
     values = torch.stack(value_buf)
     advantages = torch.zeros_like(rewards)
     last_gae = torch.zeros(args.num_envs)
@@ -728,7 +959,7 @@ def save_training_state(
     next_seed_start: int,
     wandb_run_id: str | None,
     reward_scaler: RewardScaler | None = None,
-    obs_normalizer: RunningObservationNormalizer | None = None,
+    obs_normalizer: ObservationNormalizer | None = None,
 ) -> Path:
     checkpoints_dir = args.run_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
@@ -1105,6 +1336,11 @@ def build_log_metrics(
             metrics[f"train/final_mean_score_by_u/u_{u_value}"] = float(
                 final_scores[selector].mean().item()
             )
+    for key, value in rollout.items():
+        if key.startswith("reward_scale_by_m_u/"):
+            metrics[f"train/{key}"] = float(value)
+        if key.startswith("obs_norm_count_by_m_u/"):
+            metrics[f"train/{key}"] = float(value)
     return metrics
 
 
@@ -1156,6 +1392,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=argparse.SUPPRESS,
     )
     parser.add_argument("--obs-norm-epsilon", type=float, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--normalization-grouping",
+        choices=("none", "m_u"),
+        default=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--weight-projection",
         dest="weight_projection",
@@ -1253,6 +1494,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("obs_norm_mode must be one of: none, running_channel")
     if config["obs_norm_epsilon"] <= 0.0:
         raise ValueError("obs_norm_epsilon must be positive")
+    if config["normalization_grouping"] not in ("none", "m_u"):
+        raise ValueError("normalization_grouping must be one of: none, m_u")
     if config["symmetry_augmentation"] not in ("none", "full_d4"):
         raise ValueError("symmetry_augmentation must be one of: none, full_d4")
     if config["device"] == "auto":
