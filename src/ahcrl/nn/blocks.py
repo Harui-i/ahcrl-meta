@@ -485,6 +485,101 @@ class SphericalDepthwiseSimbaBlock(nn.Module):
         return l2_normalize(y, dim=1, eps=self.eps)
 
 
+class SphericalSelfAttentionLERP2d(nn.Module):
+    """Global self-attention that LERPs hyperspherical per-cell features."""
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        heads: int = 4,
+        max_spatial_size: int = 10,
+        alpha_init: float = 0.05,
+        alpha_scale: float | None = None,
+        output_scaler_init: float | None = None,
+        output_scaler_scale: float | None = None,
+        eps: float = 1e-8,
+    ) -> None:
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        if heads <= 0:
+            raise ValueError(f"heads must be positive, got {heads}")
+        if channels % heads != 0:
+            raise ValueError(f"channels must be divisible by heads, got {channels} and {heads}")
+        if max_spatial_size <= 0:
+            raise ValueError(f"max_spatial_size must be positive, got {max_spatial_size}")
+        if alpha_scale == 0.0:
+            raise ValueError("alpha_scale must be non-zero")
+        if eps <= 0.0:
+            raise ValueError(f"eps must be positive, got {eps}")
+
+        default_output_scale = math.sqrt(2.0 / channels)
+        default_alpha_scale = 1.0 / math.sqrt(channels)
+        self.channels = channels
+        self.heads = heads
+        self.head_dim = channels // heads
+        self.max_spatial_size = max_spatial_size
+        self.qkv = HyperLinear(channels, channels * 3, eps=eps)
+        self.output = HyperLinear(channels, channels, eps=eps)
+        self.output_scaler = Scaler(
+            channels,
+            init=default_output_scale if output_scaler_init is None else output_scaler_init,
+            scale=default_output_scale if output_scaler_scale is None else output_scaler_scale,
+        )
+        self.alpha_scaler = Scaler(
+            channels,
+            init=alpha_init,
+            scale=default_alpha_scale if alpha_scale is None else alpha_scale,
+        )
+        table_size = max_spatial_size * 2 - 1
+        self.relative_position_bias = nn.Parameter(torch.zeros(heads, table_size, table_size))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 4:
+            raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
+        batch, channels, height, width = x.shape
+        if channels != self.channels:
+            raise ValueError(f"expected {self.channels} channels, got {channels}")
+        if height > self.max_spatial_size or width > self.max_spatial_size:
+            raise ValueError(
+                "input spatial size exceeds relative position bias table: "
+                f"got {height}x{width}, max {self.max_spatial_size}"
+            )
+
+        tokens = height * width
+        y = x.permute(0, 2, 3, 1).reshape(batch, tokens, channels)
+        qkv = self.qkv(y).view(batch, tokens, 3, self.heads, self.head_dim)
+        q, k, v = qkv.unbind(dim=2)
+        q = l2_normalize(q, dim=-1, eps=self.eps).transpose(1, 2)
+        k = l2_normalize(k, dim=-1, eps=self.eps).transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        logits = torch.matmul(q.float(), k.float().transpose(-2, -1))
+        logits = logits * math.sqrt(self.head_dim)
+        logits = logits + self._relative_position_bias(height, width).float()
+        attn = torch.softmax(logits, dim=-1).to(dtype=x.dtype)
+        attended = torch.matmul(attn, v)
+        attended = attended.transpose(1, 2).reshape(batch, tokens, channels)
+        target = self.output_scaler(self.output(attended))
+        target = l2_normalize(target, dim=-1, eps=self.eps)
+        target = target.view(batch, height, width, channels).permute(0, 3, 1, 2)
+        delta = (target - x).permute(0, 2, 3, 1)
+        mixed = x + self.alpha_scaler(delta).permute(0, 3, 1, 2)
+        return l2_normalize(mixed, dim=1, eps=self.eps)
+
+    def _relative_position_bias(self, height: int, width: int) -> torch.Tensor:
+        y = torch.arange(height, device=self.relative_position_bias.device)
+        x = torch.arange(width, device=self.relative_position_bias.device)
+        coords = torch.stack(torch.meshgrid(y, x, indexing="ij")).flatten(1)
+        relative = coords[:, :, None] - coords[:, None, :]
+        relative_y = relative[0] + self.max_spatial_size - 1
+        relative_x = relative[1] + self.max_spatial_size - 1
+        bias = self.relative_position_bias[:, relative_y, relative_x]
+        return bias.unsqueeze(0)
+
+
 class GlobalContextLERP2d(nn.Module):
     """Broadcast pooled global context and LERP per-cell features toward it."""
 
@@ -584,3 +679,43 @@ class SphericalGlobalContextBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.global_context(self.per_cell(x))
+
+
+class SphericalAttentionSimbaBlock(nn.Module):
+    """Per-cell SimbaV2 block followed by hyperspherical self-attention LERP."""
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        expansion: int = 4,
+        heads: int = 4,
+        max_spatial_size: int = 10,
+        scaler_init: float | None = None,
+        scaler_scale: float | None = None,
+        alpha_init: float = 0.2,
+        alpha_scale: float | None = None,
+        attention_alpha_init: float = 0.05,
+        eps: float = 1e-8,
+    ) -> None:
+        super().__init__()
+        self.per_cell = SimbaV2Block(
+            channels,
+            expansion=expansion,
+            scaler_init=scaler_init,
+            scaler_scale=scaler_scale,
+            alpha_init=alpha_init,
+            alpha_scale=alpha_scale,
+            eps=eps,
+        )
+        self.attention = SphericalSelfAttentionLERP2d(
+            channels,
+            heads=heads,
+            max_spatial_size=max_spatial_size,
+            alpha_init=attention_alpha_init,
+            alpha_scale=alpha_scale,
+            eps=eps,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.attention(self.per_cell(x))

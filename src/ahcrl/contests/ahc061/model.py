@@ -11,6 +11,7 @@ from ahcrl.nn.blocks import (
     PerCellMLPBlock,
     ResidualBlock,
     SimbaV2Block,
+    SphericalAttentionSimbaBlock,
     SphericalDepthwiseSimbaBlock,
     SphericalGlobalContextBlock,
     make_group_norm,
@@ -180,7 +181,12 @@ def _make_trunk(
     blocks: int,
     block_factory: Callable[[], nn.Module],
 ) -> nn.Sequential:
-    if block_type in ("simbav2_block", "spherical_depthwise_simba", "spherical_global_context"):
+    if block_type in (
+        "simbav2_block",
+        "spherical_depthwise_simba",
+        "spherical_global_context",
+        "spherical_attention_simba",
+    ):
         return nn.Sequential(
             HyperEmbedder2d(in_channels, channels),
             *[block_factory() for _ in range(blocks)],
@@ -207,6 +213,9 @@ def _block_factory(block_type: str, *, channels: int, blocks: int) -> Callable[[
     if block_type == "spherical_depthwise_simba":
         alpha_init = 1.0 / (blocks + 1)
         return lambda: SphericalDepthwiseSimbaBlock(channels, alpha_init=alpha_init)
+    if block_type == "spherical_attention_simba":
+        alpha_init = 1.0 / (blocks + 1)
+        return lambda: SphericalAttentionSimbaBlock(channels, alpha_init=alpha_init)
     if block_type == "residual":
         return lambda: ResidualBlock(channels)
     raise ValueError(f"unknown block_type: {block_type}")

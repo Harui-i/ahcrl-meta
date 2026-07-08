@@ -1096,6 +1096,7 @@ def update_model(
                         "simbav2_block",
                         "spherical_depthwise_simba",
                         "spherical_global_context",
+                        "spherical_attention_simba",
                     )
                 ):
                     project_hyperspherical_weights_(grad_model)
@@ -1429,6 +1430,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "simbav2_block",
             "spherical_depthwise_simba",
             "spherical_global_context",
+            "spherical_attention_simba",
         ),
         default=argparse.SUPPRESS,
     )

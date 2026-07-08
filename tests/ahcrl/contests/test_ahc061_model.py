@@ -15,6 +15,8 @@ from ahcrl.contests.ahc061.model import ActorCritic
         "residual",
         "simbav2_block",
         "spherical_depthwise_simba",
+        "spherical_global_context",
+        "spherical_attention_simba",
     ],
 )
 def test_actor_critic_output_shapes(block_type: str) -> None:
