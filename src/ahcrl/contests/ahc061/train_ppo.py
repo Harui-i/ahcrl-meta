@@ -49,6 +49,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "normalization_grouping": "none",
     "weight_projection": False,
     "symmetry_augmentation": "none",
+    "critic_feature_mode": "none",
     "artifact_dir": ROOT / "contests/ahc-061/artifacts/ppo",
     "checkpoint_interval_updates": 1,
     "model_channels": 64,
@@ -606,6 +607,7 @@ def main() -> None:
         channels=args.model_channels,
         blocks=args.model_blocks,
         block_type=args.model_block_type,
+        critic_feature_mode=args.critic_feature_mode,
     ).to(device=device, dtype=MODEL_DTYPE)
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, raw_model, device)
@@ -764,6 +766,7 @@ def collect_rollout(
     score_buf = []
     m_buf = []
     u_buf = []
+    critic_feature_buf = []
 
     for _ in range(args.rollout_steps):
         m_values, u_values = _extract_m_u_from_obs(obs)
@@ -778,8 +781,12 @@ def collect_rollout(
             else:
                 encoded = obs_normalizer.update_and_normalize(encoded)
         mask = torch.from_numpy(obs["mask"]).to(device)
+        critic_features = _critic_features_from_obs(obs, args.critic_feature_mode, device)
         with torch.inference_mode():
-            logits, value = model(encoded)
+            if critic_features is None:
+                logits, value = model(encoded)
+            else:
+                logits, value = model(encoded, critic_features)
             logits = logits.float()
             value = value.float()
             logits = logits.masked_fill(~mask, -1e9)
@@ -798,6 +805,8 @@ def collect_rollout(
         score_buf.append(torch.from_numpy(step.score.copy()))
         m_buf.append(torch.from_numpy(m_values.copy()))
         u_buf.append(torch.from_numpy(u_values.copy()))
+        if critic_features is not None:
+            critic_feature_buf.append(critic_features.cpu())
 
         obs = step.obs
         if step.done.any():
@@ -824,7 +833,11 @@ def collect_rollout(
                 )
             else:
                 next_encoded = obs_normalizer.normalize(next_encoded)
-        next_value = model(next_encoded)[1].float().cpu()
+        next_critic_features = _critic_features_from_obs(obs, args.critic_feature_mode, device)
+        if next_critic_features is None:
+            next_value = model(next_encoded)[1].float().cpu()
+        else:
+            next_value = model(next_encoded, next_critic_features)[1].float().cpu()
 
     rewards = torch.stack(reward_buf)
     dones = torch.stack(done_buf)
@@ -867,6 +880,11 @@ def collect_rollout(
         "scores": torch.stack(score_buf),
         "m_values": torch.stack(m_buf),
         "u_values": torch.stack(u_buf),
+        **(
+            {}
+            if not critic_feature_buf
+            else {"critic_features": torch.stack(critic_feature_buf)}
+        ),
         "last_obs": obs,
         "next_seed_start": next_seed_start,
         **reward_scale_stats,
@@ -878,6 +896,18 @@ def _extract_m_u_from_obs(obs: dict[str, np.ndarray]) -> tuple[np.ndarray, np.nd
     m_values = np.rint(obs["planes"][:, PLANE_M, 0, 0] * MAX_PLAYERS).astype(np.int64)
     u_values = np.rint(obs["planes"][:, PLANE_U, 0, 0] * MAX_LEVEL).astype(np.int64)
     return m_values, u_values
+
+
+def _critic_features_from_obs(
+    obs: dict[str, np.ndarray],
+    mode: str,
+    device: torch.device,
+) -> torch.Tensor | None:
+    if mode == "none":
+        return None
+    if mode not in ("posterior", "oracle"):
+        raise ValueError(f"unknown critic feature mode: {mode}")
+    return torch.from_numpy(obs[f"critic_{mode}"]).to(device=device, dtype=MODEL_DTYPE)
 
 
 def _initial_next_seed_start(args: argparse.Namespace) -> int:
@@ -1037,6 +1067,9 @@ def update_model(
     advantages = rollout["advantages"].flatten().to(device)  # type: ignore[union-attr]
     returns = rollout["returns"].flatten().to(device)  # type: ignore[union-attr]
     masks = rollout["masks"].flatten(0, 1).to(device)  # type: ignore[union-attr]
+    critic_features = rollout.get("critic_features")
+    if critic_features is not None:
+        critic_features = critic_features.flatten(0, 1).to(device)
     advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
 
     batch_size = obs.shape[0]
@@ -1061,12 +1094,16 @@ def update_model(
             mb_old_logprobs = old_logprobs[mb]
             mb_advantages = advantages[mb]
             mb_returns = returns[mb]
+            mb_critic_features = None if critic_features is None else critic_features[mb]
             transform_ids = range(8) if args.symmetry_augmentation == "full_d4" else range(1)
             for transform_id in transform_ids:
                 aug_obs = _transform_board_d4(mb_obs, transform_id)
                 aug_masks = _transform_flat_board_d4(mb_masks, transform_id)
                 aug_actions = _transform_actions_d4(mb_actions, transform_id)
-                logits, value = model(aug_obs)
+                if mb_critic_features is None:
+                    logits, value = model(aug_obs)
+                else:
+                    logits, value = model(aug_obs, mb_critic_features)
                 logits = logits.float()
                 value = value.float()
                 logits = logits.masked_fill(~aug_masks, -1e9)
@@ -1417,6 +1454,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("none", "full_d4"),
         default=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--critic-feature-mode",
+        choices=("none", "posterior", "oracle"),
+        default=argparse.SUPPRESS,
+    )
     parser.add_argument("--artifact-dir", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--checkpoint-interval-updates", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-channels", type=int, default=argparse.SUPPRESS)
@@ -1502,6 +1544,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("normalization_grouping must be one of: none, m_u")
     if config["symmetry_augmentation"] not in ("none", "full_d4"):
         raise ValueError("symmetry_augmentation must be one of: none, full_d4")
+    if config["critic_feature_mode"] not in ("none", "posterior", "oracle"):
+        raise ValueError("critic_feature_mode must be one of: none, posterior, oracle")
     if config["device"] == "auto":
         config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
     return argparse.Namespace(**config)

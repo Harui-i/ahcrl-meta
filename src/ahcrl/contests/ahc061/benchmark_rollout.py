@@ -21,6 +21,7 @@ from .rust_vec_env import RustVecEnv
 from .train_ppo import (
     MODEL_DTYPE,
     _advance_seed_start,
+    _critic_features_from_obs,
     _initial_next_seed_start,
     load_initial_model,
     parse_args,
@@ -74,6 +75,7 @@ def main(argv: list[str] | None = None) -> None:
         channels=args.model_channels,
         blocks=args.model_blocks,
         block_type=args.model_block_type,
+        critic_feature_mode=args.critic_feature_mode,
     ).to(device=device, dtype=MODEL_DTYPE)
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, raw_model, device)
@@ -280,13 +282,25 @@ def timed_rollout(
             "mask_to_device",
             lambda current_obs=obs: torch.from_numpy(current_obs["mask"]).to(device),
         )
+        critic_features = timed(
+            "critic_features_to_device",
+            lambda current_obs=obs: _critic_features_from_obs(
+                current_obs,
+                args.critic_feature_mode,
+                device,
+            ),
+        )
 
         def infer(
             current_encoded: torch.Tensor = encoded,
             current_mask: torch.Tensor = mask,
+            current_critic_features: torch.Tensor | None = critic_features,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
             with torch.inference_mode():
-                logits, value = model(current_encoded)
+                if current_critic_features is None:
+                    logits, value = model(current_encoded)
+                else:
+                    logits, value = model(current_encoded, current_critic_features)
                 logits = logits.float()
                 value = value.float()
                 logits = logits.masked_fill(~current_mask, -1e9)
@@ -342,9 +356,19 @@ def timed_rollout(
             dtype=MODEL_DTYPE,
         ),
     )
+    next_critic_features = timed(
+        "bootstrap_critic_features_to_device",
+        lambda current_obs=obs: _critic_features_from_obs(
+            current_obs,
+            args.critic_feature_mode,
+            device,
+        ),
+    )
     def bootstrap() -> torch.Tensor:
         with torch.inference_mode():
-            return model(next_encoded)[1].float()
+            if next_critic_features is None:
+                return model(next_encoded)[1].float()
+            return model(next_encoded, next_critic_features)[1].float()
 
     next_value = timed("bootstrap_inference", bootstrap)
 

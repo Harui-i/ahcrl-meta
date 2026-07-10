@@ -4,7 +4,14 @@ from typing import cast
 import torch
 from torch import nn
 
-from ahcrl.contests.ahc061.encoder import MAX_LEVEL, MAX_PLAYERS, NUM_PLANES, PLANE_M, PLANE_U
+from ahcrl.contests.ahc061.encoder import (
+    CRITIC_FEATURE_SHAPE,
+    MAX_LEVEL,
+    MAX_PLAYERS,
+    NUM_PLANES,
+    PLANE_M,
+    PLANE_U,
+)
 from ahcrl.nn.blocks import (
     ConvNeXtBlock,
     HyperEmbedder2d,
@@ -25,6 +32,7 @@ class ActorCritic(nn.Module):
         channels: int = 64,
         blocks: int = 4,
         block_type: str = "convnext",
+        critic_feature_mode: str = "none",
     ) -> None:
         super().__init__()
         block_factory = _block_factory(block_type, channels=channels, blocks=blocks)
@@ -46,12 +54,17 @@ class ActorCritic(nn.Module):
             in_channels=in_channels,
             channels=channels,
             block_factory=block_factory,
+            critic_feature_mode=critic_feature_mode,
         )
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        critic_features: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         h = self.trunk(x)
         logits = self.policy(h)
-        value = self.value(h, x).squeeze(-1)
+        value = self.value(h, x, critic_features).squeeze(-1)
         return logits, value
 
     @torch.no_grad()
@@ -84,11 +97,15 @@ class ObservationNormalizedActorCritic(nn.Module):
         self.register_buffer("variance", variance.detach().float().clone())
         self.epsilon = epsilon
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        critic_features: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         mean = cast(torch.Tensor, self.mean)
         variance = cast(torch.Tensor, self.variance)
         y = (x.float() - mean) / torch.sqrt(variance + self.epsilon)
-        return self.model(y.to(dtype=x.dtype))
+        return self.model(y.to(dtype=x.dtype), critic_features)
 
 
 class GroupedObservationNormalizedActorCritic(nn.Module):
@@ -116,7 +133,11 @@ class GroupedObservationNormalizedActorCritic(nn.Module):
         self.register_buffer("group_count", group_count.detach().long().clone())
         self.epsilon = epsilon
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        critic_features: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         m_values = torch.round(x[:, PLANE_M, 0, 0].float() * MAX_PLAYERS).long()
         u_values = torch.round(x[:, PLANE_U, 0, 0].float() * MAX_LEVEL).long()
         m_values = torch.clamp(m_values, 0, MAX_PLAYERS)
@@ -137,7 +158,7 @@ class GroupedObservationNormalizedActorCritic(nn.Module):
         y = (x.float() - mean) / torch.sqrt(variance + self.epsilon)
         y[:, PLANE_M] = x[:, PLANE_M].float()
         y[:, PLANE_U] = x[:, PLANE_U].float()
-        return self.model(y.to(dtype=x.dtype))
+        return self.model(y.to(dtype=x.dtype), critic_features)
 
 
 class RichValueHead(nn.Module):
@@ -147,29 +168,62 @@ class RichValueHead(nn.Module):
         in_channels: int,
         channels: int,
         block_factory: Callable[[], nn.Module],
+        critic_feature_mode: str,
     ) -> None:
         super().__init__()
+        if critic_feature_mode not in ("none", "posterior", "oracle"):
+            raise ValueError(f"unknown critic feature mode: {critic_feature_mode}")
+        self.critic_feature_mode = critic_feature_mode
         self.blocks = nn.Sequential(block_factory(), block_factory())
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
         stats_channels = in_channels * 2
         pooled_channels = channels * 2
         hidden_channels = channels * 2
+        critic_channels = 0
+        if critic_feature_mode != "none":
+            player_embedding_channels = max(8, channels // MAX_PLAYERS)
+            self.critic_player_encoder = nn.Sequential(
+                nn.Linear(CRITIC_FEATURE_SHAPE[1], player_embedding_channels),
+                nn.ReLU(inplace=True),
+            )
+            self.critic_encoder = nn.Sequential(
+                nn.Linear(MAX_PLAYERS * player_embedding_channels, channels),
+                nn.ReLU(inplace=True),
+            )
+            critic_channels = channels
         self.mlp = nn.Sequential(
-            nn.Linear(pooled_channels + stats_channels, hidden_channels),
+            nn.Linear(pooled_channels + stats_channels + critic_channels, hidden_channels),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_channels, hidden_channels),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_channels, 1),
         )
 
-    def forward(self, trunk_features: torch.Tensor, raw_planes: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        trunk_features: torch.Tensor,
+        raw_planes: torch.Tensor,
+        critic_features: torch.Tensor | None,
+    ) -> torch.Tensor:
         h = self.blocks(trunk_features)
         avg_features = self.avg_pool(h).flatten(1)
         max_features = self.max_pool(h).flatten(1)
         plane_mean = raw_planes.mean(dim=(-2, -1))
         plane_max = raw_planes.amax(dim=(-2, -1))
-        features = torch.cat([avg_features, max_features, plane_mean, plane_max], dim=1)
+        features = [avg_features, max_features, plane_mean, plane_max]
+        if self.critic_feature_mode != "none":
+            if critic_features is None:
+                critic_features = torch.zeros(
+                    (trunk_features.shape[0], *CRITIC_FEATURE_SHAPE),
+                    device=trunk_features.device,
+                    dtype=trunk_features.dtype,
+                )
+            player_encoder = cast(nn.Module, self.critic_player_encoder)
+            critic_encoder = cast(nn.Module, self.critic_encoder)
+            critic_embedding = player_encoder(critic_features).flatten(1)
+            features.append(critic_encoder(critic_embedding))
+        features = torch.cat(features, dim=1)
         return self.mlp(features)
 
 

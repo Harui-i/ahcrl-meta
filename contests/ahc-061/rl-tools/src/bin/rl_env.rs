@@ -198,6 +198,8 @@ fn dist_to_sources(sources: &BoolBoard) -> FloatBoard {
 
 struct EncodedSlot {
     plane_bytes: Vec<u8>,
+    critic_posterior_bytes: Vec<u8>,
+    critic_oracle_bytes: Vec<u8>,
     mask: [u8; BOARD_CELLS],
     reward: f32,
     done: u8,
@@ -207,6 +209,10 @@ struct EncodedSlot {
 fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
     let mut plane_bytes =
         vec![0_u8; NUM_PLANES * BOARD_SIZE * BOARD_SIZE * std::mem::size_of::<u16>()];
+    let mut critic_posterior_bytes =
+        vec![0_u8; MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER * std::mem::size_of::<u16>()];
+    let mut critic_oracle_bytes =
+        vec![0_u8; MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER * std::mem::size_of::<u16>()];
     let mut value_sum = 0.0_f32;
     let mut scores = vec![0.0_f32; slot.input.M];
     let mut score_ints = vec![0_i64; slot.input.M];
@@ -390,7 +396,7 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
             );
             let param_start = PLANE_ORACLE_PARAM_START + mapped_player * ORACLE_PARAMS_PER_PLAYER;
             for param_idx in 0..ORACLE_PARAMS_PER_PLAYER {
-                let value = if player > 0 {
+                let posterior_value = if player > 0 {
                     let mean = posterior_means[player - 1];
                     (match param_idx {
                         0 => mean.wa,
@@ -403,7 +409,25 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
                 } else {
                     0.0
                 };
-                fill_plane(&mut plane_bytes, param_start + param_idx, value);
+                let oracle_value = if player > 0 {
+                    match param_idx {
+                        0 => slot.input.wa[player - 1],
+                        1 => slot.input.wb[player - 1],
+                        2 => slot.input.wc[player - 1],
+                        3 => slot.input.wd[player - 1],
+                        4 => slot.input.eps[player - 1],
+                        _ => 0.0,
+                    }
+                } else {
+                    0.0
+                };
+                fill_plane(&mut plane_bytes, param_start + param_idx, posterior_value);
+                let feature_idx = mapped_player * ORACLE_PARAMS_PER_PLAYER + param_idx;
+                let feature_offset = feature_idx * std::mem::size_of::<u16>();
+                critic_posterior_bytes[feature_offset..feature_offset + 2]
+                    .copy_from_slice(&f32_to_f16_bits(posterior_value).to_le_bytes());
+                critic_oracle_bytes[feature_offset..feature_offset + 2]
+                    .copy_from_slice(&f32_to_f16_bits(oracle_value as f32).to_le_bytes());
             }
         }
     }
@@ -549,6 +573,8 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
 
     EncodedSlot {
         plane_bytes,
+        critic_posterior_bytes,
+        critic_oracle_bytes,
         mask,
         reward: slot.reward as f32,
         done: if slot.done { 1 } else { 0 },
@@ -601,15 +627,22 @@ fn f32_to_f16_bits(value: f32) -> u16 {
 fn write_encoded_obs(slots: &[EnvSlot], out: &mut impl Write) -> io::Result<()> {
     writeln!(
         out,
-        "OKF16 {} {} {} {}",
+        "OKF16 {} {} {} {} {}",
         slots.len(),
         NUM_PLANES,
         BOARD_SIZE,
-        BOARD_SIZE
+        BOARD_SIZE,
+        MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER
     )?;
     let encoded = encode_slots(slots);
     for item in &encoded {
         out.write_all(&item.plane_bytes)?;
+    }
+    for item in &encoded {
+        out.write_all(&item.critic_posterior_bytes)?;
+    }
+    for item in &encoded {
+        out.write_all(&item.critic_oracle_bytes)?;
     }
 
     let mut mask_bytes = Vec::with_capacity(encoded.len() * BOARD_SIZE * BOARD_SIZE);

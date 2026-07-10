@@ -1,6 +1,7 @@
 import numpy as np
 
 from ahcrl.contests.ahc061.encoder import (
+    CRITIC_FEATURE_SHAPE,
     NUM_PLANES,
     PLANE_COMP_START,
     PLANE_DIST_CENTER,
@@ -34,6 +35,10 @@ def test_rust_vec_env_reset_and_step() -> None:
         assert obs["reward"].shape == (1,)
         assert obs["done"].shape == (1,)
         assert obs["score"].shape == (1,)
+        assert obs["critic_posterior"].shape == (1, *CRITIC_FEATURE_SHAPE)
+        assert obs["critic_oracle"].shape == (1, *CRITIC_FEATURE_SHAPE)
+        assert obs["critic_posterior"].dtype == np.float16
+        assert obs["critic_oracle"].dtype == np.float16
         np.testing.assert_allclose(obs["planes"][0, PLANE_M, 0, 0], 4 / 8, rtol=1e-3)
         np.testing.assert_allclose(obs["planes"][0, PLANE_U, 0, 0], 3 / 5, rtol=1e-3)
         np.testing.assert_array_equal(
@@ -58,6 +63,20 @@ def test_rust_vec_env_reset_and_step() -> None:
         assert np.all(np.isfinite(ai1_param_planes))
         assert np.all((0.3 <= ai1_param_planes[:4]) & (ai1_param_planes[:4] <= 1.0))
         assert np.all((0.1 <= ai1_param_planes[4]) & (ai1_param_planes[4] <= 0.5))
+        expected_posterior = np.empty(CRITIC_FEATURE_SHAPE, dtype=np.float16)
+        for player in range(CRITIC_FEATURE_SHAPE[0]):
+            for param in range(5):
+                expected_posterior[player, param] = obs["planes"][
+                    0,
+                    PLANE_ORACLE_PARAM_START + player * 5 + param,
+                    0,
+                    0,
+                ]
+        np.testing.assert_array_equal(obs["critic_posterior"][0], expected_posterior)
+        assert np.all(obs["critic_oracle"][0, 0] == 0.0)
+        oracle_weights = obs["critic_oracle"][0, 1, :4]
+        assert np.all((0.3 <= oracle_weights) & (oracle_weights <= 1.0))
+        assert 0.1 <= obs["critic_oracle"][0, 1, 4] <= 0.5
         ai1_next = obs["planes"][0, PLANE_NEXT_GREEDY_START + 1].reshape(100)
         assert np.all(np.isfinite(ai1_next))
         assert np.all(ai1_next >= 0.0)

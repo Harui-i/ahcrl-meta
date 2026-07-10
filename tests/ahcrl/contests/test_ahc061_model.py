@@ -3,7 +3,7 @@ from typing import Any, cast
 import pytest
 import torch
 
-from ahcrl.contests.ahc061.encoder import BOARD_SIZE, NUM_PLANES
+from ahcrl.contests.ahc061.encoder import BOARD_SIZE, CRITIC_FEATURE_SHAPE, NUM_PLANES
 from ahcrl.contests.ahc061.model import ActorCritic
 
 
@@ -31,6 +31,17 @@ def test_actor_critic_output_shapes(block_type: str) -> None:
 
 def test_actor_critic_can_be_traced() -> None:
     model = ActorCritic(channels=8, blocks=1).eval()
+    x = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+
+    traced = cast(Any, torch.jit.trace(model, x, strict=True))
+    logits, value = traced(x)
+
+    assert logits.shape == (1, BOARD_SIZE * BOARD_SIZE)
+    assert value.shape == (1,)
+
+
+def test_critic_actor_critic_can_be_traced_without_critic_features() -> None:
+    model = ActorCritic(channels=8, blocks=1, critic_feature_mode="oracle").eval()
     x = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
 
     traced = cast(Any, torch.jit.trace(model, x, strict=True))
@@ -78,6 +89,26 @@ def test_value_head_receives_gradients() -> None:
         if name.startswith("value.") and parameter.grad is not None
     )
     assert grad_norm > 0.0
+
+
+def test_critic_features_only_affect_value_head() -> None:
+    model = ActorCritic(channels=8, blocks=1, critic_feature_mode="oracle")
+    x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+    zero_features = torch.zeros(3, *CRITIC_FEATURE_SHAPE)
+    oracle_features = torch.rand(3, *CRITIC_FEATURE_SHAPE)
+
+    zero_logits, zero_value = model(x, zero_features)
+    oracle_logits, oracle_value = model(x, oracle_features)
+    oracle_value.square().mean().backward()
+
+    assert torch.equal(zero_logits, oracle_logits)
+    assert zero_value.shape == oracle_value.shape == (3,)
+    critic_grad_norm = sum(
+        parameter.grad.abs().sum().item()
+        for name, parameter in model.named_parameters()
+        if name.startswith("value.critic_") and parameter.grad is not None
+    )
+    assert critic_grad_norm > 0.0
 
 
 def test_actor_critic_rejects_unknown_block_type() -> None:

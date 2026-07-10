@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .encoder import BOARD_SIZE, NUM_PLANES
+from .encoder import BOARD_SIZE, CRITIC_FEATURE_SHAPE, CRITIC_FEATURE_SIZE, NUM_PLANES
 
 ROOT = Path(__file__).resolve().parents[4]
 RL_TOOLS_MANIFEST = ROOT / "contests" / "ahc-061" / "rl-tools" / "Cargo.toml"
@@ -170,18 +170,19 @@ class RustVecEnv:
         self,
         proc: subprocess.Popen[bytes],
         expected_num_envs: int,
-    ) -> np.dtype:
+    ) -> tuple[np.dtype, int]:
         header = self._readline(proc)
         if header.startswith("ERR"):
             raise RuntimeError(header)
         parts = header.split()
-        if len(parts) != 5 or parts[0] not in {"OK", "OKF16"}:
+        if len(parts) != 6 or parts[0] not in {"OK", "OKF16"}:
             raise RuntimeError(f"unexpected rl_env header: {header!r}")
         planes_dtype = np.dtype("<f2") if parts[0] == "OKF16" else np.dtype("<f4")
         nenv = int(parts[1])
         planes = int(parts[2])
         height = int(parts[3])
         width = int(parts[4])
+        critic_feature_size = int(parts[5])
         if nenv != expected_num_envs:
             raise RuntimeError(f"unexpected env count {nenv}, expected {expected_num_envs}")
         if (planes, height, width) != (NUM_PLANES, BOARD_SIZE, BOARD_SIZE):
@@ -189,7 +190,12 @@ class RustVecEnv:
                 f"unexpected encoded shape {(planes, height, width)}, "
                 f"expected {(NUM_PLANES, BOARD_SIZE, BOARD_SIZE)}"
             )
-        return planes_dtype
+        if critic_feature_size != CRITIC_FEATURE_SIZE:
+            raise RuntimeError(
+                f"unexpected critic feature size {critic_feature_size}, "
+                f"expected {CRITIC_FEATURE_SIZE}"
+            )
+        return planes_dtype, critic_feature_size
 
     def _read_exact_into(self, proc: subprocess.Popen[bytes], view: memoryview) -> None:
         if proc.stdout is None:
@@ -208,39 +214,52 @@ class RustVecEnv:
     def _read_obs_all(self) -> dict[str, np.ndarray]:
         plane_itemsize: int | None = None
         plane_dtype: np.dtype | None = None
-        headers: list[tuple[subprocess.Popen[bytes], int, np.dtype]] = []
+        headers: list[tuple[subprocess.Popen[bytes], int, np.dtype, int]] = []
         for proc, count in zip(self.procs, self.worker_env_counts, strict=True):
-            dtype = self._read_obs_header(proc, count)
+            dtype, critic_feature_size = self._read_obs_header(proc, count)
             if plane_dtype is None:
                 plane_dtype = dtype
                 plane_itemsize = dtype.itemsize
             elif dtype != plane_dtype:
                 raise RuntimeError(f"mixed plane dtypes from workers: {plane_dtype} and {dtype}")
-            headers.append((proc, count, dtype))
+            headers.append((proc, count, dtype, critic_feature_size))
 
         assert plane_dtype is not None
         assert plane_itemsize is not None
         per_env_planes_size = NUM_PLANES * BOARD_SIZE * BOARD_SIZE * plane_itemsize
+        per_env_critic_feature_size = CRITIC_FEATURE_SIZE * plane_itemsize
         per_env_mask_size = BOARD_SIZE * BOARD_SIZE
         reward_itemsize = np.dtype("<f4").itemsize
         score_itemsize = np.dtype("<i8").itemsize
 
         planes_data = self._buffer("planes", self.num_envs * per_env_planes_size)
+        posterior_data = self._buffer(
+            "critic_posterior",
+            self.num_envs * per_env_critic_feature_size,
+        )
+        oracle_data = self._buffer(
+            "critic_oracle",
+            self.num_envs * per_env_critic_feature_size,
+        )
         mask_data = self._buffer("mask", self.num_envs * per_env_mask_size)
         reward_data = self._buffer("reward", self.num_envs * reward_itemsize)
         done_data = self._buffer("done", self.num_envs)
         score_data = self._buffer("score", self.num_envs * score_itemsize)
 
         planes_view = memoryview(planes_data)
+        posterior_view = memoryview(posterior_data)
+        oracle_view = memoryview(oracle_data)
         mask_view = memoryview(mask_data)
         reward_view = memoryview(reward_data)
         done_view = memoryview(done_data)
         score_view = memoryview(score_data)
 
         env_offset = 0
-        for proc, count, _ in headers:
+        for proc, count, _, _ in headers:
             plane_start = env_offset * per_env_planes_size
             plane_end = plane_start + count * per_env_planes_size
+            critic_start = env_offset * per_env_critic_feature_size
+            critic_end = critic_start + count * per_env_critic_feature_size
             mask_start = env_offset * per_env_mask_size
             mask_end = mask_start + count * per_env_mask_size
             reward_start = env_offset * reward_itemsize
@@ -249,6 +268,8 @@ class RustVecEnv:
             score_end = score_start + count * score_itemsize
 
             self._read_exact_into(proc, planes_view[plane_start:plane_end])
+            self._read_exact_into(proc, posterior_view[critic_start:critic_end])
+            self._read_exact_into(proc, oracle_view[critic_start:critic_end])
             self._read_exact_into(proc, mask_view[mask_start:mask_end])
             self._read_exact_into(proc, reward_view[reward_start:reward_end])
             self._read_exact_into(proc, done_view[env_offset : env_offset + count])
@@ -265,6 +286,14 @@ class RustVecEnv:
                 NUM_PLANES,
                 BOARD_SIZE,
                 BOARD_SIZE,
+            ),
+            "critic_posterior": np.frombuffer(posterior_data, dtype=plane_dtype).reshape(
+                self.num_envs,
+                *CRITIC_FEATURE_SHAPE,
+            ),
+            "critic_oracle": np.frombuffer(oracle_data, dtype=plane_dtype).reshape(
+                self.num_envs,
+                *CRITIC_FEATURE_SHAPE,
             ),
             "mask": np.frombuffer(mask_data, dtype=np.bool_).reshape(
                 self.num_envs,
