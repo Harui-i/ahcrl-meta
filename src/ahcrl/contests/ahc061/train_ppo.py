@@ -56,6 +56,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "model_blocks": 4,
     "model_block_type": "convnext",
     "model_reset_interval_steps": 0,
+    "reset_previous_weight_mix": 0.0,
     "reset_reference_kl_coef": 0.1,
     "reset_reference_kl_decay_steps": 1_250_000,
     "wandb_enabled": False,
@@ -68,8 +69,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
 RESUME_ALLOWED_OVERRIDE_KEYS = {
     "total_steps",
     "model_reset_interval_steps",
+    "reset_previous_weight_mix",
     "reset_reference_kl_coef",
     "reset_reference_kl_decay_steps",
+    "epochs",
+    "lr",
+    "num_envs",
     "wandb_name",
 }
 RUNTIME_CONFIG_KEYS = {"config", "resume_dir", "run_dir", "init_checkpoint"}
@@ -617,6 +622,28 @@ def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
     ).to(device=device, dtype=MODEL_DTYPE)
 
 
+@torch.no_grad()
+def mix_model_parameters_(
+    model: nn.Module,
+    previous_model: nn.Module,
+    *,
+    previous_weight_mix: float,
+) -> None:
+    """Mix fresh model parameters with a previous model in-place."""
+
+    if not 0.0 <= previous_weight_mix <= 1.0:
+        raise ValueError(f"previous_weight_mix must be in [0, 1], got {previous_weight_mix}")
+    model_parameters = dict(model.named_parameters())
+    previous_parameters = dict(previous_model.named_parameters())
+    if model_parameters.keys() != previous_parameters.keys():
+        raise ValueError("model and previous_model must have identical parameters")
+    for name, parameter in model_parameters.items():
+        previous_parameter = previous_parameters[name]
+        if parameter.shape != previous_parameter.shape:
+            raise ValueError(f"parameter shape mismatch for {name}")
+        parameter.lerp_(previous_parameter, previous_weight_mix)
+
+
 def reference_kl_coef(
     args: argparse.Namespace,
     *,
@@ -777,6 +804,13 @@ def main() -> None:
                 reference_model.load_state_dict(raw_model.state_dict())
                 reference_model.eval()
                 raw_model = create_model(args, device)
+                if args.reset_previous_weight_mix > 0.0:
+                    mix_model_parameters_(
+                        raw_model,
+                        reference_model,
+                        previous_weight_mix=args.reset_previous_weight_mix,
+                    )
+                    project_hyperspherical_weights_(raw_model)
                 optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
                 model = cast(nn.Module, torch.compile(raw_model)) if args.compile else raw_model
                 last_model_reset_step = global_step
@@ -818,6 +852,9 @@ def main() -> None:
                     args.fixed_u,
                 )
                 next_seed_start = _advance_seed_start(checkpoint_seed_start, args)
+            stats["reset_previous_weight_mix"] = (
+                args.reset_previous_weight_mix if did_model_reset else 0.0
+            )
             log_metrics = build_log_metrics(
                 update=update,
                 global_step=global_step,
@@ -1545,6 +1582,7 @@ def build_log_metrics(
         "loss/reference_kl": stats.get("reference_kl_loss", 0.0),
         "train/model_reset_count": model_reset_count,
         "train/steps_since_model_reset": steps_since_model_reset,
+        "train/reset_previous_weight_mix": stats.get("reset_previous_weight_mix", 0.0),
         "event/model_reset": int(did_model_reset),
         "model/grad_norm": stats["grad_norm"],
         "model/weight_norm": stats["weight_norm"],
@@ -1659,6 +1697,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-channels", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-blocks", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-reset-interval-steps", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--reset-previous-weight-mix", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--reset-reference-kl-coef", type=float, default=argparse.SUPPRESS)
     parser.add_argument(
         "--reset-reference-kl-decay-steps",
@@ -1732,6 +1771,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("checkpoint_interval_updates must be positive")
     if config["model_reset_interval_steps"] < 0:
         raise ValueError("model_reset_interval_steps must be non-negative")
+    if not 0.0 <= config["reset_previous_weight_mix"] <= 1.0:
+        raise ValueError("reset_previous_weight_mix must be in [0, 1]")
     if config["reset_reference_kl_coef"] < 0.0:
         raise ValueError("reset_reference_kl_coef must be non-negative")
     if config["reset_reference_kl_decay_steps"] <= 0:
@@ -1763,7 +1804,8 @@ def validate_resume_overrides(overrides: dict[str, Any]) -> None:
     disallowed = sorted(set(overrides) - RESUME_ALLOWED_OVERRIDE_KEYS)
     if disallowed:
         raise ValueError(
-            "resume only allows overriding total_steps; disallowed keys: " + ", ".join(disallowed)
+            "resume only allows approved training overrides; disallowed keys: "
+            + ", ".join(disallowed)
         )
 
 

@@ -21,6 +21,7 @@ from ahcrl.contests.ahc061.train_ppo import (
     config_for_save,
     load_initial_model,
     load_training_state,
+    mix_model_parameters_,
     parse_args,
     reference_kl_coef,
     save_training_state,
@@ -107,6 +108,7 @@ def test_parse_args_compile_defaults_to_true_and_can_be_disabled() -> None:
     assert parse_args(["--device", "cpu"]).pf_particles == 16
     assert parse_args(["--device", "cpu"]).weight_projection is False
     assert parse_args(["--device", "cpu"]).model_reset_interval_steps == 0
+    assert parse_args(["--device", "cpu"]).reset_previous_weight_mix == 0.0
     assert parse_args(["--device", "cpu"]).reset_reference_kl_coef == 0.1
     assert parse_args(["--device", "cpu"]).reset_reference_kl_decay_steps == 1_250_000
     assert parse_args(["--device", "cpu"]).obs_norm_mode == "none"
@@ -209,8 +211,16 @@ def test_parse_args_resume_loads_saved_config_and_only_allows_total_steps(
             str(run_dir),
             "--total-steps",
             "256",
+            "--num-envs",
+            "8",
+            "--epochs",
+            "2",
+            "--lr",
+            "0.0003",
             "--model-reset-interval-steps",
             "5000000",
+            "--reset-previous-weight-mix",
+            "0.5",
             "--reset-reference-kl-coef",
             "0.1",
             "--reset-reference-kl-decay-steps",
@@ -222,15 +232,18 @@ def test_parse_args_resume_loads_saved_config_and_only_allows_total_steps(
 
     assert resumed.resume_dir == run_dir
     assert resumed.total_steps == 256
-    assert resumed.num_envs == 4
+    assert resumed.epochs == 2
+    assert resumed.lr == 0.0003
+    assert resumed.num_envs == 8
     assert resumed.device == "cpu"
     assert resumed.model_reset_interval_steps == 5_000_000
+    assert resumed.reset_previous_weight_mix == 0.5
     assert resumed.reset_reference_kl_coef == 0.1
     assert resumed.reset_reference_kl_decay_steps == 3_500_000
     assert resumed.wandb_name == "resumed-run"
 
-    with pytest.raises(ValueError, match="resume only allows overriding total_steps"):
-        parse_args(["--resume-dir", str(run_dir), "--lr", "0.001"])
+    with pytest.raises(ValueError, match="resume only allows approved training overrides"):
+        parse_args(["--resume-dir", str(run_dir), "--gamma", "0.95"])
 
 
 def test_parse_args_rejects_resume_with_init_checkpoint(tmp_path: Path) -> None:
@@ -475,6 +488,21 @@ def test_reference_kl_coef_linearly_decays_after_model_reset() -> None:
         )
         == 0.0
     )
+
+
+def test_mix_model_parameters_interpolates_fresh_and_previous_weights() -> None:
+    model = torch.nn.Linear(2, 1)
+    previous_model = torch.nn.Linear(2, 1)
+    with torch.no_grad():
+        model.weight.fill_(2.0)
+        model.bias.fill_(2.0)
+        previous_model.weight.fill_(6.0)
+        previous_model.bias.fill_(6.0)
+
+    mix_model_parameters_(model, previous_model, previous_weight_mix=0.25)
+
+    assert torch.equal(model.weight, torch.full_like(model.weight, 3.0))
+    assert torch.equal(model.bias, torch.full_like(model.bias, 3.0))
 
 
 def test_running_reward_scaler_uses_discounted_return_variance_and_g_max_floor() -> None:
