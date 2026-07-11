@@ -22,6 +22,7 @@ from ahcrl.contests.ahc061.train_ppo import (
     load_initial_model,
     load_training_state,
     parse_args,
+    reference_kl_coef,
     save_training_state,
 )
 
@@ -105,6 +106,9 @@ def test_parse_args_compile_defaults_to_true_and_can_be_disabled() -> None:
     assert parse_args(["--device", "cpu", "--no-compile"]).compile is False
     assert parse_args(["--device", "cpu"]).pf_particles == 16
     assert parse_args(["--device", "cpu"]).weight_projection is False
+    assert parse_args(["--device", "cpu"]).model_reset_interval_steps == 0
+    assert parse_args(["--device", "cpu"]).reset_reference_kl_coef == 0.1
+    assert parse_args(["--device", "cpu"]).reset_reference_kl_decay_steps == 1_250_000
     assert parse_args(["--device", "cpu"]).obs_norm_mode == "none"
     assert parse_args(["--device", "cpu"]).normalization_grouping == "none"
     assert parse_args(["--device", "cpu", "--weight-projection"]).weight_projection is True
@@ -205,6 +209,14 @@ def test_parse_args_resume_loads_saved_config_and_only_allows_total_steps(
             str(run_dir),
             "--total-steps",
             "256",
+            "--model-reset-interval-steps",
+            "5000000",
+            "--reset-reference-kl-coef",
+            "0.1",
+            "--reset-reference-kl-decay-steps",
+            "3500000",
+            "--wandb-name",
+            "resumed-run",
         ]
     )
 
@@ -212,6 +224,10 @@ def test_parse_args_resume_loads_saved_config_and_only_allows_total_steps(
     assert resumed.total_steps == 256
     assert resumed.num_envs == 4
     assert resumed.device == "cpu"
+    assert resumed.model_reset_interval_steps == 5_000_000
+    assert resumed.reset_reference_kl_coef == 0.1
+    assert resumed.reset_reference_kl_decay_steps == 3_500_000
+    assert resumed.wandb_name == "resumed-run"
 
     with pytest.raises(ValueError, match="resume only allows overriding total_steps"):
         parse_args(["--resume-dir", str(run_dir), "--lr", "0.001"])
@@ -376,6 +392,7 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     )
     obs_normalizer = RunningObservationNormalizer(channels=NUM_PLANES, epsilon=1e-8)
     obs_normalizer.update(torch.ones(2, NUM_PLANES, 10, 10))
+    reference_model = ActorCritic(channels=8, blocks=1).to(dtype=MODEL_DTYPE)
     torch.manual_seed(123)
 
     checkpoint_path = save_training_state(
@@ -388,6 +405,9 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
         wandb_run_id="abc123",
         reward_scaler=reward_scaler,
         obs_normalizer=obs_normalizer,
+        reference_model=reference_model,
+        last_model_reset_step=96,
+        model_reset_count=2,
     )
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -411,11 +431,50 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     assert state["global_step"] == 128
     assert state["update"] == 2
     assert state["next_seed_start"] == 64
+    assert state["last_model_reset_step"] == 96
+    assert state["model_reset_count"] == 2
+    assert state["reference_model_state"] is not None
     assert state["reward_scaler_state"] == reward_scaler.state_dict()
     assert state["obs_normalizer_state"]["count"] == obs_normalizer.state_dict()["count"]
     assert torch.equal(state["obs_normalizer_state"]["mean"], obs_normalizer.state_dict()["mean"])
     for left, right in zip(model.parameters(), reloaded_model.parameters(), strict=True):
         assert torch.equal(left, right)
+
+
+def test_reference_kl_coef_linearly_decays_after_model_reset() -> None:
+    args = parse_args(
+        [
+            "--device",
+            "cpu",
+            "--reset-reference-kl-coef",
+            "0.2",
+            "--reset-reference-kl-decay-steps",
+            "100",
+        ]
+    )
+    reference = torch.nn.Identity()
+
+    assert reference_kl_coef(
+        args,
+        global_step=1_000,
+        last_model_reset_step=1_000,
+        reference_model=reference,
+    ) == pytest.approx(0.2)
+    assert reference_kl_coef(
+        args,
+        global_step=1_050,
+        last_model_reset_step=1_000,
+        reference_model=reference,
+    ) == pytest.approx(0.1)
+    assert (
+        reference_kl_coef(
+            args,
+            global_step=1_100,
+            last_model_reset_step=1_000,
+            reference_model=reference,
+        )
+        == 0.0
+    )
 
 
 def test_running_reward_scaler_uses_discounted_return_variance_and_g_max_floor() -> None:

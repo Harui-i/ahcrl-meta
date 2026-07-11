@@ -1,6 +1,6 @@
 [train]
 num_envs = 1024
-total_steps = 10000000
+total_steps = 20000000
 rollout_steps = 100
 seed_start = 0
 seed_stride = 1
@@ -28,6 +28,9 @@ checkpoint_interval_updates = 40
 model_channels = 256
 model_blocks = 2
 model_block_type = "spherical_attention_simba"
+model_reset_interval_steps = 5000000
+reset_reference_kl_coef = 0.1
+reset_reference_kl_decay_steps = 1250000
 wandb_enabled = true
 wandb_project = "ahcrl-meta"
 wandb_name = "ahc061-ppo"

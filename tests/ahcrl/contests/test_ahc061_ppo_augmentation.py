@@ -116,6 +116,9 @@ def test_update_model_respects_symmetry_augmentation(
         "approx_kl",
         "clip_frac",
         "grad_norm",
+        "reference_forward_kl",
+        "reference_kl_loss",
+        "reference_kl_coef",
         "weight_norm",
         "linear_conv_weight_norm",
         "norm_affine_norm",
@@ -127,6 +130,47 @@ def test_update_model_respects_symmetry_augmentation(
     assert stats["param_rms"] > 0.0
     assert torch.isfinite(model.policy).all()
     assert optimizer.step_count == expected_steps
+
+
+def test_update_model_adds_forward_kl_without_reference_gradients() -> None:
+    model = TinyActorCritic()
+    reference = TinyActorCritic()
+    with torch.no_grad():
+        reference.policy[0] = 2.0
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+    rollout = {
+        "obs": torch.randn(1, 2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE),
+        "actions": torch.tensor([[0, 1]]),
+        "logprobs": torch.zeros(1, 2),
+        "advantages": torch.tensor([[1.0, -1.0]]),
+        "returns": torch.tensor([[0.5, -0.5]]),
+        "masks": torch.ones(1, 2, BOARD_SIZE * BOARD_SIZE, dtype=torch.bool),
+    }
+    args = argparse.Namespace(
+        epochs=1,
+        minibatch_size=2,
+        clip=0.2,
+        value_coef=0.5,
+        entropy_coef=0.01,
+        max_grad_norm=0.5,
+        weight_projection=False,
+        symmetry_augmentation="none",
+    )
+
+    stats = update_model(
+        model,
+        model,
+        optimizer,
+        rollout,
+        args,
+        torch.device("cpu"),
+        reference_model=reference,
+        reference_kl_coef=0.1,
+    )
+
+    assert stats["reference_forward_kl"] > 0.0
+    assert stats["reference_kl_loss"] == pytest.approx(0.1 * stats["reference_forward_kl"])
+    assert all(parameter.grad is None for parameter in reference.parameters())
 
 
 def test_update_model_reports_average_clip_fraction_across_minibatches() -> None:
