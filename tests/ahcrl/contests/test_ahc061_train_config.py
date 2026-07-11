@@ -274,6 +274,10 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
         "policy_loss": 0.01,
         "value_loss": 0.02,
         "entropy": 0.03,
+        "weighted_policy_loss": 0.01,
+        "weighted_value_loss": 0.01,
+        "entropy_loss": -0.0003,
+        "total_loss": 0.0197,
         "normalized_entropy": 0.5,
         "approx_kl": 0.04,
         "clip_frac": 0.05,
@@ -316,6 +320,10 @@ def test_build_log_metrics_contains_required_wandb_stats() -> None:
     assert metrics["train/reward_scale_min_denominator"] == pytest.approx(0.2)
     assert metrics["train/explained_variance"] == pytest.approx(1.0)
     assert metrics["loss/policy"] == 0.01
+    assert metrics["loss/weighted_policy"] == 0.01
+    assert metrics["loss/weighted_value"] == 0.01
+    assert metrics["loss/entropy"] == -0.0003
+    assert metrics["loss/total"] == 0.0197
     assert metrics["train/normalized_entropy"] == 0.5
     assert metrics["model/grad_norm"] == 0.06
     assert metrics["model/weight_norm"] == 0.07

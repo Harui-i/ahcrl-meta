@@ -733,6 +733,10 @@ def main() -> None:
                         f"policy_loss={stats['policy_loss']:.5f}",
                         f"value_loss={stats['value_loss']:.5f}",
                         f"entropy={stats['entropy']:.5f}",
+                        f"weighted_policy_loss={stats['weighted_policy_loss']:.5f}",
+                        f"weighted_value_loss={stats['weighted_value_loss']:.5f}",
+                        f"entropy_loss={stats['entropy_loss']:.5f}",
+                        f"total_loss={stats['total_loss']:.5f}",
                         f"normalized_entropy={stats['normalized_entropy']:.5f}",
                         f"approx_kl={stats['approx_kl']:.5f}",
                         f"clip_frac={stats['clip_frac']:.5f}",
@@ -1078,6 +1082,10 @@ def update_model(
         "policy_loss": 0.0,
         "value_loss": 0.0,
         "entropy": 0.0,
+        "weighted_policy_loss": 0.0,
+        "weighted_value_loss": 0.0,
+        "entropy_loss": 0.0,
+        "total_loss": 0.0,
         "normalized_entropy": 0.0,
         "approx_kl": 0.0,
         "clip_frac": 0.0,
@@ -1143,6 +1151,14 @@ def update_model(
                 stat_sums["policy_loss"] += float(policy_loss.item()) * weight
                 stat_sums["value_loss"] += float(value_loss.item()) * weight
                 stat_sums["entropy"] += float(entropy.item()) * weight
+                stat_sums["weighted_policy_loss"] += float(policy_loss.item()) * weight
+                stat_sums["weighted_value_loss"] += (
+                    float((args.value_coef * value_loss).item()) * weight
+                )
+                stat_sums["entropy_loss"] += (
+                    float((-args.entropy_coef * entropy).item()) * weight
+                )
+                stat_sums["total_loss"] += float(loss.item()) * weight
                 stat_sums["normalized_entropy"] += float(normalized_entropy.item()) * weight
                 stat_sums["approx_kl"] += float(approx_kl.item()) * weight
                 stat_sums["clip_frac"] += float(clip_frac.item()) * weight
@@ -1343,6 +1359,10 @@ def build_log_metrics(
         "train/valid_action_fraction": float(masks.mean().item()),
         "loss/policy": stats["policy_loss"],
         "loss/value": stats["value_loss"],
+        "loss/weighted_policy": stats["weighted_policy_loss"],
+        "loss/weighted_value": stats["weighted_value_loss"],
+        "loss/entropy": stats["entropy_loss"],
+        "loss/total": stats["total_loss"],
         "train/entropy": stats["entropy"],
         "train/normalized_entropy": stats["normalized_entropy"],
         "train/approx_kl": stats["approx_kl"],
