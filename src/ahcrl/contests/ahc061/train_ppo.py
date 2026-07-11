@@ -613,6 +613,11 @@ def main() -> None:
         block_type=args.model_block_type,
         critic_feature_mode=args.critic_feature_mode,
     ).to(device=device, dtype=MODEL_DTYPE)
+    total_parameters, trainable_parameters = _parameter_counts(raw_model)
+    print(
+        f"model_parameters total={total_parameters} trainable={trainable_parameters}",
+        flush=True,
+    )
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, raw_model, device)
     optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
@@ -1176,6 +1181,14 @@ def update_model(
 
 def _parameter_l2_norm(model: nn.Module) -> float:
     return _parameter_norm_stats(model)["weight_norm"]
+
+
+def _parameter_counts(model: nn.Module) -> tuple[int, int]:
+    total = sum(parameter.numel() for parameter in model.parameters())
+    trainable = sum(
+        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+    )
+    return total, trainable
 
 
 def _parameter_norm_stats(model: nn.Module) -> dict[str, float]:
