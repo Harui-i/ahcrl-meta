@@ -14,13 +14,15 @@ from ahcrl.contests.ahc061.encoder import (
 )
 from ahcrl.nn.blocks import (
     ConvNeXtBlock,
-    HyperEmbedder2d,
     PerCellMLPBlock,
     ResidualBlock,
     SimbaV2Block,
     SphericalAttentionSimbaBlock,
     SphericalDepthwiseSimbaBlock,
     SphericalGlobalContextBlock,
+)
+from ahcrl.nn.components import (
+    HyperEmbedder2d,
     make_group_norm,
 )
 
