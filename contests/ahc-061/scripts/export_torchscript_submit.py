@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import struct
 import tempfile
 from pathlib import Path
 from typing import Any, cast
@@ -52,6 +53,58 @@ def c_string_literal_chunks(s: str, *, width: int = 120) -> str:
         chunk = chunk.replace("\\", "\\\\").replace('"', '\\"')
         chunks.append(f'    "{chunk}"')
     return "\n".join(chunks)
+
+
+def pack_q4_policy(checkpoint_path: Path, config: dict[str, object]) -> bytes:
+    """Pack the actor-only network as symmetric int4, with fp16 group scales.
+
+    The value head is intentionally omitted: the submission only consumes policy
+    logits.  Small tensors stay fp16, while larger tensors use 128-value groups.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
+    tensors = [
+        value.detach().float().contiguous()
+        for name, value in state_dict.items()
+        if name.startswith("trunk.") or name.startswith("policy.")
+    ]
+    obs = checkpoint.get("obs_normalizer")
+    if obs is None or obs.get("grouping") == "m_u":
+        raise ValueError("q4 submit currently requires ungrouped observation normalization")
+    count = int(obs["count"])
+    mean = obs["mean"].detach().float().contiguous()
+    variance = torch.ones_like(mean) if count <= 0 else obs["m2"].float() / count
+    invstd = torch.rsqrt(variance + float(obs.get("epsilon", 1e-8))).contiguous()
+
+    packed = bytearray(b"AHC061Q4\x01")
+    packed += struct.pack("<H", len(tensors))
+    for tensor in tensors:
+        values = tensor.reshape(-1)
+        n = values.numel()
+        if n < 2048:
+            packed += b"\x01" + struct.pack("<I", n)
+            packed += values.to(torch.float16).numpy().tobytes()
+            continue
+        packed += b"\x00" + struct.pack("<I", n)
+        codes = bytearray()
+        scales = bytearray()
+        for start in range(0, n, 128):
+            group = values[start : start + 128]
+            scale = float(group.abs().max()) / 7.0
+            if scale == 0.0:
+                scale = 1.0
+            scales += struct.pack("<e", scale)
+            quantized = torch.clamp(torch.round(group / scale), -8, 7).to(torch.int8)
+            for index in range(0, quantized.numel(), 2):
+                lo = int(quantized[index]) & 15
+                hi = int(quantized[index + 1]) & 15 if index + 1 < quantized.numel() else 0
+                codes.append(lo | (hi << 4))
+        packed += codes + scales
+    for tensor in (mean, invstd):
+        values = tensor.reshape(-1)
+        packed += b"\x01" + struct.pack("<I", values.numel())
+        packed += values.to(torch.float16).numpy().tobytes()
+    return bytes(packed)
 
 
 def export_torchscript(checkpoint_path: Path, config: dict[str, object]) -> bytes:
@@ -145,6 +198,7 @@ def render_cpp(
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -899,12 +953,185 @@ int main() {{
 """
 
 
+def render_q4_cpp(
+    encoded_model: str,
+    *,
+    checkpoint_name: str,
+    packed_size: int,
+    pf_particles: int,
+    temperature: float,
+) -> str:
+    """Render an actor-only, direct LibTorch q4 inference submission."""
+    source = render_cpp(
+        encoded_model,
+        checkpoint_name=checkpoint_name,
+        torchscript_size=packed_size,
+        pf_particles=pf_particles,
+        temperature=temperature,
+    )
+    direct_model = r'''
+using torch::Tensor;
+
+Tensor l2norm(const Tensor& x, int64_t dim) {
+    return x / torch::sqrt(torch::sum(x * x, {dim}, true) + 1e-8);
+}
+
+Tensor qlinear(const Tensor& x, const Tensor& weight, const Tensor& bias = Tensor()) {
+    Tensor y = torch::matmul(x, weight.t());
+    return bias.defined() ? y + bias : y;
+}
+
+struct Q4Reader {
+    const vector<unsigned char>& data;
+    size_t pos = 0;
+    explicit Q4Reader(const vector<unsigned char>& source) : data(source) {
+        const char magic[] = "AHC061Q4";
+        for (int i = 0; i < 8; ++i) if (data.at(pos++) != magic[i]) throw runtime_error("bad q4 model");
+        if (data.at(pos++) != 1) throw runtime_error("unsupported q4 model");
+        pos += 2;  // tensor count; the fixed actor layout below validates consumption.
+    }
+    uint32_t u32() {
+        uint32_t value = 0;
+        for (int i = 0; i < 4; ++i) value |= uint32_t(data.at(pos++)) << (8 * i);
+        return value;
+    }
+    float half() {
+        uint16_t bits = uint16_t(data.at(pos)) | (uint16_t(data.at(pos + 1)) << 8);
+        pos += 2;
+        c10::Half value;
+        memcpy(&value, &bits, sizeof(bits));
+        return static_cast<float>(value);
+    }
+    Tensor take(vector<int64_t> shape) {
+        const int mode = data.at(pos++);
+        const uint32_t n = u32();
+        int64_t expected = 1;
+        for (int64_t d : shape) expected *= d;
+        if (n != expected) throw runtime_error("q4 tensor shape mismatch: got " + to_string(n) + " expected " + to_string(expected));
+        vector<float> values(n);
+        if (mode == 1) {
+            for (uint32_t i = 0; i < n; ++i) values[i] = half();
+        } else if (mode == 0) {
+            const size_t codes = (n + 1) / 2;
+            const size_t scales = (n + 127) / 128;
+            const size_t code_start = pos;
+            pos += codes;
+            vector<float> group_scales(scales);
+            for (size_t i = 0; i < scales; ++i) group_scales[i] = half();
+            for (uint32_t i = 0; i < n; ++i) {
+                int q = (data[code_start + i / 2] >> (4 * (i & 1))) & 15;
+                if (q >= 8) q -= 16;
+                values[i] = q * group_scales[i / 128];
+            }
+        } else throw runtime_error("bad q4 tensor mode");
+        return torch::from_blob(values.data(), shape, torch::kFloat32).clone();
+    }
+};
+
+struct AttentionBlock {
+    Tensor w1, s1, w2, alpha, rel, qkv, out, out_scale, attn_alpha;
+    Tensor forward(const Tensor& input) const {
+        Tensor x = input;
+        Tensor y = x.permute({0, 2, 3, 1});
+        y = qlinear(y, w1) * s1;
+        y = torch::relu(y) + 1e-8;
+        y = l2norm(qlinear(y, w2), -1).permute({0, 3, 1, 2});
+        Tensor mixed = x + ((y - x).permute({0, 2, 3, 1}) * alpha).permute({0, 3, 1, 2});
+        x = l2norm(mixed, 1);
+
+        y = x.permute({0, 2, 3, 1}).reshape({1, 100, 64});
+        Tensor qkv_value = qlinear(y, qkv).view({1, 100, 3, 4, 16});
+        Tensor q = l2norm(qkv_value.select(2, 0), -1).permute({0, 2, 1, 3});
+        Tensor k = l2norm(qkv_value.select(2, 1), -1).permute({0, 2, 1, 3});
+        Tensor v = qkv_value.select(2, 2).permute({0, 2, 1, 3});
+        Tensor logits = torch::matmul(q, k.transpose(-2, -1)) * 4.0 + rel;
+        Tensor attended = torch::matmul(torch::softmax(logits, -1), v)
+            .permute({0, 2, 1, 3}).reshape({1, 100, 64});
+        Tensor target = l2norm(qlinear(attended, out) * out_scale, -1)
+            .view({1, 10, 10, 64}).permute({0, 3, 1, 2});
+        mixed = x + ((target - x).permute({0, 2, 3, 1}) * attn_alpha).permute({0, 3, 1, 2});
+        return l2norm(mixed, 1);
+    }
+};
+
+struct Q4Policy {
+    Tensor embed, embed_scale, policy1, gn_weight, gn_bias, policy2, policy2_bias, mean, invstd;
+    vector<AttentionBlock> blocks;
+    explicit Q4Policy(const vector<unsigned char>& bytes) {
+        Q4Reader reader(bytes);
+        embed = reader.take({64, 155}); embed_scale = reader.take({64});
+        for (int i = 0; i < 8; ++i) {
+            AttentionBlock b;
+            b.w1 = reader.take({256, 64}); b.s1 = reader.take({256}); b.w2 = reader.take({64, 256});
+            b.alpha = reader.take({64}); b.rel = reader.take({4, 19, 19}); b.qkv = reader.take({192, 64});
+            b.out = reader.take({64, 64}); b.out_scale = reader.take({64}); b.attn_alpha = reader.take({64});
+            vector<float> bias(4 * 100 * 100);
+            auto a = b.rel.accessor<float, 3>();
+            for (int h = 0; h < 4; ++h) for (int i = 0; i < 100; ++i) for (int j = 0; j < 100; ++j)
+                bias[(h * 100 + i) * 100 + j] = a[h][i / 10 - j / 10 + 9][i % 10 - j % 10 + 9];
+            b.rel = torch::from_blob(bias.data(), {1, 4, 100, 100}, torch::kFloat32).clone();
+            blocks.push_back(move(b));
+        }
+        policy1 = reader.take({64, 64, 1, 1}); gn_weight = reader.take({64}); gn_bias = reader.take({64});
+        policy2 = reader.take({1, 64, 1, 1}); policy2_bias = reader.take({1});
+        mean = reader.take({NUM_PLANES, 1, 1}); invstd = reader.take({NUM_PLANES, 1, 1});
+    }
+    Tensor forward(const Tensor& input) const {
+        Tensor raw = input.to(torch::kFloat32);
+        Tensor x = (raw - mean) * invstd;
+        x = x.permute({0, 2, 3, 1});
+        Tensor shift = torch::full({1, 10, 10, 1}, 3.0, torch::kFloat32);
+        x = l2norm(torch::cat({x, shift}, -1), -1);
+        x = l2norm(qlinear(x, embed) * embed_scale, -1).permute({0, 3, 1, 2});
+        for (const auto& block : blocks) x = block.forward(x);
+        x = qlinear(x.permute({0, 2, 3, 1}), policy1.reshape({64, 64})).permute({0, 3, 1, 2});
+        Tensor grouped = x.view({1, 8, 8, 10, 10});
+        Tensor mu = grouped.mean({2, 3, 4}, true);
+        Tensor centered = grouped - mu;
+        x = (centered / torch::sqrt((centered * centered).mean({2, 3, 4}, true) + 1e-5)).view({1, 64, 10, 10});
+        x = x * gn_weight.view({1, 64, 1, 1}) + gn_bias.view({1, 64, 1, 1});
+        x = torch::relu(x).permute({0, 2, 3, 1});
+        return qlinear(x, policy2.reshape({1, 64}), policy2_bias).reshape({1, 100});
+    }
+};
+'''
+    source = source.replace("\nstruct State {", "\n" + direct_model + "\nstruct State {")
+    source = source.replace(
+        "torch::jit::script::Module load_model() {\n"
+        "    vector<unsigned char> model_bytes = decode_base91(kEncodedModel);\n"
+        "    string model_data(reinterpret_cast<const char*>(model_bytes.data()), model_bytes.size());\n"
+        "    istringstream input(model_data, ios::binary);\n"
+        "    torch::NoGradGuard no_grad;\n"
+        "    auto module = torch::jit::load(input, torch::kCPU);\n"
+        "    module.eval();\n"
+        "    return module;\n"
+        "}",
+        "Q4Policy load_model() { return Q4Policy(decode_base91(kEncodedModel)); }",
+    )
+    source = source.replace("torch::jit::script::Module& module,", "Q4Policy& module,")
+    source = source.replace(
+        "auto output = module.forward({input}).toTuple();\n"
+        "    torch::Tensor logits = output->elements()[0].toTensor()\n"
+        "        .to(torch::kFloat32)\n"
+        "        .reshape({N * N})\n"
+        "        .contiguous();",
+        "torch::Tensor logits = module.forward(input).reshape({N * N}).contiguous();",
+    )
+    source = source.replace("torch::jit::script::Module module = load_model();", "Q4Policy module = load_model();")
+    return source
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--pf-particles", type=int)
+    parser.add_argument(
+        "--quantized-q4",
+        action="store_true",
+        help="emit an actor-only 4-bit grouped-quantized submission",
+    )
     parser.add_argument(
         "--temperature",
         type=float,
@@ -918,10 +1145,24 @@ def main() -> None:
     checkpoint = args.checkpoint or (run_dir / "checkpoint_latest.pt")
     output = args.output or (run_dir / "submit.cpp")
 
-    torchscript = export_torchscript(checkpoint, config)
-    encoded = base91_encode(torchscript)
-    output.write_text(
-        render_cpp(
+    if args.quantized_q4:
+        packed = pack_q4_policy(checkpoint, config)
+        encoded = base91_encode(packed)
+        rendered = render_q4_cpp(
+            encoded,
+            checkpoint_name=checkpoint.stem.replace("step_", "s").replace(
+                "checkpoint_latest",
+                "latest",
+            ),
+            packed_size=len(packed),
+            pf_particles=int(args.pf_particles or config.get("pf_particles", 16)),
+            temperature=args.temperature,
+        )
+        print(f"q4_packed_bytes={len(packed)}")
+    else:
+        torchscript = export_torchscript(checkpoint, config)
+        encoded = base91_encode(torchscript)
+        rendered = render_cpp(
             encoded,
             checkpoint_name=checkpoint.stem.replace("step_", "s").replace(
                 "checkpoint_latest",
@@ -931,9 +1172,9 @@ def main() -> None:
             pf_particles=int(args.pf_particles or config.get("pf_particles", 16)),
             temperature=args.temperature,
         )
-    )
+        print(f"torchscript_bytes={len(torchscript)}")
+    output.write_text(rendered)
     print(f"checkpoint={checkpoint}")
-    print(f"torchscript_bytes={len(torchscript)}")
     print(f"base91_chars={len(encoded)}")
     print(f"output={output}")
 

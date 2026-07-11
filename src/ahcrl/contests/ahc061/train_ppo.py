@@ -59,6 +59,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "reset_previous_weight_mix": 0.0,
     "reset_reference_kl_coef": 0.1,
     "reset_reference_kl_decay_steps": 1_250_000,
+    "distillation_teacher_checkpoint": None,
+    "distillation_kl_coef": 0.0,
     "wandb_enabled": False,
     "wandb_project": "ahcrl-meta",
     "wandb_entity": None,
@@ -697,6 +699,13 @@ def main() -> None:
     last_model_reset_step = 0
     model_reset_count = 0
     reference_model: ActorCritic | None = None
+    distillation_teacher_model: ActorCritic | None = None
+    distillation_teacher_normalizer: ObservationNormalizer | None = None
+    if args.distillation_teacher_checkpoint is not None:
+        distillation_teacher_model, distillation_teacher_normalizer = load_distillation_teacher(
+            args.distillation_teacher_checkpoint,
+            device,
+        )
     if args.resume_dir is not None:
         resume_state = load_training_state(args.resume_dir, raw_model, optimizer, device)
         global_step = resume_state["global_step"]
@@ -747,6 +756,8 @@ def main() -> None:
                 device,
                 reward_scaler=reward_scaler,
                 obs_normalizer=obs_normalizer,
+                distillation_teacher_normalizer=distillation_teacher_normalizer,
+                collect_teacher_observations=distillation_teacher_model is not None,
             )
             obs = rollout.pop("last_obs")
             next_seed_start = rollout.pop("next_seed_start")
@@ -772,6 +783,8 @@ def main() -> None:
                 device,
                 reference_model=reference_model,
                 reference_kl_coef=current_reference_kl_coef,
+                distillation_teacher_model=distillation_teacher_model,
+                distillation_kl_coef=args.distillation_kl_coef,
             )
 
             elapsed = max(time.time() - started, 1e-6)
@@ -894,6 +907,8 @@ def main() -> None:
                         f"approx_kl={stats['approx_kl']:.5f}",
                         f"reference_forward_kl={stats['reference_forward_kl']:.5f}",
                         f"reference_kl_coef={stats['reference_kl_coef']:.5f}",
+                        f"distillation_forward_kl={stats['distillation_forward_kl']:.5f}",
+                        f"distillation_kl_coef={stats['distillation_kl_coef']:.5f}",
                         f"model_reset={int(did_model_reset)}",
                         f"clip_frac={stats['clip_frac']:.5f}",
                         f"grad_norm={stats['grad_norm']:.5f}",
@@ -919,6 +934,8 @@ def collect_rollout(
     *,
     reward_scaler: RewardScaler | None = None,
     obs_normalizer: ObservationNormalizer | None = None,
+    distillation_teacher_normalizer: ObservationNormalizer | None = None,
+    collect_teacher_observations: bool = False,
 ) -> dict[str, Any]:
     obs_buf = []
     action_buf = []
@@ -931,10 +948,21 @@ def collect_rollout(
     m_buf = []
     u_buf = []
     critic_feature_buf = []
+    teacher_obs_buf = []
 
     for _ in range(args.rollout_steps):
         m_values, u_values = _extract_m_u_from_obs(obs)
         encoded = torch.from_numpy(obs["planes"]).to(device=device, dtype=MODEL_DTYPE)
+        teacher_encoded = encoded
+        if distillation_teacher_normalizer is not None:
+            if isinstance(distillation_teacher_normalizer, GroupedObservationNormalizer):
+                teacher_encoded = distillation_teacher_normalizer.normalize(
+                    teacher_encoded,
+                    m_values=torch.from_numpy(m_values).to(device=device),
+                    u_values=torch.from_numpy(u_values).to(device=device),
+                )
+            else:
+                teacher_encoded = distillation_teacher_normalizer.normalize(teacher_encoded)
         if obs_normalizer is not None:
             if isinstance(obs_normalizer, GroupedObservationNormalizer):
                 encoded = obs_normalizer.update_and_normalize(
@@ -969,6 +997,8 @@ def collect_rollout(
         score_buf.append(torch.from_numpy(step.score.copy()))
         m_buf.append(torch.from_numpy(m_values.copy()))
         u_buf.append(torch.from_numpy(u_values.copy()))
+        if collect_teacher_observations:
+            teacher_obs_buf.append(teacher_encoded.cpu())
         if critic_features is not None:
             critic_feature_buf.append(critic_features.cpu())
 
@@ -1044,6 +1074,7 @@ def collect_rollout(
         "scores": torch.stack(score_buf),
         "m_values": torch.stack(m_buf),
         "u_values": torch.stack(u_buf),
+        **({} if not teacher_obs_buf else {"teacher_obs": torch.stack(teacher_obs_buf)}),
         **({} if not critic_feature_buf else {"critic_features": torch.stack(critic_feature_buf)}),
         "last_obs": obs,
         "next_seed_start": next_seed_start,
@@ -1227,6 +1258,28 @@ def load_initial_model(
     model.load_state_dict(state_dict)
 
 
+def load_distillation_teacher(
+    checkpoint_path: Path,
+    device: torch.device,
+) -> tuple[ActorCritic, ObservationNormalizer | None]:
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if "model" not in checkpoint or "config" not in checkpoint:
+        raise ValueError("distillation teacher checkpoint must contain model and config")
+    teacher_args = argparse.Namespace(**checkpoint["config"])
+    teacher_model = create_model(teacher_args, device)
+    teacher_model.load_state_dict(checkpoint["model"])
+    teacher_model.eval()
+    for parameter in teacher_model.parameters():
+        parameter.requires_grad_(False)
+    teacher_normalizer = create_obs_normalizer(teacher_args)
+    teacher_normalizer_state = checkpoint.get("obs_normalizer")
+    if teacher_normalizer is not None:
+        if teacher_normalizer_state is None:
+            raise ValueError("distillation teacher checkpoint does not contain obs_normalizer")
+        teacher_normalizer.load_state_dict(teacher_normalizer_state)
+    return teacher_model, teacher_normalizer
+
+
 def update_model(
     model: nn.Module,
     grad_model: nn.Module,
@@ -1237,6 +1290,8 @@ def update_model(
     *,
     reference_model: nn.Module | None = None,
     reference_kl_coef: float = 0.0,
+    distillation_teacher_model: nn.Module | None = None,
+    distillation_kl_coef: float = 0.0,
 ) -> dict[str, float]:
     obs = rollout["obs"].flatten(0, 1).to(device)  # type: ignore[union-attr]
     actions = rollout["actions"].flatten().to(device)  # type: ignore[union-attr]
@@ -1247,6 +1302,11 @@ def update_model(
     critic_features = rollout.get("critic_features")
     if critic_features is not None:
         critic_features = critic_features.flatten(0, 1).to(device)
+    teacher_obs = rollout.get("teacher_obs")
+    if teacher_obs is not None:
+        teacher_obs = teacher_obs.flatten(0, 1).to(device)
+    if distillation_teacher_model is not None and teacher_obs is None:
+        raise ValueError("distillation teacher observations are missing from rollout")
     advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
 
     batch_size = obs.shape[0]
@@ -1266,6 +1326,9 @@ def update_model(
         "reference_forward_kl": 0.0,
         "reference_kl_loss": 0.0,
         "reference_kl_coef": 0.0,
+        "distillation_forward_kl": 0.0,
+        "distillation_kl_loss": 0.0,
+        "distillation_kl_coef": 0.0,
     }
     stat_weight = 0
     for _ in range(args.epochs):
@@ -1279,6 +1342,7 @@ def update_model(
             mb_advantages = advantages[mb]
             mb_returns = returns[mb]
             mb_critic_features = None if critic_features is None else critic_features[mb]
+            mb_teacher_obs = None if teacher_obs is None else teacher_obs[mb]
             transform_ids = range(8) if args.symmetry_augmentation == "full_d4" else range(1)
             for transform_id in transform_ids:
                 aug_obs = _transform_board_d4(mb_obs, transform_id)
@@ -1318,11 +1382,28 @@ def update_model(
                         .mean()
                     )
                 reference_kl_loss = reference_kl_coef * reference_forward_kl
+                distillation_forward_kl = torch.zeros((), device=device)
+                if distillation_teacher_model is not None and distillation_kl_coef != 0.0:
+                    if mb_teacher_obs is None:
+                        raise AssertionError("teacher observations must be available")
+                    with torch.no_grad():
+                        teacher_logits, _ = distillation_teacher_model(
+                            _transform_board_d4(mb_teacher_obs, transform_id)
+                        )
+                        teacher_logits = teacher_logits.float().masked_fill(~aug_masks, -1e9)
+                        teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
+                        teacher_probs = teacher_log_probs.exp()
+                    current_log_probs = F.log_softmax(logits, dim=-1)
+                    distillation_forward_kl = (
+                        (teacher_probs * (teacher_log_probs - current_log_probs)).sum(dim=-1).mean()
+                    )
+                distillation_kl_loss = distillation_kl_coef * distillation_forward_kl
                 loss = (
                     policy_loss
                     + args.value_coef * value_loss
                     - args.entropy_coef * entropy
                     + reference_kl_loss
+                    + distillation_kl_loss
                 )
 
                 optimizer.zero_grad(set_to_none=True)
@@ -1362,6 +1443,11 @@ def update_model(
                 stat_sums["reference_forward_kl"] += float(reference_forward_kl.item()) * weight
                 stat_sums["reference_kl_loss"] += float(reference_kl_loss.item()) * weight
                 stat_sums["reference_kl_coef"] += reference_kl_coef * weight
+                stat_sums["distillation_forward_kl"] += (
+                    float(distillation_forward_kl.item()) * weight
+                )
+                stat_sums["distillation_kl_loss"] += float(distillation_kl_loss.item()) * weight
+                stat_sums["distillation_kl_coef"] += distillation_kl_coef * weight
     if stat_weight == 0:
         stat_sums.update(_parameter_norm_stats(grad_model))
         return stat_sums
@@ -1580,6 +1666,9 @@ def build_log_metrics(
         "train/reference_forward_kl": stats.get("reference_forward_kl", 0.0),
         "train/reference_kl_coef": stats.get("reference_kl_coef", 0.0),
         "loss/reference_kl": stats.get("reference_kl_loss", 0.0),
+        "train/distillation_forward_kl": stats.get("distillation_forward_kl", 0.0),
+        "train/distillation_kl_coef": stats.get("distillation_kl_coef", 0.0),
+        "loss/distillation_kl": stats.get("distillation_kl_loss", 0.0),
         "train/model_reset_count": model_reset_count,
         "train/steps_since_model_reset": steps_since_model_reset,
         "train/reset_previous_weight_mix": stats.get("reset_previous_weight_mix", 0.0),
@@ -1622,6 +1711,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, help="Path to a TOML config file.")
     parser.add_argument("--resume-dir", type=Path, default=argparse.SUPPRESS)
     parser.add_argument("--init-checkpoint", type=Path, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--distillation-teacher-checkpoint",
+        type=Path,
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument("--distillation-kl-coef", type=float, default=argparse.SUPPRESS)
     parser.add_argument("--num-envs", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--total-steps", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--rollout-steps", type=int, default=argparse.SUPPRESS)
@@ -1767,6 +1862,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     config["init_checkpoint"] = (
         None if config.get("init_checkpoint") is None else Path(config["init_checkpoint"])
     )
+    config["distillation_teacher_checkpoint"] = (
+        None
+        if config.get("distillation_teacher_checkpoint") is None
+        else Path(config["distillation_teacher_checkpoint"])
+    )
     if config["checkpoint_interval_updates"] <= 0:
         raise ValueError("checkpoint_interval_updates must be positive")
     if config["model_reset_interval_steps"] < 0:
@@ -1777,6 +1877,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("reset_reference_kl_coef must be non-negative")
     if config["reset_reference_kl_decay_steps"] <= 0:
         raise ValueError("reset_reference_kl_decay_steps must be positive")
+    if config["distillation_kl_coef"] < 0.0:
+        raise ValueError("distillation_kl_coef must be non-negative")
+    if config["distillation_kl_coef"] > 0.0 and config["distillation_teacher_checkpoint"] is None:
+        raise ValueError(
+            "distillation_teacher_checkpoint is required when distillation_kl_coef is positive"
+        )
     if config["pf_particles"] <= 0:
         raise ValueError("pf_particles must be positive")
     if config["reward_scale_mode"] not in ("none", "running_std", "simbav2"):
