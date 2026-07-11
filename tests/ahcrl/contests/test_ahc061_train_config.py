@@ -19,6 +19,7 @@ from ahcrl.contests.ahc061.train_ppo import (
     _parameter_norm_stats,
     build_log_metrics,
     config_for_save,
+    create_model,
     load_initial_model,
     load_training_state,
     mix_model_parameters_,
@@ -390,22 +391,25 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
             "8",
             "--model-blocks",
             "1",
+            "--obs-norm-mode",
+            "running_channel",
             "--artifact-dir",
             str(tmp_path),
         ]
     )
     args.run_dir = tmp_path / "run_1"
     args.run_dir.mkdir()
-    model = ActorCritic(channels=8, blocks=1).to(dtype=MODEL_DTYPE)
+    model = create_model(args, torch.device("cpu"))
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     reward_scaler = RunningRewardScaler(gamma=0.5, g_max=5.0, epsilon=1e-8)
     reward_scaler.update_and_scale(
         torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
         torch.tensor([[0.0, 1.0], [0.0, 0.0]]),
     )
-    obs_normalizer = RunningObservationNormalizer(channels=NUM_PLANES, epsilon=1e-8)
+    obs_normalizer = model.observation_normalizer
+    assert obs_normalizer is not None
     obs_normalizer.update(torch.ones(2, NUM_PLANES, 10, 10))
-    reference_model = ActorCritic(channels=8, blocks=1).to(dtype=MODEL_DTYPE)
+    reference_model = create_model(args, torch.device("cpu"))
     torch.manual_seed(123)
 
     checkpoint_path = save_training_state(
@@ -424,13 +428,10 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     )
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    assert {
-        parameter.dtype
-        for parameter in checkpoint["model"].values()
-        if torch.is_floating_point(parameter)
-    } == {MODEL_DTYPE}
+    assert {parameter.dtype for parameter in model.parameters()} == {MODEL_DTYPE}
+    assert checkpoint["model"]["observation_normalizer.mean"].dtype == torch.float32
 
-    reloaded_model = ActorCritic(channels=8, blocks=1).to(dtype=MODEL_DTYPE)
+    reloaded_model = create_model(args, torch.device("cpu"))
     reloaded_optimizer = torch.optim.AdamW(reloaded_model.parameters(), lr=args.lr)
     state = load_training_state(
         args.run_dir,
@@ -448,10 +449,15 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     assert state["model_reset_count"] == 2
     assert state["reference_model_state"] is not None
     assert state["reward_scaler_state"] == reward_scaler.state_dict()
-    assert state["obs_normalizer_state"]["count"] == obs_normalizer.state_dict()["count"]
-    assert torch.equal(state["obs_normalizer_state"]["mean"], obs_normalizer.state_dict()["mean"])
+    assert state["obs_normalizer_state"] is None
+    assert model.observation_normalizer is not None
+    assert reloaded_model.observation_normalizer is not None
     for left, right in zip(model.parameters(), reloaded_model.parameters(), strict=True):
         assert torch.equal(left, right)
+    assert torch.equal(
+        model.observation_normalizer.mean,
+        reloaded_model.observation_normalizer.mean,
+    )
 
 
 def test_reference_kl_coef_linearly_decays_after_model_reset() -> None:

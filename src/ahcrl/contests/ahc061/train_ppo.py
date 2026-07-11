@@ -16,7 +16,7 @@ from torch.distributions import Categorical
 from ahcrl.nn import HypersphericalFeatureNorm, Scaler, project_hyperspherical_weights_
 
 from .encoder import BOARD_SIZE, MAX_LEVEL, MAX_PLAYERS, NUM_PLANES, PLANE_M, PLANE_U
-from .model import ActorCritic
+from .model import ActorCritic, KeyedObservationNormalizer
 from .rust_vec_env import RustVecEnv
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -616,12 +616,19 @@ def create_obs_normalizer(args: argparse.Namespace) -> ObservationNormalizer | N
 
 
 def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
-    return ActorCritic(
+    model = ActorCritic(
         channels=args.model_channels,
         blocks=args.model_blocks,
         block_type=args.model_block_type,
         critic_feature_mode=args.critic_feature_mode,
     ).to(device=device, dtype=MODEL_DTYPE)
+    if args.obs_norm_mode != "none":
+        model.observation_normalizer = KeyedObservationNormalizer(
+            NUM_PLANES,
+            epsilon=args.obs_norm_epsilon,
+            grouping=args.normalization_grouping,
+        ).to(device=device)
+    return model
 
 
 @torch.no_grad()
@@ -682,7 +689,7 @@ def main() -> None:
         load_initial_model(args.init_checkpoint, raw_model, device)
     optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
     reward_scaler = create_reward_scaler(args)
-    obs_normalizer = create_obs_normalizer(args)
+    obs_normalizer = raw_model.observation_normalizer
     env = RustVecEnv(
         num_envs=args.num_envs,
         seed_start=args.seed_start,
@@ -700,7 +707,7 @@ def main() -> None:
     model_reset_count = 0
     reference_model: ActorCritic | None = None
     distillation_teacher_model: ActorCritic | None = None
-    distillation_teacher_normalizer: ObservationNormalizer | None = None
+    distillation_teacher_normalizer: KeyedObservationNormalizer | None = None
     if args.distillation_teacher_checkpoint is not None:
         distillation_teacher_model, distillation_teacher_normalizer = load_distillation_teacher(
             args.distillation_teacher_checkpoint,
@@ -719,8 +726,8 @@ def main() -> None:
             reference_model.eval()
         if reward_scaler is not None and resume_state["reward_scaler_state"] is not None:
             reward_scaler.load_state_dict(resume_state["reward_scaler_state"])
-        if obs_normalizer is not None and resume_state["obs_normalizer_state"] is not None:
-            obs_normalizer.load_state_dict(resume_state["obs_normalizer_state"])
+        if resume_state["obs_normalizer_state"] is not None:
+            raise ValueError("legacy top-level obs_normalizer state is not supported")
         resume_seed_start = resume_state["next_seed_start"]
         torch.set_rng_state(resume_state["torch_rng_state"].cpu())
         np.random.set_state(resume_state["numpy_rng_state"])
@@ -816,7 +823,15 @@ def main() -> None:
                 reference_model = create_model(args, device)
                 reference_model.load_state_dict(raw_model.state_dict())
                 reference_model.eval()
+                previous_normalizer = raw_model.observation_normalizer
                 raw_model = create_model(args, device)
+                if previous_normalizer is not None:
+                    if raw_model.observation_normalizer is None:
+                        raise AssertionError("model reset lost observation normalizer")
+                    raw_model.observation_normalizer.load_state_dict(
+                        previous_normalizer.state_dict()
+                    )
+                    obs_normalizer = raw_model.observation_normalizer
                 if args.reset_previous_weight_mix > 0.0:
                     mix_model_parameters_(
                         raw_model,
@@ -933,8 +948,8 @@ def collect_rollout(
     device: torch.device,
     *,
     reward_scaler: RewardScaler | None = None,
-    obs_normalizer: ObservationNormalizer | None = None,
-    distillation_teacher_normalizer: ObservationNormalizer | None = None,
+    obs_normalizer: KeyedObservationNormalizer | ObservationNormalizer | None = None,
+    distillation_teacher_normalizer: KeyedObservationNormalizer | None = None,
     collect_teacher_observations: bool = False,
 ) -> dict[str, Any]:
     obs_buf = []
@@ -955,30 +970,26 @@ def collect_rollout(
         encoded = torch.from_numpy(obs["planes"]).to(device=device, dtype=MODEL_DTYPE)
         teacher_encoded = encoded
         if distillation_teacher_normalizer is not None:
-            if isinstance(distillation_teacher_normalizer, GroupedObservationNormalizer):
-                teacher_encoded = distillation_teacher_normalizer.normalize(
-                    teacher_encoded,
-                    m_values=torch.from_numpy(m_values).to(device=device),
-                    u_values=torch.from_numpy(u_values).to(device=device),
-                )
-            else:
-                teacher_encoded = distillation_teacher_normalizer.normalize(teacher_encoded)
+            teacher_encoded = _normalize(
+                distillation_teacher_normalizer,
+                teacher_encoded,
+                m_values=torch.from_numpy(m_values).to(device=device),
+                u_values=torch.from_numpy(u_values).to(device=device),
+            )
         if obs_normalizer is not None:
-            if isinstance(obs_normalizer, GroupedObservationNormalizer):
-                encoded = obs_normalizer.update_and_normalize(
-                    encoded,
-                    m_values=torch.from_numpy(m_values).to(device=device),
-                    u_values=torch.from_numpy(u_values).to(device=device),
-                )
-            else:
-                encoded = obs_normalizer.update_and_normalize(encoded)
+            encoded = _update_and_normalize(
+                obs_normalizer,
+                encoded,
+                m_values=torch.from_numpy(m_values).to(device=device),
+                u_values=torch.from_numpy(u_values).to(device=device),
+            )
         mask = torch.from_numpy(obs["mask"]).to(device)
         critic_features = _critic_features_from_obs(obs, args.critic_feature_mode, device)
         with torch.inference_mode():
             if critic_features is None:
-                logits, value = model(encoded)
+                logits, value = model(encoded, None, False)
             else:
-                logits, value = model(encoded, critic_features)
+                logits, value = model(encoded, critic_features, False)
             logits = logits.float()
             value = value.float()
             logits = logits.masked_fill(~mask, -1e9)
@@ -1019,19 +1030,17 @@ def collect_rollout(
         )
         if obs_normalizer is not None:
             next_m_values, next_u_values = _extract_m_u_from_obs(obs)
-            if isinstance(obs_normalizer, GroupedObservationNormalizer):
-                next_encoded = obs_normalizer.normalize(
-                    next_encoded,
-                    m_values=torch.from_numpy(next_m_values).to(device=device),
-                    u_values=torch.from_numpy(next_u_values).to(device=device),
-                )
-            else:
-                next_encoded = obs_normalizer.normalize(next_encoded)
+            next_encoded = _normalize(
+                obs_normalizer,
+                next_encoded,
+                m_values=torch.from_numpy(next_m_values).to(device=device),
+                u_values=torch.from_numpy(next_u_values).to(device=device),
+            )
         next_critic_features = _critic_features_from_obs(obs, args.critic_feature_mode, device)
         if next_critic_features is None:
-            next_value = model(next_encoded)[1].float().cpu()
+            next_value = model(next_encoded, None, False)[1].float().cpu()
         else:
-            next_value = model(next_encoded, next_critic_features)[1].float().cpu()
+            next_value = model(next_encoded, next_critic_features, False)[1].float().cpu()
 
     rewards = torch.stack(reward_buf)
     dones = torch.stack(done_buf)
@@ -1081,6 +1090,54 @@ def collect_rollout(
         **reward_scale_stats,
         **({} if obs_normalizer is None else obs_normalizer.stats()),
     }
+
+
+def _update_and_normalize(
+    normalizer: KeyedObservationNormalizer | ObservationNormalizer,
+    observations: torch.Tensor,
+    *,
+    m_values: torch.Tensor,
+    u_values: torch.Tensor,
+) -> torch.Tensor:
+    if isinstance(normalizer, KeyedObservationNormalizer):
+        return normalizer.update_and_normalize(
+            observations,
+            m_values=m_values,
+            u_values=u_values,
+        )
+    if isinstance(normalizer, GroupedObservationNormalizer):
+        return normalizer.update_and_normalize(
+            observations,
+            m_values=m_values,
+            u_values=u_values,
+        )
+    return normalizer.update_and_normalize(observations)
+
+
+def _normalize(
+    normalizer: KeyedObservationNormalizer | ObservationNormalizer,
+    observations: torch.Tensor,
+    *,
+    m_values: torch.Tensor,
+    u_values: torch.Tensor,
+) -> torch.Tensor:
+    if isinstance(normalizer, KeyedObservationNormalizer):
+        return normalizer.normalize(observations, m_values=m_values, u_values=u_values)
+    if isinstance(normalizer, GroupedObservationNormalizer):
+        return normalizer.normalize(observations, m_values=m_values, u_values=u_values)
+    return normalizer.normalize(observations)
+
+
+def _forward_normalized(
+    model: nn.Module,
+    observations: torch.Tensor,
+    critic_features: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if isinstance(model, ActorCritic) or hasattr(model, "_orig_mod"):
+        return model(observations, critic_features, False)  # type: ignore[call-arg]
+    if critic_features is None:
+        return model(observations)  # type: ignore[call-arg]
+    return model(observations, critic_features)  # type: ignore[call-arg]
 
 
 def _extract_m_u_from_obs(obs: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
@@ -1182,7 +1239,7 @@ def save_training_state(
     next_seed_start: int,
     wandb_run_id: str | None,
     reward_scaler: RewardScaler | None = None,
-    obs_normalizer: ObservationNormalizer | None = None,
+    obs_normalizer: KeyedObservationNormalizer | None = None,
     reference_model: ActorCritic | None = None,
     last_model_reset_step: int = 0,
     model_reset_count: int = 0,
@@ -1194,6 +1251,8 @@ def save_training_state(
     checkpoint_path = checkpoints_dir / (
         f"step_{global_step}.pt" if checkpoint_name is None else checkpoint_name
     )
+    if obs_normalizer is not model.observation_normalizer:
+        raise AssertionError("observation normalizer must be owned by the model")
     checkpoint = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
@@ -1204,7 +1263,6 @@ def save_training_state(
         "torch_rng_state": torch.get_rng_state(),
         "numpy_rng_state": np.random.get_state(),
         "reward_scaler": None if reward_scaler is None else reward_scaler.state_dict(),
-        "obs_normalizer": None if obs_normalizer is None else obs_normalizer.state_dict(),
         "reference_model": None if reference_model is None else reference_model.state_dict(),
         "last_model_reset_step": last_model_reset_step,
         "model_reset_count": model_reset_count,
@@ -1232,6 +1290,8 @@ def load_training_state(
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"latest checkpoint not found: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if checkpoint.get("obs_normalizer") is not None:
+        raise ValueError("legacy top-level obs_normalizer state is not supported")
     model.load_state_dict(checkpoint["model"])
     optimizer.load_state_dict(checkpoint["optimizer"])
     return {
@@ -1241,7 +1301,7 @@ def load_training_state(
         "torch_rng_state": checkpoint["torch_rng_state"],
         "numpy_rng_state": checkpoint["numpy_rng_state"],
         "reward_scaler_state": checkpoint.get("reward_scaler"),
-        "obs_normalizer_state": checkpoint.get("obs_normalizer"),
+        "obs_normalizer_state": None,
         "reference_model_state": checkpoint.get("reference_model"),
         "last_model_reset_step": int(checkpoint.get("last_model_reset_step", 0)),
         "model_reset_count": int(checkpoint.get("model_reset_count", 0)),
@@ -1254,29 +1314,30 @@ def load_initial_model(
     device: torch.device,
 ) -> None:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
+    if "model" not in checkpoint:
+        raise ValueError("checkpoint must contain a model state")
+    if checkpoint.get("obs_normalizer") is not None:
+        raise ValueError("legacy top-level obs_normalizer state is not supported")
+    state_dict = checkpoint["model"]
     model.load_state_dict(state_dict)
 
 
 def load_distillation_teacher(
     checkpoint_path: Path,
     device: torch.device,
-) -> tuple[ActorCritic, ObservationNormalizer | None]:
+) -> tuple[ActorCritic, KeyedObservationNormalizer | None]:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if "model" not in checkpoint or "config" not in checkpoint:
         raise ValueError("distillation teacher checkpoint must contain model and config")
     teacher_args = argparse.Namespace(**checkpoint["config"])
     teacher_model = create_model(teacher_args, device)
+    if checkpoint.get("obs_normalizer") is not None:
+        raise ValueError("legacy top-level obs_normalizer state is not supported")
     teacher_model.load_state_dict(checkpoint["model"])
     teacher_model.eval()
     for parameter in teacher_model.parameters():
         parameter.requires_grad_(False)
-    teacher_normalizer = create_obs_normalizer(teacher_args)
-    teacher_normalizer_state = checkpoint.get("obs_normalizer")
-    if teacher_normalizer is not None:
-        if teacher_normalizer_state is None:
-            raise ValueError("distillation teacher checkpoint does not contain obs_normalizer")
-        teacher_normalizer.load_state_dict(teacher_normalizer_state)
+    teacher_normalizer = teacher_model.observation_normalizer
     return teacher_model, teacher_normalizer
 
 
@@ -1348,10 +1409,7 @@ def update_model(
                 aug_obs = _transform_board_d4(mb_obs, transform_id)
                 aug_masks = _transform_flat_board_d4(mb_masks, transform_id)
                 aug_actions = _transform_actions_d4(mb_actions, transform_id)
-                if mb_critic_features is None:
-                    logits, value = model(aug_obs)
-                else:
-                    logits, value = model(aug_obs, mb_critic_features)
+                logits, value = _forward_normalized(model, aug_obs, mb_critic_features)
                 logits = logits.float()
                 value = value.float()
                 logits = logits.masked_fill(~aug_masks, -1e9)
@@ -1368,10 +1426,11 @@ def update_model(
                 reference_forward_kl = torch.zeros((), device=device)
                 if reference_model is not None and reference_kl_coef != 0.0:
                     with torch.no_grad():
-                        if mb_critic_features is None:
-                            reference_logits, _ = reference_model(aug_obs)
-                        else:
-                            reference_logits, _ = reference_model(aug_obs, mb_critic_features)
+                        reference_logits, _ = _forward_normalized(
+                            reference_model,
+                            aug_obs,
+                            mb_critic_features,
+                        )
                         reference_logits = reference_logits.float().masked_fill(~aug_masks, -1e9)
                         reference_log_probs = F.log_softmax(reference_logits, dim=-1)
                         reference_probs = reference_log_probs.exp()
@@ -1387,8 +1446,9 @@ def update_model(
                     if mb_teacher_obs is None:
                         raise AssertionError("teacher observations must be available")
                     with torch.no_grad():
-                        teacher_logits, _ = distillation_teacher_model(
-                            _transform_board_d4(mb_teacher_obs, transform_id)
+                        teacher_logits, _ = _forward_normalized(
+                            distillation_teacher_model,
+                            _transform_board_d4(mb_teacher_obs, transform_id),
                         )
                         teacher_logits = teacher_logits.float().masked_fill(~aug_masks, -1e9)
                         teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)

@@ -25,6 +25,220 @@ from ahcrl.nn.components import (
 )
 
 
+class KeyedObservationNormalizer(nn.Module):
+    """Running channel-wise observation normalization stored in a model state."""
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        epsilon: float,
+        grouping: str = "none",
+    ) -> None:
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        if epsilon <= 0.0:
+            raise ValueError(f"epsilon must be positive, got {epsilon}")
+        if grouping not in ("none", "m_u"):
+            raise ValueError(f"unsupported observation normalization grouping: {grouping}")
+        self.channels = channels
+        self.epsilon = epsilon
+        self.grouping = grouping
+        self.count: torch.Tensor
+        self.mean: torch.Tensor
+        self.m2: torch.Tensor
+        self.register_buffer("count", torch.zeros((), dtype=torch.long))
+        self.register_buffer("mean", torch.zeros((1, channels, 1, 1), dtype=torch.float32))
+        self.register_buffer("m2", torch.zeros((1, channels, 1, 1), dtype=torch.float32))
+        if grouping == "m_u":
+            num_keys = (MAX_PLAYERS + 1) * (MAX_LEVEL + 1)
+            self.group_count: torch.Tensor
+            self.group_mean: torch.Tensor
+            self.group_m2: torch.Tensor
+            self.register_buffer("group_count", torch.zeros(num_keys, dtype=torch.long))
+            self.register_buffer(
+                "group_mean",
+                torch.zeros((num_keys, channels, 1, 1), dtype=torch.float32),
+            )
+            self.register_buffer(
+                "group_m2",
+                torch.zeros((num_keys, channels, 1, 1), dtype=torch.float32),
+            )
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        return self.normalize(observations)
+
+    @torch.no_grad()
+    def update_and_normalize(
+        self,
+        observations: torch.Tensor,
+        *,
+        m_values: torch.Tensor | None = None,
+        u_values: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        self.update(observations, m_values=m_values, u_values=u_values)
+        return self.normalize(observations, m_values=m_values, u_values=u_values)
+
+    @torch.no_grad()
+    def update(
+        self,
+        observations: torch.Tensor,
+        *,
+        m_values: torch.Tensor | None = None,
+        u_values: torch.Tensor | None = None,
+    ) -> None:
+        self._validate(observations, m_values, u_values)
+        m_values, u_values = self._resolve_keys(observations, m_values, u_values)
+        values = observations.detach().float()
+        batch_count = int(values.shape[0] * values.shape[2] * values.shape[3])
+        if batch_count == 0:
+            return
+        batch_mean = values.mean(dim=(0, 2, 3), keepdim=True).to(device=self.mean.device)
+        batch_m2 = (
+            values.sub(batch_mean.to(device=values.device))
+            .pow(2)
+            .sum(dim=(0, 2, 3), keepdim=True)
+            .to(device=self.mean.device)
+        )
+        self._merge(self.count, self.mean, self.m2, batch_count, batch_mean, batch_m2)
+
+        if self.grouping != "m_u":
+            return
+        assert m_values is not None and u_values is not None
+        keys = self._keys(m_values, u_values).cpu()
+        for key in torch.unique(keys).tolist():
+            selector = keys == key
+            group_values = values[selector.to(device=values.device)]
+            group_count = int(group_values.shape[0] * group_values.shape[2] * group_values.shape[3])
+            group_mean = group_values.mean(dim=(0, 2, 3), keepdim=True).to(device=self.mean.device)
+            group_m2 = (
+                group_values.sub(group_mean.to(device=group_values.device))
+                .pow(2)
+                .sum(dim=(0, 2, 3), keepdim=True)
+                .to(device=self.mean.device)
+            )
+            self._merge(
+                self.group_count[key : key + 1],
+                self.group_mean[key : key + 1],
+                self.group_m2[key : key + 1],
+                group_count,
+                group_mean,
+                group_m2,
+            )
+
+    def normalize(
+        self,
+        observations: torch.Tensor,
+        *,
+        m_values: torch.Tensor | None = None,
+        u_values: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        self._validate(observations, m_values, u_values)
+        m_values, u_values = self._resolve_keys(observations, m_values, u_values)
+        if self.grouping == "m_u":
+            assert m_values is not None and u_values is not None
+            keys = self._keys(m_values, u_values).to(device=observations.device)
+            group_count = self.group_count.to(device=observations.device)[keys]
+            group_mean = self.group_mean.to(device=observations.device)[keys]
+            group_variance = self._variance(self.group_m2, self.group_count)[keys]
+            global_mean = self.mean.to(device=observations.device)
+            global_variance = self._variance(self.m2, self.count).to(device=observations.device)
+            use_group = (group_count > 0).view(-1, 1, 1, 1)
+            mean = torch.where(use_group, group_mean, global_mean)
+            variance = torch.where(use_group, group_variance, global_variance)
+        else:
+            mean = self.mean.to(device=observations.device)
+            variance = self._variance(self.m2, self.count).to(device=observations.device)
+        normalized = (observations.float() - mean) / torch.sqrt(variance + self.epsilon)
+        if self.grouping == "m_u":
+            normalized[:, PLANE_M] = observations[:, PLANE_M].float()
+            normalized[:, PLANE_U] = observations[:, PLANE_U].float()
+        return normalized.to(dtype=observations.dtype)
+
+    def stats(self) -> dict[str, float]:
+        variance = self._variance(self.m2, self.count)
+        stats = {
+            "obs_norm_count": float(self.count.item()),
+            "obs_norm_mean_abs_max": float(self.mean.abs().max().item()),
+            "obs_norm_std_min": float(torch.sqrt(variance).min().item()),
+            "obs_norm_std_max": float(torch.sqrt(variance).max().item()),
+        }
+        if self.grouping == "m_u":
+            for key, count in enumerate(self.group_count.tolist()):
+                if count > 0:
+                    m_value, u_value = divmod(key, MAX_LEVEL + 1)
+                    stats[f"obs_norm_count_by_m_u/m_{m_value}_u_{u_value}"] = float(count)
+        return stats
+
+    @property
+    def variance(self) -> torch.Tensor:
+        return self._variance(self.m2, self.count)
+
+    @staticmethod
+    def _variance(m2: torch.Tensor, count: torch.Tensor) -> torch.Tensor:
+        if count.numel() == 1:
+            safe_count = count.to(dtype=m2.dtype).clamp_min(1)
+            return torch.where(count > 0, m2 / safe_count, torch.ones_like(m2))
+        safe_count = count.clamp_min(1).view(-1, 1, 1, 1)
+        return torch.where(count.view(-1, 1, 1, 1) > 0, m2 / safe_count, torch.ones_like(m2))
+
+    def _merge(
+        self,
+        count: torch.Tensor,
+        mean: torch.Tensor,
+        m2: torch.Tensor,
+        batch_count: int,
+        batch_mean: torch.Tensor,
+        batch_m2: torch.Tensor,
+    ) -> None:
+        current_count = int(count.item())
+        if current_count == 0:
+            count.fill_(batch_count)
+            mean.copy_(batch_mean)
+            m2.copy_(batch_m2)
+            return
+        total_count = current_count + batch_count
+        delta = batch_mean - mean
+        mean.add_(delta * batch_count / total_count)
+        m2.add_(batch_m2 + delta.pow(2) * current_count * batch_count / total_count)
+        count.fill_(total_count)
+
+    def _keys(self, m_values: torch.Tensor, u_values: torch.Tensor) -> torch.Tensor:
+        m_values = torch.clamp(m_values.long(), 0, MAX_PLAYERS)
+        u_values = torch.clamp(u_values.long(), 0, MAX_LEVEL)
+        return m_values * (MAX_LEVEL + 1) + u_values
+
+    def _validate(
+        self,
+        observations: torch.Tensor,
+        m_values: torch.Tensor | None,
+        u_values: torch.Tensor | None,
+    ) -> None:
+        if observations.ndim != 4:
+            raise ValueError(f"expected NCHW observations, got {observations.ndim} dimensions")
+        if observations.shape[1] != self.channels:
+            raise ValueError(f"expected {self.channels} channels, got {observations.shape[1]}")
+        if m_values is not None or u_values is not None:
+            if m_values is None or u_values is None:
+                raise ValueError("m_values and u_values must be provided together")
+            if m_values.shape != (observations.shape[0],) or u_values.shape != m_values.shape:
+                raise ValueError("m_values and u_values must have shape (batch,)")
+
+    def _resolve_keys(
+        self,
+        observations: torch.Tensor,
+        m_values: torch.Tensor | None,
+        u_values: torch.Tensor | None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        if self.grouping != "m_u":
+            return m_values, u_values
+        if m_values is None or u_values is None:
+            m_values = torch.round(observations[:, PLANE_M, 0, 0].float() * MAX_PLAYERS).long()
+            u_values = torch.round(observations[:, PLANE_U, 0, 0].float() * MAX_LEVEL).long()
+        return m_values, u_values
+
+
 class ActorCritic(nn.Module):
     def __init__(
         self,
@@ -35,6 +249,7 @@ class ActorCritic(nn.Module):
         critic_feature_mode: str = "oracle",
     ) -> None:
         super().__init__()
+        self.observation_normalizer: KeyedObservationNormalizer | None = None
         block_factory = _block_factory(block_type, channels=channels, blocks=blocks)
         self.trunk = _make_trunk(
             block_type=block_type,
@@ -61,7 +276,10 @@ class ActorCritic(nn.Module):
         self,
         x: torch.Tensor,
         critic_features: torch.Tensor | None = None,
+        normalize_input: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        if normalize_input and self.observation_normalizer is not None:
+            x = self.observation_normalizer(x)
         h = self.trunk(x)
         logits = self.policy(h)
         value = self.value(h, x, critic_features).squeeze(-1)

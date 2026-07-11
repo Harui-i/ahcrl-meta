@@ -9,12 +9,8 @@ from typing import Any, cast
 
 import torch
 
-from ahcrl.contests.ahc061.encoder import MAX_LEVEL, MAX_PLAYERS, NUM_PLANES
-from ahcrl.contests.ahc061.model import (
-    ActorCritic,
-    GroupedObservationNormalizedActorCritic,
-    ObservationNormalizedActorCritic,
-)
+from ahcrl.contests.ahc061.encoder import NUM_PLANES
+from ahcrl.contests.ahc061.model import ActorCritic, KeyedObservationNormalizer
 
 BASE91_ALPHABET = (
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~"'
@@ -55,26 +51,47 @@ def c_string_literal_chunks(s: str, *, width: int = 120) -> str:
     return "\n".join(chunks)
 
 
+def load_export_model(checkpoint_path: Path, config: dict[str, object]) -> ActorCritic:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if "model" not in checkpoint:
+        raise ValueError("checkpoint must contain a model state")
+    if checkpoint.get("obs_normalizer") is not None:
+        raise ValueError("legacy top-level obs_normalizer state is not supported")
+    model = ActorCritic(
+        channels=int(cast(Any, config["model_channels"])),
+        blocks=int(cast(Any, config["model_blocks"])),
+        block_type=str(config["model_block_type"]),
+        critic_feature_mode=str(config.get("critic_feature_mode", "oracle")),
+    ).to(dtype=torch.bfloat16)
+    if str(config.get("obs_norm_mode", "none")) != "none":
+        model.observation_normalizer = KeyedObservationNormalizer(
+            NUM_PLANES,
+            epsilon=float(cast(Any, config.get("obs_norm_epsilon", 1e-8))),
+            grouping=str(config.get("normalization_grouping", "none")),
+        )
+    model.load_state_dict(checkpoint["model"])
+    model.eval()
+    return model
+
+
 def pack_q4_policy(checkpoint_path: Path, config: dict[str, object]) -> bytes:
     """Pack the actor-only network as symmetric int4, with fp16 group scales.
 
     The value head is intentionally omitted: the submission only consumes policy
     logits.  Small tensors stay fp16, while larger tensors use 128-value groups.
     """
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
+    model = load_export_model(checkpoint_path, config)
+    state_dict = model.state_dict()
     tensors = [
         value.detach().float().contiguous()
         for name, value in state_dict.items()
         if name.startswith("trunk.") or name.startswith("policy.")
     ]
-    obs = checkpoint.get("obs_normalizer")
-    if obs is None or obs.get("grouping") == "m_u":
+    obs_normalizer = model.observation_normalizer
+    if obs_normalizer is None or obs_normalizer.grouping == "m_u":
         raise ValueError("q4 submit currently requires ungrouped observation normalization")
-    count = int(obs["count"])
-    mean = obs["mean"].detach().float().contiguous()
-    variance = torch.ones_like(mean) if count <= 0 else obs["m2"].float() / count
-    invstd = torch.rsqrt(variance + float(obs.get("epsilon", 1e-8))).contiguous()
+    mean = obs_normalizer.mean.detach().float().contiguous()
+    invstd = torch.rsqrt(obs_normalizer.variance + obs_normalizer.epsilon).contiguous()
 
     packed = bytearray(b"AHC061Q4\x01")
     packed += struct.pack("<H", len(tensors))
@@ -108,69 +125,7 @@ def pack_q4_policy(checkpoint_path: Path, config: dict[str, object]) -> bytes:
 
 
 def export_torchscript(checkpoint_path: Path, config: dict[str, object]) -> bytes:
-    base_model = ActorCritic(
-        channels=int(cast(Any, config["model_channels"])),
-        blocks=int(cast(Any, config["model_blocks"])),
-        block_type=str(config["model_block_type"]),
-        critic_feature_mode=str(config.get("critic_feature_mode", "oracle")),
-    )
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
-    base_model.load_state_dict(state_dict)
-    base_model.to(dtype=torch.bfloat16)
-    model: torch.nn.Module = base_model
-    obs_norm_mode = str(config.get("obs_norm_mode", "none"))
-    if obs_norm_mode == "running_channel":
-        obs_state = checkpoint.get("obs_normalizer")
-        if obs_state is None:
-            raise ValueError("checkpoint does not contain obs_normalizer state")
-        if obs_state.get("grouping") == "m_u":
-            global_state = obs_state["global"]
-            global_count = int(global_state["count"])
-            global_mean = global_state["mean"].float()
-            global_variance = (
-                torch.ones_like(global_mean, dtype=torch.float32)
-                if global_count <= 0
-                else global_state["m2"].float() / global_count
-            )
-            group_mean = torch.zeros(
-                (MAX_PLAYERS + 1, MAX_LEVEL + 1, global_mean.shape[1], 1, 1),
-                dtype=torch.float32,
-            )
-            group_variance = torch.ones_like(group_mean)
-            group_count = torch.zeros((MAX_PLAYERS + 1, MAX_LEVEL + 1), dtype=torch.long)
-            for key, group_state in obs_state.get("groups", {}).items():
-                m_raw, u_raw = key.split("_", maxsplit=1)
-                m_value = int(m_raw)
-                u_value = int(u_raw)
-                count = int(group_state["count"])
-                group_count[m_value, u_value] = count
-                group_mean[m_value, u_value] = group_state["mean"].float()
-                if count > 0:
-                    group_variance[m_value, u_value] = group_state["m2"].float() / count
-            model = GroupedObservationNormalizedActorCritic(
-                base_model,
-                global_mean=global_mean,
-                global_variance=global_variance,
-                group_mean=group_mean,
-                group_variance=group_variance,
-                group_count=group_count,
-                epsilon=float(obs_state.get("epsilon", global_state.get("epsilon", 1e-8))),
-            )
-        else:
-            count = int(obs_state["count"])
-            mean = obs_state["mean"]
-            if count <= 0:
-                variance = torch.ones_like(mean, dtype=torch.float32)
-            else:
-                variance = obs_state["m2"].float() / count
-            model = ObservationNormalizedActorCritic(
-                base_model,
-                mean=mean,
-                variance=variance,
-                epsilon=float(obs_state.get("epsilon", config.get("obs_norm_epsilon", 1e-8))),
-            )
-    model.eval()
+    model = load_export_model(checkpoint_path, config)
     dummy = torch.zeros((1, NUM_PLANES, 10, 10), dtype=torch.bfloat16)
     with torch.no_grad():
         traced = torch.jit.trace(model, dummy, strict=True)
@@ -969,7 +924,7 @@ def render_q4_cpp(
         pf_particles=pf_particles,
         temperature=temperature,
     )
-    direct_model = r'''
+    direct_model = r"""
 using torch::Tensor;
 
 Tensor l2norm(const Tensor& x, int64_t dim) {
@@ -986,7 +941,9 @@ struct Q4Reader {
     size_t pos = 0;
     explicit Q4Reader(const vector<unsigned char>& source) : data(source) {
         const char magic[] = "AHC061Q4";
-        for (int i = 0; i < 8; ++i) if (data.at(pos++) != magic[i]) throw runtime_error("bad q4 model");
+        for (int i = 0; i < 8; ++i) {
+            if (data.at(pos++) != magic[i]) throw runtime_error("bad q4 model");
+        }
         if (data.at(pos++) != 1) throw runtime_error("unsupported q4 model");
         pos += 2;  // tensor count; the fixed actor layout below validates consumption.
     }
@@ -1007,7 +964,11 @@ struct Q4Reader {
         const uint32_t n = u32();
         int64_t expected = 1;
         for (int64_t d : shape) expected *= d;
-        if (n != expected) throw runtime_error("q4 tensor shape mismatch: got " + to_string(n) + " expected " + to_string(expected));
+        if (n != expected) {
+            throw runtime_error(
+                "q4 tensor shape mismatch: got " + to_string(n) + " expected " + to_string(expected)
+            );
+        }
         vector<float> values(n);
         if (mode == 1) {
             for (uint32_t i = 0; i < n; ++i) values[i] = half();
@@ -1063,8 +1024,10 @@ struct Q4Policy {
         for (int i = 0; i < 8; ++i) {
             AttentionBlock b;
             b.w1 = reader.take({256, 64}); b.s1 = reader.take({256}); b.w2 = reader.take({64, 256});
-            b.alpha = reader.take({64}); b.rel = reader.take({4, 19, 19}); b.qkv = reader.take({192, 64});
-            b.out = reader.take({64, 64}); b.out_scale = reader.take({64}); b.attn_alpha = reader.take({64});
+            b.alpha = reader.take({64}); b.rel = reader.take({4, 19, 19});
+            b.qkv = reader.take({192, 64});
+            b.out = reader.take({64, 64}); b.out_scale = reader.take({64});
+            b.attn_alpha = reader.take({64});
             vector<float> bias(4 * 100 * 100);
             auto a = b.rel.accessor<float, 3>();
             for (int h = 0; h < 4; ++h) for (int i = 0; i < 100; ++i) for (int j = 0; j < 100; ++j)
@@ -1072,7 +1035,8 @@ struct Q4Policy {
             b.rel = torch::from_blob(bias.data(), {1, 4, 100, 100}, torch::kFloat32).clone();
             blocks.push_back(move(b));
         }
-        policy1 = reader.take({64, 64, 1, 1}); gn_weight = reader.take({64}); gn_bias = reader.take({64});
+        policy1 = reader.take({64, 64, 1, 1}); gn_weight = reader.take({64});
+        gn_bias = reader.take({64});
         policy2 = reader.take({1, 64, 1, 1}); policy2_bias = reader.take({1});
         mean = reader.take({NUM_PLANES, 1, 1}); invstd = reader.take({NUM_PLANES, 1, 1});
     }
@@ -1088,18 +1052,20 @@ struct Q4Policy {
         Tensor grouped = x.view({1, 8, 8, 10, 10});
         Tensor mu = grouped.mean({2, 3, 4}, true);
         Tensor centered = grouped - mu;
-        x = (centered / torch::sqrt((centered * centered).mean({2, 3, 4}, true) + 1e-5)).view({1, 64, 10, 10});
+        x = (centered / torch::sqrt((centered * centered).mean({2, 3, 4}, true) + 1e-5))
+            .view({1, 64, 10, 10});
         x = x * gn_weight.view({1, 64, 1, 1}) + gn_bias.view({1, 64, 1, 1});
         x = torch::relu(x).permute({0, 2, 3, 1});
         return qlinear(x, policy2.reshape({1, 64}), policy2_bias).reshape({1, 100});
     }
 };
-'''
+"""
     source = source.replace("\nstruct State {", "\n" + direct_model + "\nstruct State {")
     source = source.replace(
         "torch::jit::script::Module load_model() {\n"
         "    vector<unsigned char> model_bytes = decode_base91(kEncodedModel);\n"
-        "    string model_data(reinterpret_cast<const char*>(model_bytes.data()), model_bytes.size());\n"
+        "    string model_data(\n"
+        "        reinterpret_cast<const char*>(model_bytes.data()), model_bytes.size());\n"
         "    istringstream input(model_data, ios::binary);\n"
         "    torch::NoGradGuard no_grad;\n"
         "    auto module = torch::jit::load(input, torch::kCPU);\n"
@@ -1117,7 +1083,9 @@ struct Q4Policy {
         "        .contiguous();",
         "torch::Tensor logits = module.forward(input).reshape({N * N}).contiguous();",
     )
-    source = source.replace("torch::jit::script::Module module = load_model();", "Q4Policy module = load_model();")
+    source = source.replace(
+        "torch::jit::script::Module module = load_model();", "Q4Policy module = load_model();"
+    )
     return source
 
 
