@@ -60,7 +60,7 @@ def export_torchscript(checkpoint_path: Path, config: dict[str, object]) -> byte
         channels=int(cast(Any, config["model_channels"])),
         blocks=int(cast(Any, config["model_blocks"])),
         block_type=str(config["model_block_type"]),
-        critic_feature_mode=str(config.get("critic_feature_mode", "none")),
+        critic_feature_mode=str(config.get("critic_feature_mode", "oracle")),
     )
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint

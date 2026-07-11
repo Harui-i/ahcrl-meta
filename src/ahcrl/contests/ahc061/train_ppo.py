@@ -49,7 +49,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "normalization_grouping": "none",
     "weight_projection": False,
     "symmetry_augmentation": "none",
-    "critic_feature_mode": "none",
+    "critic_feature_mode": "oracle",
     "artifact_dir": ROOT / "contests/ahc-061/artifacts/ppo",
     "checkpoint_interval_updates": 1,
     "model_channels": 64,

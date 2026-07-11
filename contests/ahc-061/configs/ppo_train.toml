@@ -22,6 +22,7 @@ reward_scale_g_max = 5.0
 obs_norm_mode = "running_channel"
 obs_norm_epsilon = 1e-8
 normalization_grouping = "none"
+critic_feature_mode = "oracle"
 artifact_dir = "contests/ahc-061/artifacts/ppo"
 checkpoint_interval_updates = 40
 model_channels = 256

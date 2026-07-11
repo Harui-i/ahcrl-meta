@@ -32,7 +32,7 @@ class ActorCritic(nn.Module):
         channels: int = 64,
         blocks: int = 4,
         block_type: str = "convnext",
-        critic_feature_mode: str = "none",
+        critic_feature_mode: str = "oracle",
     ) -> None:
         super().__init__()
         block_factory = _block_factory(block_type, channels=channels, blocks=blocks)

@@ -18,6 +18,7 @@ minibatch_size = 1024
 entropy_coef = 0.01
 value_coef = 0.5
 max_grad_norm = 0.5
+critic_feature_mode = "oracle"
 artifact_dir = "contests/ahc-061/artifacts/ppo"
 checkpoint_interval_updates = 1
 model_channels = 64
