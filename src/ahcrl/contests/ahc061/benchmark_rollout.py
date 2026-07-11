@@ -364,6 +364,7 @@ def timed_rollout(
             device,
         ),
     )
+
     def bootstrap() -> torch.Tensor:
         with torch.inference_mode():
             if next_critic_features is None:
@@ -542,8 +543,7 @@ def print_result(result: dict[str, Any]) -> None:
     config = result["config"]
     summary = result["summary"]
     print(
-        "benchmark_config="
-        + json.dumps(config, sort_keys=True, separators=(",", ":")),
+        "benchmark_config=" + json.dumps(config, sort_keys=True, separators=(",", ":")),
         flush=True,
     )
     print(

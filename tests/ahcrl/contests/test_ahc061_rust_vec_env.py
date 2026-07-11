@@ -91,12 +91,8 @@ def test_rust_vec_env_reset_and_step() -> None:
 
         pos0_idx = int(np.flatnonzero(obs["planes"][0, 15].reshape(100))[0])
         pos0_x, pos0_y = divmod(pos0_idx, 10)
-        np.testing.assert_allclose(
-            obs["planes"][0, PLANE_POS0_X_NORM, 0, 0], pos0_x / 9, rtol=1e-3
-        )
-        np.testing.assert_allclose(
-            obs["planes"][0, PLANE_POS0_Y_NORM, 0, 0], pos0_y / 9, rtol=1e-3
-        )
+        np.testing.assert_allclose(obs["planes"][0, PLANE_POS0_X_NORM, 0, 0], pos0_x / 9, rtol=1e-3)
+        np.testing.assert_allclose(obs["planes"][0, PLANE_POS0_Y_NORM, 0, 0], pos0_y / 9, rtol=1e-3)
 
         player0_agg = PLANE_PLAYER_AGG_START
         np.testing.assert_allclose(

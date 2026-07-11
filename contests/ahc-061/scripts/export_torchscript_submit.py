@@ -16,8 +16,7 @@ from ahcrl.contests.ahc061.model import (
 )
 
 BASE91_ALPHABET = (
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-    "!#$%&()*+,./:;<=>?@[]^_`{|}~\""
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~"'
 )
 
 

@@ -1,7 +1,9 @@
+import io
 import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -200,10 +202,11 @@ class RustVecEnv:
     def _read_exact_into(self, proc: subprocess.Popen[bytes], view: memoryview) -> None:
         if proc.stdout is None:
             raise RuntimeError("rl_env stdout is closed")
+        stdout = cast(io.FileIO, proc.stdout)
         remaining = len(view)
         offset = 0
         while remaining > 0:
-            read_size = proc.stdout.readinto(view[offset:])
+            read_size = stdout.readinto(view[offset:])
             if not read_size:
                 break
             offset += read_size

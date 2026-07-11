@@ -327,9 +327,7 @@ class GroupedRewardScaler:
         for (m_value, u_value), scaler in sorted(self.group_scalers.items()):
             group_stats = scaler.stats()
             if "reward_scale" in group_stats:
-                stats[f"reward_scale_by_m_u/m_{m_value}_u_{u_value}"] = group_stats[
-                    "reward_scale"
-                ]
+                stats[f"reward_scale_by_m_u/m_{m_value}_u_{u_value}"] = group_stats["reward_scale"]
         return stats
 
     def state_dict(self) -> dict[str, Any]:
@@ -386,10 +384,15 @@ class RunningObservationNormalizer:
         if batch_count == 0:
             return
         batch_mean = values.mean(dim=(0, 2, 3), keepdim=True).cpu()
-        batch_m2 = values.sub(batch_mean.to(device=values.device)).pow(2).sum(
-            dim=(0, 2, 3),
-            keepdim=True,
-        ).cpu()
+        batch_m2 = (
+            values.sub(batch_mean.to(device=values.device))
+            .pow(2)
+            .sum(
+                dim=(0, 2, 3),
+                keepdim=True,
+            )
+            .cpu()
+        )
         self._merge(batch_count=batch_count, batch_mean=batch_mean, batch_m2=batch_m2)
 
     def normalize(self, observations: torch.Tensor) -> torch.Tensor:
@@ -561,6 +564,7 @@ ObservationNormalizer = RunningObservationNormalizer | GroupedObservationNormali
 def create_reward_scaler(args: argparse.Namespace) -> RewardScaler | None:
     if args.reward_scale_mode == "none":
         return None
+
     def factory() -> SingleRewardScaler:
         if args.reward_scale_mode == "running_std":
             return ImmediateRewardScaler(epsilon=args.reward_scale_epsilon)
@@ -880,11 +884,7 @@ def collect_rollout(
         "scores": torch.stack(score_buf),
         "m_values": torch.stack(m_buf),
         "u_values": torch.stack(u_buf),
-        **(
-            {}
-            if not critic_feature_buf
-            else {"critic_features": torch.stack(critic_feature_buf)}
-        ),
+        **({} if not critic_feature_buf else {"critic_features": torch.stack(critic_feature_buf)}),
         "last_obs": obs,
         "next_seed_start": next_seed_start,
         **reward_scale_stats,
@@ -1126,15 +1126,11 @@ def update_model(
                     args.max_grad_norm,
                 )
                 optimizer.step()
-                if (
-                    args.weight_projection
-                    or getattr(args, "model_block_type", "")
-                    in (
-                        "simbav2_block",
-                        "spherical_depthwise_simba",
-                        "spherical_global_context",
-                        "spherical_attention_simba",
-                    )
+                if args.weight_projection or getattr(args, "model_block_type", "") in (
+                    "simbav2_block",
+                    "spherical_depthwise_simba",
+                    "spherical_global_context",
+                    "spherical_attention_simba",
                 ):
                     project_hyperspherical_weights_(grad_model)
 
@@ -1555,8 +1551,7 @@ def validate_resume_overrides(overrides: dict[str, Any]) -> None:
     disallowed = sorted(set(overrides) - RESUME_ALLOWED_OVERRIDE_KEYS)
     if disallowed:
         raise ValueError(
-            "resume only allows overriding total_steps; disallowed keys: "
-            + ", ".join(disallowed)
+            "resume only allows overriding total_steps; disallowed keys: " + ", ".join(disallowed)
         )
 
 
@@ -1587,10 +1582,7 @@ def load_toml_config(path: Path) -> dict[str, Any]:
 
 
 def print_resolved_config(args: argparse.Namespace) -> None:
-    printable = {
-        key: _jsonable(value)
-        for key, value in sorted(vars(args).items())
-    }
+    printable = {key: _jsonable(value) for key, value in sorted(vars(args).items())}
     print("config=" + json.dumps(printable, sort_keys=True), flush=True)
 
 
