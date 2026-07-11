@@ -615,7 +615,7 @@ def main() -> None:
     ).to(device=device, dtype=MODEL_DTYPE)
     total_parameters, trainable_parameters = _parameter_counts(raw_model)
     print(
-        f"model_parameters total={total_parameters} trainable={trainable_parameters}",
+        f"model_parameters total={total_parameters:,} trainable={trainable_parameters:,}",
         flush=True,
     )
     if args.init_checkpoint is not None:
@@ -1160,9 +1160,7 @@ def update_model(
                 stat_sums["weighted_value_loss"] += (
                     float((args.value_coef * value_loss).item()) * weight
                 )
-                stat_sums["entropy_loss"] += (
-                    float((-args.entropy_coef * entropy).item()) * weight
-                )
+                stat_sums["entropy_loss"] += float((-args.entropy_coef * entropy).item()) * weight
                 stat_sums["total_loss"] += float(loss.item()) * weight
                 stat_sums["normalized_entropy"] += float(normalized_entropy.item()) * weight
                 stat_sums["approx_kl"] += float(approx_kl.item()) * weight
