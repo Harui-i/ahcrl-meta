@@ -1415,8 +1415,6 @@ def update_model(
                 optimizer.step()
                 if args.weight_projection or getattr(args, "model_block_type", "") in (
                     "simbav2_block",
-                    "spherical_depthwise_simba",
-                    "spherical_global_context",
                     "spherical_attention_simba",
                 ):
                     project_hyperspherical_weights_(grad_model)
@@ -1806,8 +1804,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "per_cell_mlp",
             "residual",
             "simbav2_block",
-            "spherical_depthwise_simba",
-            "spherical_global_context",
             "spherical_attention_simba",
         ),
         default=argparse.SUPPRESS,

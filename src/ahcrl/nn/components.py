@@ -8,7 +8,6 @@ import torch
 from torch import nn
 
 __all__ = [
-    "GlobalContextLERP2d",
     "HyperEmbedder2d",
     "HyperLinear",
     "HyperMLP",
@@ -364,67 +363,3 @@ class SphericalSelfAttentionLERP2d(nn.Module):
         relative_x = relative[1] + self.max_spatial_size - 1
         bias = self.relative_position_bias[:, relative_y, relative_x]
         return bias.unsqueeze(0)
-
-
-class GlobalContextLERP2d(nn.Module):
-    """Broadcast pooled global context and LERP per-cell features toward it."""
-
-    def __init__(
-        self,
-        channels: int,
-        *,
-        expansion: int = 4,
-        alpha_init: float = 0.1,
-        alpha_scale: float | None = None,
-        shift_const: float = 3.0,
-        eps: float = 1e-8,
-    ) -> None:
-        super().__init__()
-        if channels <= 0:
-            raise ValueError(f"channels must be positive, got {channels}")
-        if expansion <= 0:
-            raise ValueError(f"expansion must be positive, got {expansion}")
-        if alpha_scale == 0.0:
-            raise ValueError("alpha_scale must be non-zero")
-        if shift_const <= 0.0:
-            raise ValueError(f"shift_const must be positive, got {shift_const}")
-        if eps <= 0.0:
-            raise ValueError(f"eps must be positive, got {eps}")
-
-        hidden_channels = channels * expansion
-        default_hidden_scale = math.sqrt(2.0 / channels) / math.sqrt(expansion)
-        default_alpha_scale = 1.0 / math.sqrt(channels)
-        self.shift = ShiftL2Norm(shift_const=shift_const, dim=-1, eps=eps)
-        self.w1 = HyperLinear(channels * 2 + 1, hidden_channels, eps=eps)
-        self.hidden_scaler = Scaler(
-            hidden_channels,
-            init=default_hidden_scale,
-            scale=default_hidden_scale,
-        )
-        self.activation = nn.ReLU()
-        self.w2 = HyperLinear(hidden_channels, channels, eps=eps)
-        self.alpha_scaler = Scaler(
-            channels,
-            init=alpha_init,
-            scale=default_alpha_scale if alpha_scale is None else alpha_scale,
-        )
-        self.eps = eps
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.ndim != 4:
-            raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
-        avg_features = x.mean(dim=(-2, -1))
-        # Avoid x.amax(dim=(-2, -1)): on CUDA bfloat16 under torch.compile, its backward
-        # has produced NaN gradients through the upstream HyperEmbedder2d.
-        max_features = x.flatten(2).max(dim=2).values
-        global_features = torch.cat([avg_features, max_features], dim=1)
-        y = self.shift(global_features)
-        y = self.w1(y)
-        y = self.hidden_scaler(y)
-        y = self.activation(y) + self.eps
-        y = self.w2(y)
-        y = l2_normalize(y, dim=-1, eps=self.eps)
-        target = y[:, :, None, None]
-        delta = (target - x).permute(0, 2, 3, 1)
-        mixed = x + self.alpha_scaler(delta).permute(0, 3, 1, 2)
-        return l2_normalize(mixed, dim=1, eps=self.eps)

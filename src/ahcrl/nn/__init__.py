@@ -6,11 +6,8 @@ from ahcrl.nn.blocks import (
     ResidualBlock,
     SimbaV2Block,
     SphericalAttentionSimbaBlock,
-    SphericalDepthwiseSimbaBlock,
-    SphericalGlobalContextBlock,
 )
 from ahcrl.nn.components import (
-    GlobalContextLERP2d,
     HyperEmbedder2d,
     HyperLinear,
     HyperMLP,
@@ -27,7 +24,6 @@ from ahcrl.nn.components import (
 
 __all__ = [
     "ConvNeXtBlock",
-    "GlobalContextLERP2d",
     "HyperEmbedder2d",
     "HyperLinear",
     "HyperMLP",
@@ -39,8 +35,6 @@ __all__ = [
     "ShiftL2Norm",
     "SimbaV2Block",
     "SphericalAttentionSimbaBlock",
-    "SphericalDepthwiseSimbaBlock",
-    "SphericalGlobalContextBlock",
     "SphericalSelfAttentionLERP2d",
     "l2_normalize",
     "make_group_norm",

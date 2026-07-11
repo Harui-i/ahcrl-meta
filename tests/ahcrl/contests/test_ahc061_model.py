@@ -14,8 +14,6 @@ from ahcrl.contests.ahc061.model import ActorCritic
         "per_cell_mlp",
         "residual",
         "simbav2_block",
-        "spherical_depthwise_simba",
-        "spherical_global_context",
         "spherical_attention_simba",
     ],
 )
