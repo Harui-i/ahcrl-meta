@@ -22,9 +22,7 @@ from ahcrl.contests.ahc061.train_ppo import (
     create_model,
     load_initial_model,
     load_training_state,
-    mix_model_parameters_,
     parse_args,
-    reference_kl_coef,
     save_training_state,
 )
 
@@ -108,10 +106,6 @@ def test_parse_args_compile_defaults_to_true_and_can_be_disabled() -> None:
     assert parse_args(["--device", "cpu", "--no-compile"]).compile is False
     assert parse_args(["--device", "cpu"]).pf_particles == 16
     assert parse_args(["--device", "cpu"]).weight_projection is False
-    assert parse_args(["--device", "cpu"]).model_reset_interval_steps == 0
-    assert parse_args(["--device", "cpu"]).reset_previous_weight_mix == 0.0
-    assert parse_args(["--device", "cpu"]).reset_reference_kl_coef == 0.1
-    assert parse_args(["--device", "cpu"]).reset_reference_kl_decay_steps == 1_250_000
     assert parse_args(["--device", "cpu"]).obs_norm_mode == "none"
     assert parse_args(["--device", "cpu"]).normalization_grouping == "none"
     assert parse_args(["--device", "cpu", "--weight-projection"]).weight_projection is True
@@ -218,14 +212,6 @@ def test_parse_args_resume_loads_saved_config_and_only_allows_total_steps(
             "2",
             "--lr",
             "0.0003",
-            "--model-reset-interval-steps",
-            "5000000",
-            "--reset-previous-weight-mix",
-            "0.5",
-            "--reset-reference-kl-coef",
-            "0.1",
-            "--reset-reference-kl-decay-steps",
-            "3500000",
             "--wandb-name",
             "resumed-run",
         ]
@@ -237,10 +223,6 @@ def test_parse_args_resume_loads_saved_config_and_only_allows_total_steps(
     assert resumed.lr == 0.0003
     assert resumed.num_envs == 8
     assert resumed.device == "cpu"
-    assert resumed.model_reset_interval_steps == 5_000_000
-    assert resumed.reset_previous_weight_mix == 0.5
-    assert resumed.reset_reference_kl_coef == 0.1
-    assert resumed.reset_reference_kl_decay_steps == 3_500_000
     assert resumed.wandb_name == "resumed-run"
 
     with pytest.raises(ValueError, match="resume only allows approved training overrides"):
@@ -409,7 +391,6 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     obs_normalizer = model.observation_normalizer
     assert obs_normalizer is not None
     obs_normalizer.update(torch.ones(2, NUM_PLANES, 10, 10))
-    reference_model = create_model(args, torch.device("cpu"))
     torch.manual_seed(123)
 
     checkpoint_path = save_training_state(
@@ -422,9 +403,6 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
         wandb_run_id="abc123",
         reward_scaler=reward_scaler,
         obs_normalizer=obs_normalizer,
-        reference_model=reference_model,
-        last_model_reset_step=96,
-        model_reset_count=2,
     )
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -445,9 +423,6 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
     assert state["global_step"] == 128
     assert state["update"] == 2
     assert state["next_seed_start"] == 64
-    assert state["last_model_reset_step"] == 96
-    assert state["model_reset_count"] == 2
-    assert state["reference_model_state"] is not None
     assert state["reward_scaler_state"] == reward_scaler.state_dict()
     assert state["obs_normalizer_state"] is None
     assert model.observation_normalizer is not None
@@ -458,57 +433,6 @@ def test_save_and_load_training_state_round_trips_resume_state(tmp_path: Path) -
         model.observation_normalizer.mean,
         reloaded_model.observation_normalizer.mean,
     )
-
-
-def test_reference_kl_coef_linearly_decays_after_model_reset() -> None:
-    args = parse_args(
-        [
-            "--device",
-            "cpu",
-            "--reset-reference-kl-coef",
-            "0.2",
-            "--reset-reference-kl-decay-steps",
-            "100",
-        ]
-    )
-    reference = torch.nn.Identity()
-
-    assert reference_kl_coef(
-        args,
-        global_step=1_000,
-        last_model_reset_step=1_000,
-        reference_model=reference,
-    ) == pytest.approx(0.2)
-    assert reference_kl_coef(
-        args,
-        global_step=1_050,
-        last_model_reset_step=1_000,
-        reference_model=reference,
-    ) == pytest.approx(0.1)
-    assert (
-        reference_kl_coef(
-            args,
-            global_step=1_100,
-            last_model_reset_step=1_000,
-            reference_model=reference,
-        )
-        == 0.0
-    )
-
-
-def test_mix_model_parameters_interpolates_fresh_and_previous_weights() -> None:
-    model = torch.nn.Linear(2, 1)
-    previous_model = torch.nn.Linear(2, 1)
-    with torch.no_grad():
-        model.weight.fill_(2.0)
-        model.bias.fill_(2.0)
-        previous_model.weight.fill_(6.0)
-        previous_model.bias.fill_(6.0)
-
-    mix_model_parameters_(model, previous_model, previous_weight_mix=0.25)
-
-    assert torch.equal(model.weight, torch.full_like(model.weight, 3.0))
-    assert torch.equal(model.bias, torch.full_like(model.bias, 3.0))
 
 
 def test_running_reward_scaler_uses_discounted_return_variance_and_g_max_floor() -> None:

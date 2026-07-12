@@ -24,5 +24,3 @@ checkpoint保存頻度は `checkpoint_interval_updates` で「何updateごとに
 新規runは `artifact_dir` 配下に `run_*` ディレクトリを作って保存する。
 同一runを継続する場合は `--resume-dir contests/ahc-061/artifacts/ppo/run_...` を指定する。resume時は保存済みconfigを使い、`--total-steps` だけ増やせる。
 別runの初期値としてモデルだけ読む場合は `--init-checkpoint path/to/checkpoint.pt` を指定する。
-
-`model_reset_interval_steps` を正にすると、直近のresetからその env steps 以上経過したupdate後に、modelとoptimizerを初期化する。reset直前の重みは `checkpoints/step_<step>_pre_reset.pt` に保存される。`reset_previous_weight_mix` を正にすると、fresh model の各 parameter を `mix * reset前 + (1 - mix) * 初期値` に置換してからoptimizerを初期化する。`reset_reference_kl_coef` と `reset_reference_kl_decay_steps` を設定すると、reset前の方策からの forward KL を指定step数で線形に0へ減衰させる。

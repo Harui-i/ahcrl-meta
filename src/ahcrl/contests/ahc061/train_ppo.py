@@ -55,10 +55,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "model_channels": 64,
     "model_blocks": 4,
     "model_block_type": "convnext",
-    "model_reset_interval_steps": 0,
-    "reset_previous_weight_mix": 0.0,
-    "reset_reference_kl_coef": 0.1,
-    "reset_reference_kl_decay_steps": 1_250_000,
     "distillation_teacher_checkpoint": None,
     "distillation_kl_coef": 0.0,
     "wandb_enabled": False,
@@ -70,10 +66,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 RESUME_ALLOWED_OVERRIDE_KEYS = {
     "total_steps",
-    "model_reset_interval_steps",
-    "reset_previous_weight_mix",
-    "reset_reference_kl_coef",
-    "reset_reference_kl_decay_steps",
     "epochs",
     "lr",
     "num_envs",
@@ -631,46 +623,6 @@ def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
     return model
 
 
-@torch.no_grad()
-def mix_model_parameters_(
-    model: nn.Module,
-    previous_model: nn.Module,
-    *,
-    previous_weight_mix: float,
-) -> None:
-    """Mix fresh model parameters with a previous model in-place."""
-
-    if not 0.0 <= previous_weight_mix <= 1.0:
-        raise ValueError(f"previous_weight_mix must be in [0, 1], got {previous_weight_mix}")
-    model_parameters = dict(model.named_parameters())
-    previous_parameters = dict(previous_model.named_parameters())
-    if model_parameters.keys() != previous_parameters.keys():
-        raise ValueError("model and previous_model must have identical parameters")
-    for name, parameter in model_parameters.items():
-        previous_parameter = previous_parameters[name]
-        if parameter.shape != previous_parameter.shape:
-            raise ValueError(f"parameter shape mismatch for {name}")
-        parameter.lerp_(previous_parameter, previous_weight_mix)
-
-
-def reference_kl_coef(
-    args: argparse.Namespace,
-    *,
-    global_step: int,
-    last_model_reset_step: int,
-    reference_model: nn.Module | None,
-) -> float:
-    if reference_model is None or args.reset_reference_kl_coef == 0.0:
-        return 0.0
-    elapsed_steps = global_step - last_model_reset_step
-    if elapsed_steps < 0:
-        raise ValueError("global_step must not precede last_model_reset_step")
-    if elapsed_steps >= args.reset_reference_kl_decay_steps:
-        return 0.0
-    progress = elapsed_steps / args.reset_reference_kl_decay_steps
-    return args.reset_reference_kl_coef * (1.0 - progress)
-
-
 def main() -> None:
     args = parse_args()
     args.run_dir = prepare_run_dir(args)
@@ -703,9 +655,6 @@ def main() -> None:
     next_seed_start = _initial_next_seed_start(args)
     global_step = 0
     update = 0
-    last_model_reset_step = 0
-    model_reset_count = 0
-    reference_model: ActorCritic | None = None
     distillation_teacher_model: ActorCritic | None = None
     distillation_teacher_normalizer: KeyedObservationNormalizer | None = None
     if args.distillation_teacher_checkpoint is not None:
@@ -717,13 +666,6 @@ def main() -> None:
         resume_state = load_training_state(args.resume_dir, raw_model, optimizer, device)
         global_step = resume_state["global_step"]
         update = resume_state["update"]
-        last_model_reset_step = resume_state["last_model_reset_step"]
-        model_reset_count = resume_state["model_reset_count"]
-        reference_state = resume_state["reference_model_state"]
-        if reference_state is not None:
-            reference_model = create_model(args, device)
-            reference_model.load_state_dict(reference_state)
-            reference_model.eval()
         if reward_scaler is not None and resume_state["reward_scaler_state"] is not None:
             reward_scaler.load_state_dict(resume_state["reward_scaler_state"])
         if resume_state["obs_normalizer_state"] is not None:
@@ -770,17 +712,6 @@ def main() -> None:
             next_seed_start = rollout.pop("next_seed_start")
             global_step += args.num_envs * args.rollout_steps
             update += 1
-            if reference_model is not None and (
-                args.reset_reference_kl_coef == 0.0
-                or global_step - last_model_reset_step >= args.reset_reference_kl_decay_steps
-            ):
-                reference_model = None
-            current_reference_kl_coef = reference_kl_coef(
-                args,
-                global_step=global_step,
-                last_model_reset_step=last_model_reset_step,
-                reference_model=reference_model,
-            )
             stats = update_model(
                 model,
                 raw_model,
@@ -788,8 +719,6 @@ def main() -> None:
                 rollout,
                 args,
                 device,
-                reference_model=reference_model,
-                reference_kl_coef=current_reference_kl_coef,
                 distillation_teacher_model=distillation_teacher_model,
                 distillation_kl_coef=args.distillation_kl_coef,
             )
@@ -798,66 +727,7 @@ def main() -> None:
             checkpoint_path = None
             is_last_update = global_step >= args.total_steps
             should_save = update % args.checkpoint_interval_updates == 0 or is_last_update
-            did_model_reset = (
-                args.model_reset_interval_steps > 0
-                and not is_last_update
-                and global_step - last_model_reset_step >= args.model_reset_interval_steps
-            )
-            if did_model_reset:
-                save_training_state(
-                    args,
-                    raw_model,
-                    optimizer,
-                    global_step=global_step,
-                    update=update,
-                    next_seed_start=next_seed_start,
-                    wandb_run_id=None if wandb_run is None else wandb_run.id,
-                    reward_scaler=reward_scaler,
-                    obs_normalizer=obs_normalizer,
-                    reference_model=reference_model,
-                    last_model_reset_step=last_model_reset_step,
-                    model_reset_count=model_reset_count,
-                    checkpoint_name=f"step_{global_step}_pre_reset.pt",
-                    update_latest=False,
-                )
-                reference_model = create_model(args, device)
-                reference_model.load_state_dict(raw_model.state_dict())
-                reference_model.eval()
-                previous_normalizer = raw_model.observation_normalizer
-                raw_model = create_model(args, device)
-                if previous_normalizer is not None:
-                    if raw_model.observation_normalizer is None:
-                        raise AssertionError("model reset lost observation normalizer")
-                    raw_model.observation_normalizer.load_state_dict(
-                        previous_normalizer.state_dict()
-                    )
-                    obs_normalizer = raw_model.observation_normalizer
-                if args.reset_previous_weight_mix > 0.0:
-                    mix_model_parameters_(
-                        raw_model,
-                        reference_model,
-                        previous_weight_mix=args.reset_previous_weight_mix,
-                    )
-                    project_hyperspherical_weights_(raw_model)
-                optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
-                model = cast(nn.Module, torch.compile(raw_model)) if args.compile else raw_model
-                last_model_reset_step = global_step
-                model_reset_count += 1
-                checkpoint_path = save_training_state(
-                    args,
-                    raw_model,
-                    optimizer,
-                    global_step=global_step,
-                    update=update,
-                    next_seed_start=next_seed_start,
-                    wandb_run_id=None if wandb_run is None else wandb_run.id,
-                    reward_scaler=reward_scaler,
-                    obs_normalizer=obs_normalizer,
-                    reference_model=reference_model,
-                    last_model_reset_step=last_model_reset_step,
-                    model_reset_count=model_reset_count,
-                )
-            elif should_save:
+            if should_save:
                 checkpoint_seed_start = next_seed_start
                 checkpoint_path = save_training_state(
                     args,
@@ -869,9 +739,6 @@ def main() -> None:
                     wandb_run_id=None if wandb_run is None else wandb_run.id,
                     reward_scaler=reward_scaler,
                     obs_normalizer=obs_normalizer,
-                    reference_model=reference_model,
-                    last_model_reset_step=last_model_reset_step,
-                    model_reset_count=model_reset_count,
                 )
                 obs = env.reset(
                     checkpoint_seed_start,
@@ -880,9 +747,6 @@ def main() -> None:
                     args.fixed_u,
                 )
                 next_seed_start = _advance_seed_start(checkpoint_seed_start, args)
-            stats["reset_previous_weight_mix"] = (
-                args.reset_previous_weight_mix if did_model_reset else 0.0
-            )
             log_metrics = build_log_metrics(
                 update=update,
                 global_step=global_step,
@@ -890,9 +754,6 @@ def main() -> None:
                 rollout=rollout,
                 stats=stats,
                 checkpoint_path=checkpoint_path,
-                model_reset_count=model_reset_count,
-                steps_since_model_reset=global_step - last_model_reset_step,
-                did_model_reset=did_model_reset,
             )
             if wandb_run is not None:
                 wandb_run.log(log_metrics, step=global_step)
@@ -920,11 +781,8 @@ def main() -> None:
                         f"total_loss={stats['total_loss']:.5f}",
                         f"normalized_entropy={stats['normalized_entropy']:.5f}",
                         f"approx_kl={stats['approx_kl']:.5f}",
-                        f"reference_forward_kl={stats['reference_forward_kl']:.5f}",
-                        f"reference_kl_coef={stats['reference_kl_coef']:.5f}",
                         f"distillation_forward_kl={stats['distillation_forward_kl']:.5f}",
                         f"distillation_kl_coef={stats['distillation_kl_coef']:.5f}",
-                        f"model_reset={int(did_model_reset)}",
                         f"clip_frac={stats['clip_frac']:.5f}",
                         f"grad_norm={stats['grad_norm']:.5f}",
                         f"weight_norm={stats['weight_norm']:.5f}",
@@ -1240,9 +1098,6 @@ def save_training_state(
     wandb_run_id: str | None,
     reward_scaler: RewardScaler | None = None,
     obs_normalizer: KeyedObservationNormalizer | None = None,
-    reference_model: ActorCritic | None = None,
-    last_model_reset_step: int = 0,
-    model_reset_count: int = 0,
     checkpoint_name: str | None = None,
     update_latest: bool = True,
 ) -> Path:
@@ -1263,9 +1118,6 @@ def save_training_state(
         "torch_rng_state": torch.get_rng_state(),
         "numpy_rng_state": np.random.get_state(),
         "reward_scaler": None if reward_scaler is None else reward_scaler.state_dict(),
-        "reference_model": None if reference_model is None else reference_model.state_dict(),
-        "last_model_reset_step": last_model_reset_step,
-        "model_reset_count": model_reset_count,
     }
     torch.save(checkpoint, checkpoint_path)
     if update_latest:
@@ -1302,9 +1154,6 @@ def load_training_state(
         "numpy_rng_state": checkpoint["numpy_rng_state"],
         "reward_scaler_state": checkpoint.get("reward_scaler"),
         "obs_normalizer_state": None,
-        "reference_model_state": checkpoint.get("reference_model"),
-        "last_model_reset_step": int(checkpoint.get("last_model_reset_step", 0)),
-        "model_reset_count": int(checkpoint.get("model_reset_count", 0)),
     }
 
 
@@ -1349,8 +1198,6 @@ def update_model(
     args: argparse.Namespace,
     device: torch.device,
     *,
-    reference_model: nn.Module | None = None,
-    reference_kl_coef: float = 0.0,
     distillation_teacher_model: nn.Module | None = None,
     distillation_kl_coef: float = 0.0,
 ) -> dict[str, float]:
@@ -1384,9 +1231,6 @@ def update_model(
         "approx_kl": 0.0,
         "clip_frac": 0.0,
         "grad_norm": 0.0,
-        "reference_forward_kl": 0.0,
-        "reference_kl_loss": 0.0,
-        "reference_kl_coef": 0.0,
         "distillation_forward_kl": 0.0,
         "distillation_kl_loss": 0.0,
         "distillation_kl_coef": 0.0,
@@ -1423,24 +1267,6 @@ def update_model(
                 pg2 = -mb_advantages * torch.clamp(ratio, 1.0 - args.clip, 1.0 + args.clip)
                 policy_loss = torch.max(pg1, pg2).mean()
                 value_loss = F.mse_loss(value, mb_returns)
-                reference_forward_kl = torch.zeros((), device=device)
-                if reference_model is not None and reference_kl_coef != 0.0:
-                    with torch.no_grad():
-                        reference_logits, _ = _forward_normalized(
-                            reference_model,
-                            aug_obs,
-                            mb_critic_features,
-                        )
-                        reference_logits = reference_logits.float().masked_fill(~aug_masks, -1e9)
-                        reference_log_probs = F.log_softmax(reference_logits, dim=-1)
-                        reference_probs = reference_log_probs.exp()
-                    current_log_probs = F.log_softmax(logits, dim=-1)
-                    reference_forward_kl = (
-                        (reference_probs * (reference_log_probs - current_log_probs))
-                        .sum(dim=-1)
-                        .mean()
-                    )
-                reference_kl_loss = reference_kl_coef * reference_forward_kl
                 distillation_forward_kl = torch.zeros((), device=device)
                 if distillation_teacher_model is not None and distillation_kl_coef != 0.0:
                     if mb_teacher_obs is None:
@@ -1462,7 +1288,6 @@ def update_model(
                     policy_loss
                     + args.value_coef * value_loss
                     - args.entropy_coef * entropy
-                    + reference_kl_loss
                     + distillation_kl_loss
                 )
 
@@ -1498,9 +1323,6 @@ def update_model(
                 stat_sums["approx_kl"] += float(approx_kl.item()) * weight
                 stat_sums["clip_frac"] += float(clip_frac.item()) * weight
                 stat_sums["grad_norm"] += float(grad_norm.item()) * weight
-                stat_sums["reference_forward_kl"] += float(reference_forward_kl.item()) * weight
-                stat_sums["reference_kl_loss"] += float(reference_kl_loss.item()) * weight
-                stat_sums["reference_kl_coef"] += reference_kl_coef * weight
                 stat_sums["distillation_forward_kl"] += (
                     float(distillation_forward_kl.item()) * weight
                 )
@@ -1652,9 +1474,6 @@ def build_log_metrics(
     rollout: dict[str, Any],
     stats: dict[str, float],
     checkpoint_path: Path | None,
-    model_reset_count: int = 0,
-    steps_since_model_reset: int = 0,
-    did_model_reset: bool = False,
 ) -> dict[str, float | int | str]:
     scores = rollout["scores"].float()
     final_scores = scores[-1]
@@ -1721,16 +1540,9 @@ def build_log_metrics(
         "train/normalized_entropy": stats["normalized_entropy"],
         "train/approx_kl": stats["approx_kl"],
         "train/clip_fraction": stats["clip_frac"],
-        "train/reference_forward_kl": stats.get("reference_forward_kl", 0.0),
-        "train/reference_kl_coef": stats.get("reference_kl_coef", 0.0),
-        "loss/reference_kl": stats.get("reference_kl_loss", 0.0),
         "train/distillation_forward_kl": stats.get("distillation_forward_kl", 0.0),
         "train/distillation_kl_coef": stats.get("distillation_kl_coef", 0.0),
         "loss/distillation_kl": stats.get("distillation_kl_loss", 0.0),
-        "train/model_reset_count": model_reset_count,
-        "train/steps_since_model_reset": steps_since_model_reset,
-        "train/reset_previous_weight_mix": stats.get("reset_previous_weight_mix", 0.0),
-        "event/model_reset": int(did_model_reset),
         "model/grad_norm": stats["grad_norm"],
         "model/weight_norm": stats["weight_norm"],
         "model/linear_conv_weight_norm": stats["linear_conv_weight_norm"],
@@ -1849,14 +1661,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint-interval-updates", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-channels", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--model-blocks", type=int, default=argparse.SUPPRESS)
-    parser.add_argument("--model-reset-interval-steps", type=int, default=argparse.SUPPRESS)
-    parser.add_argument("--reset-previous-weight-mix", type=float, default=argparse.SUPPRESS)
-    parser.add_argument("--reset-reference-kl-coef", type=float, default=argparse.SUPPRESS)
-    parser.add_argument(
-        "--reset-reference-kl-decay-steps",
-        type=int,
-        default=argparse.SUPPRESS,
-    )
     parser.add_argument(
         "--model-block-type",
         choices=(
@@ -1925,14 +1729,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     if config["checkpoint_interval_updates"] <= 0:
         raise ValueError("checkpoint_interval_updates must be positive")
-    if config["model_reset_interval_steps"] < 0:
-        raise ValueError("model_reset_interval_steps must be non-negative")
-    if not 0.0 <= config["reset_previous_weight_mix"] <= 1.0:
-        raise ValueError("reset_previous_weight_mix must be in [0, 1]")
-    if config["reset_reference_kl_coef"] < 0.0:
-        raise ValueError("reset_reference_kl_coef must be non-negative")
-    if config["reset_reference_kl_decay_steps"] <= 0:
-        raise ValueError("reset_reference_kl_decay_steps must be positive")
     if config["distillation_kl_coef"] < 0.0:
         raise ValueError("distillation_kl_coef must be non-negative")
     if config["distillation_kl_coef"] > 0.0 and config["distillation_teacher_checkpoint"] is None:
