@@ -1,0 +1,27 @@
+[train]
+num_envs = 1024
+total_steps = 20000000
+rollout_steps = 128
+seed_start = 0
+seed_stride = 1
+device = "cuda"
+compile = true
+lr = 0.0003
+gamma = 0.995
+gae_lambda = 0.95
+clip = 0.2
+epochs = 4
+minibatch_size = 4096
+entropy_coef = 0.005
+value_coef = 0.5
+max_grad_norm = 0.5
+reward_scale = true
+obs_norm = true
+obs_norm_epsilon = 1e-8
+artifact_dir = "contests/ahc-063/artifacts/ppo"
+checkpoint_interval_updates = 40
+model_channels = 256
+model_blocks = 3
+wandb_enabled = true
+wandb_project = "ahcrl-meta-ahc063"
+wandb_name = "ahc063-ppo-spherical-attention-simba"

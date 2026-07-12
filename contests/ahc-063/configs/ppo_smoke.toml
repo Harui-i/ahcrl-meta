@@ -1,0 +1,18 @@
+[train]
+num_envs = 2
+total_steps = 16
+rollout_steps = 8
+fixed_n = 8
+fixed_m = 16
+fixed_c = 3
+device = "cpu"
+compile = false
+lr = 0.0003
+epochs = 1
+minibatch_size = 8
+reward_scale = false
+obs_norm = false
+artifact_dir = "contests/ahc-063/artifacts/ppo-smoke"
+checkpoint_interval_updates = 1
+model_channels = 16
+model_blocks = 1
