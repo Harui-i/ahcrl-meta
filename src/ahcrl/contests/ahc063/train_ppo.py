@@ -231,7 +231,8 @@ def collect_rollout(
         scores.append(torch.from_numpy(result.score.copy()))
         obs = result.obs
         if result.done.any():
-            obs = env.reset(
+            obs = env.reset_done(
+                result.done,
                 args.seed_start + step + 1,
                 args.seed_stride,
                 args.fixed_n,

@@ -73,30 +73,40 @@ class OuroborosVecEnv:
         self.previous_action.fill(-1)
         self.steps.fill(0)
         for env_id in range(self.num_envs):
-            rng = np.random.default_rng(seed_start + env_id * seed_stride)
-            n = int(rng.integers(8, MAX_BOARD_SIZE + 1) if fixed_n is None else fixed_n)
-            c = int(rng.integers(3, MAX_COLORS + 1) if fixed_c is None else fixed_c)
-            min_m = (n * n + 3) // 4
-            max_m = 3 * n * n // 4
-            m = int(rng.integers(min_m, max_m + 1) if fixed_m is None else fixed_m)
-            if not 8 <= n <= MAX_BOARD_SIZE or not 3 <= c <= MAX_COLORS:
-                raise ValueError("fixed_n/fixed_c are outside the AHC063 limits")
-            if not min_m <= m <= max_m or m <= INITIAL_SNAKE_LENGTH:
-                raise ValueError("fixed_m is outside the AHC063 limits")
-            self.n[env_id], self.m[env_id], self.c[env_id] = n, m, c
-            self.desired[env_id, :INITIAL_SNAKE_LENGTH] = 1
-            self.desired[env_id, INITIAL_SNAKE_LENGTH:m] = rng.integers(
-                1, c + 1, m - INITIAL_SNAKE_LENGTH
+            self._reset_one(
+                env_id,
+                seed_start + env_id * seed_stride,
+                fixed_n,
+                fixed_m,
+                fixed_c,
             )
-            cells = np.arange(n * n)
-            cells = cells[~np.isin(cells, np.array([0, n, 2 * n, 3 * n, 4 * n]))]
-            chosen = rng.choice(cells, size=m - INITIAL_SNAKE_LENGTH, replace=False)
-            shuffled_colors = self.desired[env_id, INITIAL_SNAKE_LENGTH:m].copy()
-            rng.shuffle(shuffled_colors)
-            self.food[env_id, chosen // n, chosen % n] = shuffled_colors
-            for index in range(INITIAL_SNAKE_LENGTH):
-                self.positions[env_id, index] = (4 - index, 0)
-                self.colors[env_id, index] = 1
+        self.obs = self._encode()
+        return self.obs
+
+    def reset_done(
+        self,
+        done: np.ndarray,
+        seed_start: int = 0,
+        seed_stride: int = 1,
+        fixed_n: int | None = None,
+        fixed_m: int | None = None,
+        fixed_c: int | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Reset only finished environments and preserve all other episodes."""
+        done = np.asarray(done, dtype=bool)
+        if done.shape != (self.num_envs,):
+            raise ValueError(f"done must have shape ({self.num_envs},), got {done.shape}")
+        fixed_n = self.fixed_n if fixed_n is None else fixed_n
+        fixed_m = self.fixed_m if fixed_m is None else fixed_m
+        fixed_c = self.fixed_c if fixed_c is None else fixed_c
+        for env_id in np.flatnonzero(done):
+            self._reset_one(
+                int(env_id),
+                seed_start + int(env_id) * seed_stride,
+                fixed_n,
+                fixed_m,
+                fixed_c,
+            )
         self.obs = self._encode()
         return self.obs
 
@@ -141,6 +151,46 @@ class OuroborosVecEnv:
 
     def close(self) -> None:
         return
+
+    def _reset_one(
+        self,
+        env_id: int,
+        seed: int,
+        fixed_n: int | None,
+        fixed_m: int | None,
+        fixed_c: int | None,
+    ) -> None:
+        rng = np.random.default_rng(seed)
+        n = int(rng.integers(8, MAX_BOARD_SIZE + 1) if fixed_n is None else fixed_n)
+        c = int(rng.integers(3, MAX_COLORS + 1) if fixed_c is None else fixed_c)
+        min_m = (n * n + 3) // 4
+        max_m = 3 * n * n // 4
+        m = int(rng.integers(min_m, max_m + 1) if fixed_m is None else fixed_m)
+        if not 8 <= n <= MAX_BOARD_SIZE or not 3 <= c <= MAX_COLORS:
+            raise ValueError("fixed_n/fixed_c are outside the AHC063 limits")
+        if not min_m <= m <= max_m or m <= INITIAL_SNAKE_LENGTH:
+            raise ValueError("fixed_m is outside the AHC063 limits")
+        self.food[env_id].fill(0)
+        self.positions[env_id].fill(0)
+        self.colors[env_id].fill(0)
+        self.desired[env_id].fill(0)
+        self.length[env_id] = INITIAL_SNAKE_LENGTH
+        self.previous_action[env_id] = -1
+        self.steps[env_id] = 0
+        self.n[env_id], self.m[env_id], self.c[env_id] = n, m, c
+        self.desired[env_id, :INITIAL_SNAKE_LENGTH] = 1
+        self.desired[env_id, INITIAL_SNAKE_LENGTH:m] = rng.integers(
+            1, c + 1, m - INITIAL_SNAKE_LENGTH
+        )
+        cells = np.arange(n * n)
+        cells = cells[~np.isin(cells, np.array([0, n, 2 * n, 3 * n, 4 * n]))]
+        chosen = rng.choice(cells, size=m - INITIAL_SNAKE_LENGTH, replace=False)
+        shuffled_colors = self.desired[env_id, INITIAL_SNAKE_LENGTH:m].copy()
+        rng.shuffle(shuffled_colors)
+        self.food[env_id, chosen // n, chosen % n] = shuffled_colors
+        for index in range(INITIAL_SNAKE_LENGTH):
+            self.positions[env_id, index] = (4 - index, 0)
+            self.colors[env_id, index] = 1
 
     def _step_one(self, env_id: int, action: int) -> None:
         self.steps[env_id] += 1
