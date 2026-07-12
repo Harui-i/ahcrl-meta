@@ -1,0 +1,44 @@
+[general]
+version = "0.3.1"
+
+[problem]
+problem_name = "ahc061"
+objective = "Max"
+score_regex = '(?m)^\s*Score\s*=\s*(?P<score>\d+)\s*$'
+
+[test]
+start_seed = 0
+end_seed = 100
+threads = 0
+out_dir = "./pahcer"
+
+# ==============================
+#         COMPILE STEPS
+# ==============================
+
+# Compile the user's program
+[[test.compile_steps]]
+program = "bash"
+args = [
+  "-lc",
+  """
+set -euo pipefail
+TORCH_FLAGS="$(uv run python3 -c 'import torch; from torch.utils.cpp_extension import include_paths, library_paths; print(" ".join(["-I"+p for p in include_paths()] + ["-L"+p for p in library_paths()] + ["-Wl,-rpath,"+p for p in library_paths()]))')"
+TORCH_ABI="$(uv run python3 -c 'import torch; print(1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0)')"
+g++ -std=c++20 -O2 -D_GLIBCXX_USE_CXX11_ABI="${TORCH_ABI}" ${TORCH_FLAGS} ../artifacts/ppo/run_20260711_202631/submit.cpp -ltorch -ltorch_cpu -lc10 -o a.out
+""",
+]
+
+# ==============================
+#           TEST STEPS
+# ==============================
+
+# Run the tester with the user's program
+[[test.test_steps]]
+program = "cargo"
+args = ["run", "--bin", "tester", "--release", "../a.out"]
+current_dir = "./tools"
+stdin = "./tools/in/{SEED04}.txt"
+stdout = "./tools/out/{SEED04}.txt"
+stderr = "./tools/err/{SEED04}.txt"
+measure_time = true
