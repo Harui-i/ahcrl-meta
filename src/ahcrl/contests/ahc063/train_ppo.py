@@ -47,6 +47,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "checkpoint_interval_updates": 20,
     "model_channels": 128,
     "model_blocks": 3,
+    "model_block_type": "convnext",
     "wandb_enabled": False,
     "wandb_project": "ahcrl-meta",
     "wandb_name": None,
@@ -89,8 +90,66 @@ class RunningRewardScaler:
         self.m2 = float(state["m2"])
 
 
+class FP32MasterWeights:
+    """Keep bf16 model parameters with fp32 optimizer parameters and states."""
+
+    def __init__(self, model: nn.Module) -> None:
+        self.model_parameters = [
+            parameter for parameter in model.parameters() if parameter.requires_grad
+        ]
+        self.parameters = [
+            nn.Parameter(parameter.detach().float().clone()) for parameter in self.model_parameters
+        ]
+
+    @torch.no_grad()
+    def copy_model_to_master(self) -> None:
+        for model_parameter, master_parameter in zip(
+            self.model_parameters, self.parameters, strict=True
+        ):
+            master_parameter.copy_(model_parameter.float())
+
+    @torch.no_grad()
+    def copy_master_to_model(self) -> None:
+        for model_parameter, master_parameter in zip(
+            self.model_parameters, self.parameters, strict=True
+        ):
+            model_parameter.copy_(master_parameter.to(dtype=model_parameter.dtype))
+
+    def copy_gradients_from_model(self) -> None:
+        for model_parameter, master_parameter in zip(
+            self.model_parameters, self.parameters, strict=True
+        ):
+            if model_parameter.grad is None:
+                master_parameter.grad = None
+            else:
+                master_parameter.grad = model_parameter.grad.detach().float().clone()
+
+    def first_nonfinite_gradient(self) -> int | None:
+        for index, parameter in enumerate(self.parameters):
+            if parameter.grad is not None and not bool(torch.isfinite(parameter.grad).all().item()):
+                return index
+        return None
+
+    def state_dict(self) -> list[torch.Tensor]:
+        return [parameter.detach().cpu().clone() for parameter in self.parameters]
+
+    @torch.no_grad()
+    def load_state_dict(self, state: list[torch.Tensor]) -> None:
+        if len(state) != len(self.parameters):
+            raise ValueError(
+                f"master weight count mismatch: checkpoint has {len(state)}, "
+                f"model has {len(self.parameters)}"
+            )
+        for parameter, saved in zip(self.parameters, state, strict=True):
+            parameter.copy_(saved.to(device=parameter.device, dtype=torch.float32))
+
+
 def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
-    model = ActorCritic(channels=args.model_channels, blocks=args.model_blocks).to(device=device)
+    model = ActorCritic(
+        channels=args.model_channels,
+        blocks=args.model_blocks,
+        block_type=args.model_block_type,
+    ).to(device=device)
     if device.type == "cuda":
         model = model.to(dtype=MODEL_DTYPE)
     if args.obs_norm:
@@ -110,6 +169,21 @@ def _observation_normalizer(model: nn.Module) -> RunningObservationNormalizer | 
     original = getattr(model, "_orig_mod", model)
     normalizer = getattr(original, "observation_normalizer", None)
     return normalizer if isinstance(normalizer, RunningObservationNormalizer) else None
+
+
+def _first_nonfinite_model_output(logits: torch.Tensor, value: torch.Tensor) -> str | None:
+    if not bool(torch.isfinite(logits).all().item()):
+        return "policy logits"
+    if not bool(torch.isfinite(value).all().item()):
+        return "value output"
+    return None
+
+
+def _first_nonfinite_gradient(model: nn.Module) -> str | None:
+    for name, parameter in model.named_parameters():
+        if parameter.grad is not None and not bool(torch.isfinite(parameter.grad).all().item()):
+            return name
+    return None
 
 
 def collect_rollout(
@@ -137,6 +211,12 @@ def collect_rollout(
         mask = torch.from_numpy(obs["mask"]).to(device=device)
         with torch.inference_mode():
             logits, value = _model_forward(model, encoded)
+            nonfinite_output = _first_nonfinite_model_output(logits, value)
+            if nonfinite_output is not None:
+                raise FloatingPointError(
+                    f"non-finite {nonfinite_output} during rollout; "
+                    "the model weights became non-finite"
+                )
             dist = Categorical(logits=logits.float().masked_fill(~mask, -1e9))
             action = dist.sample()
             logprob = dist.log_prob(action)
@@ -202,6 +282,7 @@ def update_model(
     rollout: dict[str, torch.Tensor],
     args: argparse.Namespace,
     device: torch.device,
+    master_weights: FP32MasterWeights | None = None,
 ) -> dict[str, float]:
     observations = rollout["obs"].flatten(0, 1).to(device)
     actions = rollout["actions"].flatten().to(device)
@@ -231,10 +312,50 @@ def update_model(
             value_loss = 0.5 * (value.float() - returns[index]).square().mean()
             entropy = dist.entropy().mean()
             loss = policy_loss + args.value_coef * value_loss - args.entropy_coef * entropy
+            if not bool(torch.isfinite(loss).item()):
+                raise FloatingPointError(
+                    "non-finite PPO loss before backward: "
+                    f"policy_loss={policy_loss.item()} value_loss={value_loss.item()} "
+                    f"entropy={entropy.item()}"
+                )
+            raw_model.zero_grad(set_to_none=True)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            grad_norm = float(nn.utils.clip_grad_norm_(raw_model.parameters(), args.max_grad_norm))
+            if master_weights is None:
+                try:
+                    grad_norm = float(
+                        nn.utils.clip_grad_norm_(
+                            raw_model.parameters(),
+                            args.max_grad_norm,
+                            error_if_nonfinite=True,
+                        )
+                    )
+                except RuntimeError as error:
+                    bad_gradient = _first_nonfinite_gradient(raw_model) or "unknown"
+                    raise FloatingPointError(
+                        f"non-finite model gradient before optimizer.step: {bad_gradient}"
+                    ) from error
+            else:
+                master_weights.copy_gradients_from_model()
+                try:
+                    grad_norm = float(
+                        nn.utils.clip_grad_norm_(
+                            master_weights.parameters,
+                            args.max_grad_norm,
+                            error_if_nonfinite=True,
+                        )
+                    )
+                except RuntimeError as error:
+                    bad_gradient = master_weights.first_nonfinite_gradient()
+                    model_gradient = _first_nonfinite_gradient(raw_model)
+                    raise FloatingPointError(
+                        "non-finite gradient before optimizer.step: "
+                        f"master_parameter_index={bad_gradient} model_parameter={model_gradient}"
+                    ) from error
             optimizer.step()
+            if master_weights is not None:
+                master_weights.copy_master_to_model()
+                master_weights.copy_model_to_master()
             totals["policy_loss"] += float(policy_loss.item())
             totals["value_loss"] += float(value_loss.item())
             totals["entropy"] += float(entropy.item())
@@ -248,6 +369,7 @@ def save_checkpoint(
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
     scaler: RunningRewardScaler | None,
+    master_weights: FP32MasterWeights,
     *,
     global_step: int,
     update: int,
@@ -256,6 +378,7 @@ def save_checkpoint(
     checkpoint = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
+        "master_weights": master_weights.state_dict(),
         "config": config_for_save(args),
         "global_step": global_step,
         "update": update,
@@ -273,6 +396,7 @@ def load_checkpoint(
     model: ActorCritic,
     optimizer: torch.optim.Optimizer,
     scaler: RunningRewardScaler | None,
+    master_weights: FP32MasterWeights,
     device: torch.device,
 ) -> tuple[int, int]:
     checkpoint_path = run_dir / "checkpoints" / CHECKPOINT_NAME
@@ -280,6 +404,10 @@ def load_checkpoint(
         raise FileNotFoundError(f"resume checkpoint not found: {checkpoint_path}")
     state = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(state["model"])
+    if "master_weights" in state:
+        master_weights.load_state_dict(state["master_weights"])
+    else:
+        master_weights.copy_model_to_master()
     optimizer.load_state_dict(state["optimizer"])
     if scaler is not None and state.get("reward_scaler") is not None:
         scaler.load_state_dict(state["reward_scaler"])
@@ -300,14 +428,24 @@ def main() -> None:
     np.random.seed(args.seed_start)
     device = torch.device(args.device)
     raw_model = create_model(args, device)
+    print(f"model parameters: {sum(p.numel() for p in raw_model.parameters()):,}")
     if args.init_checkpoint is not None:
         state = torch.load(args.init_checkpoint, map_location=device, weights_only=False)
         raw_model.load_state_dict(state["model"])
-    optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
+    master_weights = FP32MasterWeights(raw_model)
+    optimizer = torch.optim.AdamW(master_weights.parameters, lr=args.lr)
     scaler = RunningRewardScaler() if args.reward_scale else None
     global_step = update = 0
     if args.resume_dir is not None:
-        global_step, update = load_checkpoint(args.resume_dir, raw_model, optimizer, scaler, device)
+        global_step, update = load_checkpoint(
+            args.resume_dir,
+            raw_model,
+            optimizer,
+            scaler,
+            master_weights,
+            device,
+        )
+        master_weights.copy_master_to_model()
         if args.total_steps <= global_step:
             raise ValueError(
                 f"total_steps ({args.total_steps}) must be greater than resumed "
@@ -337,13 +475,19 @@ def main() -> None:
     try:
         while global_step < args.total_steps:
             rollout, obs = collect_rollout(model, env, obs, args, device, scaler)
-            stats = update_model(model, raw_model, optimizer, rollout, args, device)
+            stats = update_model(model, raw_model, optimizer, rollout, args, device, master_weights)
             global_step += args.num_envs * args.rollout_steps
             update += 1
             checkpoint = None
             if update % args.checkpoint_interval_updates == 0 or global_step >= args.total_steps:
                 checkpoint = save_checkpoint(
-                    args, raw_model, optimizer, scaler, global_step=global_step, update=update
+                    args,
+                    raw_model,
+                    optimizer,
+                    scaler,
+                    master_weights,
+                    global_step=global_step,
+                    update=update,
                 )
             scores = rollout["scores"].float()
             elapsed = max(time.time() - started, 1e-6)

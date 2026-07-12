@@ -3,10 +3,10 @@ from typing import cast
 import torch
 from torch import nn
 
-from ahcrl.nn.blocks import SphericalAttentionSimbaBlock
-from ahcrl.nn.components import HyperEmbedder2d
+from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock
+from ahcrl.nn.components import make_group_norm
 
-from .encoder import ACTION_COUNT, MAX_BOARD_SIZE, NUM_PLANES
+from .encoder import ACTION_COUNT, NUM_PLANES
 
 
 class ActorCritic(nn.Module):
@@ -17,25 +17,21 @@ class ActorCritic(nn.Module):
         in_channels: int = NUM_PLANES,
         channels: int = 64,
         blocks: int = 4,
+        block_type: str = "convnext",
     ) -> None:
         super().__init__()
         if channels <= 0 or blocks <= 0:
             raise ValueError("channels and blocks must be positive")
-        if channels % 4 != 0:
-            raise ValueError("channels must be divisible by four for spherical attention")
+        if block_type not in ("convnext", "residual"):
+            raise ValueError(f"unknown block_type: {block_type}")
 
         self.observation_normalizer: nn.Module | None = None
-        alpha_init = 1.0 / (blocks + 1)
+        block_class = ConvNeXtBlock if block_type == "convnext" else ResidualBlock
         self.trunk = nn.Sequential(
-            HyperEmbedder2d(in_channels, channels),
-            *[
-                SphericalAttentionSimbaBlock(
-                    channels,
-                    max_spatial_size=MAX_BOARD_SIZE,
-                    alpha_init=alpha_init,
-                )
-                for _ in range(blocks)
-            ],
+            nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False),
+            make_group_norm(channels),
+            nn.ReLU(inplace=True),
+            *[block_class(channels) for _ in range(blocks)],
         )
         self.policy = nn.Sequential(
             nn.Linear(channels * 2, channels),

@@ -16,3 +16,4 @@ artifact_dir = "contests/ahc-063/artifacts/ppo-smoke"
 checkpoint_interval_updates = 1
 model_channels = 16
 model_blocks = 1
+model_block_type = "convnext"

@@ -27,8 +27,11 @@ def l2_normalize(x: torch.Tensor, *, dim: int = -1, eps: float = 1e-6) -> torch.
     if eps <= 0.0:
         raise ValueError(f"eps must be positive, got {eps}")
 
-    norm = x.float().pow(2).sum(dim=dim, keepdim=True).clamp_min(eps**2).sqrt()
-    return x / norm.to(dtype=x.dtype)
+    x_float = x.float()
+    norm = x_float.pow(2).sum(dim=dim, keepdim=True).clamp_min(eps**2).sqrt()
+    # Keep the division in fp32.  Casting the denominator to bf16 first can
+    # create very large/unstable backward gradients for near-zero vectors.
+    return (x_float / norm).to(dtype=x.dtype)
 
 
 def make_group_norm(channels: int, *, max_groups: int = 8) -> nn.GroupNorm:
