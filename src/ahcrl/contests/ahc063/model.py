@@ -86,9 +86,12 @@ class RunningObservationNormalizer(nn.Module):
         values = x.detach().float()
         batch_count = values.shape[0] * values.shape[2] * values.shape[3]
         if batch_count:
-            batch_mean = values.mean((0, 2, 3), keepdim=True).cpu()
+            batch_mean = values.mean((0, 2, 3), keepdim=True).to(device=self.mean.device)
             batch_m2 = (
-                values.sub(batch_mean.to(values.device)).square().sum((0, 2, 3), keepdim=True).cpu()
+                values.sub(batch_mean.to(values.device))
+                .square()
+                .sum((0, 2, 3), keepdim=True)
+                .to(device=self.mean.device)
             )
             current = int(self.count.item())
             if current == 0:
