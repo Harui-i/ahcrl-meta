@@ -202,6 +202,7 @@ def collect_rollout(
     values: list[torch.Tensor] = []
     masks: list[torch.Tensor] = []
     scores: list[torch.Tensor] = []
+    prefix_match_ratios: list[torch.Tensor] = []
     for step in range(args.rollout_steps):
         encoded = torch.from_numpy(obs["planes"]).to(device=device)
         encoded = encoded.to(dtype=MODEL_DTYPE if device.type == "cuda" else torch.float32)
@@ -229,6 +230,7 @@ def collect_rollout(
         values.append(value.float().cpu())
         masks.append(mask.cpu())
         scores.append(torch.from_numpy(result.score.copy()))
+        prefix_match_ratios.append(torch.from_numpy(result.prefix_match_ratio.copy()))
         obs = result.obs
         if result.done.any():
             obs = env.reset_done(
@@ -273,7 +275,58 @@ def collect_rollout(
         "returns": advantages + stacked_values,
         "masks": torch.stack(masks),
         "scores": torch.stack(scores),
+        "prefix_match_ratios": torch.stack(prefix_match_ratios),
     }, obs
+
+
+def _last_terminal_values(
+    values: torch.Tensor,
+    dones: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Select each environment's latest terminal value in a rollout."""
+    if values.ndim != 2 or dones.shape != values.shape:
+        raise ValueError("values and dones must both have shape (rollout_steps, num_envs)")
+    terminal_values: list[torch.Tensor] = []
+    for env_id in range(values.shape[1]):
+        terminal_steps = torch.nonzero(dones[:, env_id].bool(), as_tuple=False).flatten()
+        if terminal_steps.numel():
+            terminal_values.append(values[terminal_steps[-1], env_id])
+    if not terminal_values:
+        return values.new_empty(0), values.new_empty(0, dtype=torch.bool)
+    return torch.stack(terminal_values), torch.ones(len(terminal_values), dtype=torch.bool)
+
+
+def build_rollout_metrics(rollout: dict[str, torch.Tensor]) -> dict[str, float | int]:
+    """Build terminal-game metrics for W&B from one PPO rollout."""
+    scores = rollout["scores"].float()
+    dones = rollout["dones"].float()
+    prefix_match_ratios = rollout["prefix_match_ratios"].float()
+    terminal_scores, _ = _last_terminal_values(scores, dones)
+    terminal_prefix_ratios, _ = _last_terminal_values(prefix_match_ratios, dones)
+
+    def summary(values: torch.Tensor, reducer: str) -> float:
+        if values.numel() == 0:
+            return float("nan")
+        if reducer == "mean":
+            return float(values.mean().item())
+        if reducer == "max":
+            return float(values.max().item())
+        return float(values.min().item())
+
+    terminal_count = int(terminal_scores.numel())
+    return {
+        "rollout/final_prefix_match_ratio_mean": summary(terminal_prefix_ratios, "mean"),
+        "rollout/final_prefix_match_ratio_max": summary(terminal_prefix_ratios, "max"),
+        "rollout/final_prefix_match_ratio_min": summary(terminal_prefix_ratios, "min"),
+        "rollout/final_score_mean": summary(terminal_scores, "mean"),
+        "rollout/final_score_max": summary(terminal_scores, "max"),
+        "rollout/final_score_min": summary(terminal_scores, "min"),
+        "rollout/final_done_count": terminal_count,
+        "rollout/final_done_fraction": terminal_count / max(scores.shape[1], 1),
+        "rollout/endpoint_score_mean": float(scores[-1].mean().item()),
+        "rollout/endpoint_score_max": float(scores[-1].max().item()),
+        "rollout/endpoint_score_min": float(scores[-1].min().item()),
+    }
 
 
 def update_model(
@@ -491,6 +544,7 @@ def main() -> None:
                     update=update,
                 )
             scores = rollout["scores"].float()
+            rollout_metrics = build_rollout_metrics(rollout)
             elapsed = max(time.time() - started, 1e-6)
             print(
                 f"update={update} step={global_step} fps={global_step / elapsed:.1f} "
@@ -505,6 +559,7 @@ def main() -> None:
                     {
                         "train/mean_score": float(scores[-1].mean().item()),
                         "train/mean_reward": float(rollout["rewards"].mean().item()),
+                        **rollout_metrics,
                         **{f"train/{key}": value for key, value in stats.items()},
                     },
                     step=global_step,

@@ -1,7 +1,7 @@
 [train]
 num_envs = 1024
 total_steps = 20000000
-rollout_steps = 128
+rollout_steps = 256
 seed_start = 0
 seed_stride = 1
 device = "cuda"

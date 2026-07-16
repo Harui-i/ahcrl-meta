@@ -20,6 +20,7 @@ class StepResult:
     reward: np.ndarray
     done: np.ndarray
     score: np.ndarray
+    prefix_match_ratio: np.ndarray
 
 
 class OuroborosVecEnv:
@@ -139,8 +140,9 @@ class OuroborosVecEnv:
         new_score = self.score()
         done = (self._food_count() == 0) | (self.steps >= self.max_steps)
         reward = (old_score - new_score).astype(np.float32) / 10_000.0
+        prefix_match_ratio = self._prefix_match_ratio()
         self.obs = self._encode()
-        return StepResult(self.obs, reward, done, new_score)
+        return StepResult(self.obs, reward, done, new_score, prefix_match_ratio)
 
     def score(self) -> np.ndarray:
         mismatch = np.zeros(self.num_envs, dtype=np.int32)
@@ -240,6 +242,22 @@ class OuroborosVecEnv:
 
     def _food_count(self) -> np.ndarray:
         return np.count_nonzero(self.food, axis=(1, 2))
+
+    def _prefix_match_ratio(self) -> np.ndarray:
+        """Return the matching leading color-prefix length divided by target M."""
+        ratios = np.zeros(self.num_envs, dtype=np.float32)
+        for env_id in range(self.num_envs):
+            target_length = int(self.m[env_id])
+            snake_length = int(self.length[env_id])
+            prefix_length = 0
+            while (
+                prefix_length < snake_length
+                and prefix_length < target_length
+                and self.colors[env_id, prefix_length] == self.desired[env_id, prefix_length]
+            ):
+                prefix_length += 1
+            ratios[env_id] = prefix_length / max(target_length, 1)
+        return ratios
 
     def _encode(self) -> dict[str, np.ndarray]:
         planes = np.zeros(
