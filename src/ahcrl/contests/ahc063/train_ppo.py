@@ -6,7 +6,7 @@ import time
 import tomllib
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -514,7 +514,7 @@ def main() -> None:
         fixed_c=args.fixed_c,
         max_steps=args.max_episode_steps,
     )
-    model: nn.Module = torch.compile(raw_model) if args.compile else raw_model
+    model: nn.Module = cast(nn.Module, torch.compile(raw_model) if args.compile else raw_model)
     obs = env.obs
     started = time.time()
     wandb_run = None

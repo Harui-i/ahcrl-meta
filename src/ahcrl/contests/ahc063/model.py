@@ -73,6 +73,9 @@ class RunningObservationNormalizer(nn.Module):
         if epsilon <= 0:
             raise ValueError("epsilon must be positive")
         self.epsilon = epsilon
+        self.count: torch.Tensor
+        self.mean: torch.Tensor
+        self.m2: torch.Tensor
         self.register_buffer("count", torch.zeros((), dtype=torch.long))
         self.register_buffer("mean", torch.zeros(1, channels, 1, 1))
         self.register_buffer("m2", torch.zeros(1, channels, 1, 1))
