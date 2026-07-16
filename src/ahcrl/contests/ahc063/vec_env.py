@@ -138,7 +138,8 @@ class OuroborosVecEnv:
                 action = int(np.flatnonzero(legal)[0])
             self._step_one(env_id, action)
         new_score = self.score()
-        done = (self._food_count() == 0) | (self.steps >= self.max_steps)
+        done = (self._food_count() == 0) & self._target_sequence_matches()
+        done |= self.steps >= self.max_steps
         reward = (old_score - new_score).astype(np.float32) / 10_000.0
         prefix_match_ratio = self._prefix_match_ratio()
         self.obs = self._encode()
@@ -242,6 +243,17 @@ class OuroborosVecEnv:
 
     def _food_count(self) -> np.ndarray:
         return np.count_nonzero(self.food, axis=(1, 2))
+
+    def _target_sequence_matches(self) -> np.ndarray:
+        """Return whether the whole current snake sequence matches the target."""
+        matches = np.zeros(self.num_envs, dtype=bool)
+        for env_id in range(self.num_envs):
+            length = int(self.length[env_id])
+            target_length = int(self.m[env_id])
+            matches[env_id] = length == target_length and np.array_equal(
+                self.colors[env_id, :length], self.desired[env_id, :target_length]
+            )
+        return matches
 
     def _prefix_match_ratio(self) -> np.ndarray:
         """Return the matching leading color-prefix length divided by target M."""
