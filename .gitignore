@@ -18,3 +18,7 @@ dist/
 **/tools/out/
 **/tools/target/
 **/tools/vis.html
+
+**/eval/**/main.cpp
+**/a.out
+eval/ahc063/main.cpp
