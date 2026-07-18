@@ -13,3 +13,8 @@ checkpoints/
 *.egg-info/
 build/
 dist/
+
+**/tools/err/
+**/tools/out/
+**/tools/target/
+**/tools/vis.html
