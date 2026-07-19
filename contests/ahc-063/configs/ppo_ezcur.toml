@@ -1,4 +1,5 @@
 [train]
+max_episode_steps = 256
 num_envs = 1024
 total_steps = 20000000
 rollout_steps = 256
