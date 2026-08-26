@@ -30,7 +30,7 @@ package = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "contests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 100
