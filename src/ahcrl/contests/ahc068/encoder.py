@@ -1,12 +1,12 @@
-"""Contest-specific observation encoder."""
+"""コンテスト固有の観測エンコーダ。"""
 
-# TODO: Define the exact observation layout shared by Python and C++.
+# TODO: PythonとC++で共有する正確な観測レイアウトを定義する。
 
 # 問題文で決まるやつら
 BOARD_SIZE = (
     20  # N,盤面サイズ. すべてのテストケースにおいて、盤面サイズ `N` は `20` に固定されている。
 )
 
-# 特徴量設計などで決まるやつら
+# 特徴量設計などで決まるもの
 
-NUM_PLANES = 10 # 後々決まっていく
+NUM_PLANES = 10  # 後で決定する。
