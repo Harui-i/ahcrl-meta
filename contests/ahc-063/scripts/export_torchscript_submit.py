@@ -23,10 +23,16 @@ BASE91_ALPHABET = (
 
 
 class NormalizedPolicy(nn.Module):
-    def __init__(self, model: ActorCritic, normalizer: RunningObservationNormalizer | None) -> None:
+    def __init__(
+        self,
+        model: ActorCritic,
+        normalizer: RunningObservationNormalizer | None,
+        apply_softmax: bool = False,
+    ) -> None:
         super().__init__()
         self.model = model
         self.normalizer = normalizer
+        self.apply_softmax = apply_softmax
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.normalizer is not None:
@@ -38,7 +44,10 @@ class NormalizedPolicy(nn.Module):
                 torch.ones_like(self.normalizer.m2),
             ).to(device=x.device)
             x = (x.float() - mean) / torch.sqrt(variance + self.normalizer.epsilon)
-        return self.model(x)
+        logits, value = self.model(x)
+        if self.apply_softmax:
+            logits = torch.softmax(logits, dim=-1)
+        return logits, value
 
 
 def base91_encode(data: bytes) -> str:
@@ -73,7 +82,11 @@ def c_string_chunks(value: str, width: int = 120) -> str:
     return "\n".join(chunks)
 
 
-def load_policy(checkpoint: Path, config: dict[str, Any]) -> NormalizedPolicy:
+def load_policy(
+    checkpoint: Path,
+    config: dict[str, Any],
+    apply_softmax: bool = False,
+) -> NormalizedPolicy:
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
     model = ActorCritic(
         channels=int(config["model_channels"]),
@@ -89,12 +102,16 @@ def load_policy(checkpoint: Path, config: dict[str, Any]) -> NormalizedPolicy:
     model.observation_normalizer = normalizer
     model.load_state_dict(state["model"])
     model.eval()
-    policy = NormalizedPolicy(model, normalizer).eval().float()
+    policy = NormalizedPolicy(model, normalizer, apply_softmax).eval().float()
     return policy
 
 
-def export_torchscript(checkpoint: Path, config: dict[str, Any]) -> bytes:
-    policy = load_policy(checkpoint, config)
+def export_torchscript(
+    checkpoint: Path,
+    config: dict[str, Any],
+    apply_softmax: bool = False,
+) -> bytes:
+    policy = load_policy(checkpoint, config, apply_softmax)
     dummy = torch.zeros((1, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE), dtype=torch.float32)
     with torch.no_grad():
         traced = torch.jit.trace(policy, dummy, strict=True)
@@ -112,6 +129,7 @@ CPP_TEMPLATE = r"""#include <ATen/Parallel.h>
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -325,16 +343,7 @@ int main() {
             torch::TensorOptions().dtype(torch::kFloat32)
         ).clone();
         auto output = module.forward({input}).toTuple();
-        auto logits = output->elements()[0].toTensor().contiguous();
-        auto legal = legal_actions(snake);
-        int action = -1;
-        float best = -numeric_limits<float>::infinity();
-        for (int candidate = 0; candidate < 4; ++candidate) {
-            if (legal[candidate] && logits[0][candidate].item<float>() > best) {
-                best = logits[0][candidate].item<float>();
-                action = candidate;
-            }
-        }
+@ACTION_SELECTION@
         if (action < 0) break;
         static constexpr char directions[4] = {'U', 'D', 'L', 'R'};
         cout << directions[action] << '\n';
@@ -343,6 +352,46 @@ int main() {
     return 0;
 }
 """
+
+
+ARGMAX_ACTION_SELECTION = """        auto logits = output->elements()[0].toTensor().contiguous();
+        auto legal = legal_actions(snake);
+        int action = -1;
+        float best = -numeric_limits<float>::infinity();
+        for (int candidate = 0; candidate < 4; ++candidate) {
+            if (legal[candidate] && logits[0][candidate].item<float>() > best) {
+                best = logits[0][candidate].item<float>();
+                action = candidate;
+            }
+        }"""
+
+
+SOFTMAX_ACTION_SELECTION = """        auto probabilities =
+            output->elements()[0].toTensor().contiguous();
+        auto legal = legal_actions(snake);
+        array<double, 4> weights{};
+        double total = 0.0;
+        for (int candidate = 0; candidate < 4; ++candidate) {
+            if (legal[candidate]) {
+                weights[candidate] = max(
+                    0.0, static_cast<double>(probabilities[0][candidate].item<float>())
+                );
+                total += weights[candidate];
+            }
+        }
+        int action = -1;
+        if (total > 0.0) {
+            static mt19937 rng(random_device{}());
+            discrete_distribution<int> distribution(weights.begin(), weights.end());
+            action = distribution(rng);
+        } else {
+            for (int candidate = 0; candidate < 4; ++candidate) {
+                if (legal[candidate]) {
+                    action = candidate;
+                    break;
+                }
+            }
+        }"""
 
 
 def find_latest_run(artifact_dir: Path) -> Path:
@@ -357,15 +406,23 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--softmax",
+        action="store_true",
+        help="apply softmax and sample actions from the legal-action probabilities",
+    )
     args = parser.parse_args()
     run_dir = args.run_dir or find_latest_run(ROOT / "contests/ahc-063/artifacts/ppo")
     config = json.loads((run_dir / "config.json").read_text())
     checkpoint = run_dir / "checkpoints" / "checkpoint_latest.pt"
     output = args.output or run_dir / "submit.cpp"
-    model_bytes = export_torchscript(checkpoint, config)
-    output.write_text(CPP_TEMPLATE.replace("@MODEL@", c_string_chunks(base91_encode(model_bytes))))
+    model_bytes = export_torchscript(checkpoint, config, args.softmax)
+    action_selection = SOFTMAX_ACTION_SELECTION if args.softmax else ARGMAX_ACTION_SELECTION
+    source = CPP_TEMPLATE.replace("@MODEL@", c_string_chunks(base91_encode(model_bytes)))
+    output.write_text(source.replace("@ACTION_SELECTION@", action_selection))
     print(f"run_dir={run_dir}")
     print(f"checkpoint={checkpoint}")
+    print(f"softmax={args.softmax}")
     print(f"torchscript_bytes={len(model_bytes)}")
     print(f"output={output}")
 
