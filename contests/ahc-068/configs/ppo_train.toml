@@ -1,0 +1,26 @@
+[train]
+num_envs = 256
+total_steps = 20000000
+rollout_steps = 128
+seed_start = 0
+seed_stride = 1
+device = "cuda"
+compile = true
+lr = 0.0003
+gamma = 0.99
+gae_lambda = 0.95
+clip = 0.2
+epochs = 1
+minibatch_size = 1024
+entropy_coef = 0.001
+value_coef = 0.5
+max_grad_norm = 0.5
+artifact_dir = "contests/ahc-068/artifacts/ppo"
+checkpoint_interval_updates = 40
+model_channels = 128
+model_blocks = 4
+model_block_type = "convnext"
+wandb_enabled = true
+wandb_project = "ahcrl-meta-ahc068"
+wandb_name = "ahc068-ppo"
+wandb_tags = ["ahc068", "ppo"]

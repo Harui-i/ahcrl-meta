@@ -1,0 +1,26 @@
+[train]
+num_envs = 4
+total_steps = 4096
+rollout_steps = 32
+seed_start = 0
+seed_stride = 1
+device = "cpu"
+compile = false
+lr = 0.0003
+gamma = 0.99
+gae_lambda = 0.95
+clip = 0.2
+epochs = 1
+minibatch_size = 32
+entropy_coef = 0.01
+value_coef = 0.5
+max_grad_norm = 0.5
+artifact_dir = "contests/ahc-068/artifacts/ppo"
+checkpoint_interval_updates = 1
+model_channels = 32
+model_blocks = 2
+model_block_type = "convnext"
+wandb_enabled = false
+wandb_project = "ahcrl-meta-ahc068"
+wandb_name = "ahc068-ppo-smoke"
+wandb_tags = ["ahc068", "ppo", "smoke"]
