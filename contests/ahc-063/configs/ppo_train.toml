@@ -2,6 +2,7 @@
 num_envs = 1024
 total_steps = 20000000
 rollout_steps = 256
+max_episode_steps = 256
 seed_start = 0
 seed_stride = 1
 device = "cuda"
@@ -25,4 +26,4 @@ model_blocks = 6
 model_block_type = "convnext"
 wandb_enabled = true
 wandb_project = "ahcrl-meta-ahc063"
-wandb_name = "ahc063-ppo-spherical-attention-simba"
+wandb_name = "ahc063-ppo-convnext"
