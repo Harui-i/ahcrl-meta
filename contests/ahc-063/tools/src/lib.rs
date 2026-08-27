@@ -244,6 +244,7 @@ pub fn compute_score_details(input: &Input, out: &[usize]) -> (i64, String, Stat
     (state.score(), String::new(), state)
 }
 
+pub mod rl_bridge;
 pub mod vis;
 
 pub use vis::*;

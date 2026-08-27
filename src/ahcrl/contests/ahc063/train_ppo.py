@@ -13,11 +13,13 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
+from ahcrl.envs import RustVecEnv, cargo_server_command
+
 from .encoder import NUM_PLANES
 from .model import ActorCritic, RunningObservationNormalizer
-from .vec_env import OuroborosVecEnv
 
 ROOT = Path(__file__).resolve().parents[4]
+RL_TOOLS_MANIFEST = ROOT / "contests" / "ahc-063" / "rl-tools" / "Cargo.toml"
 MODEL_DTYPE = torch.bfloat16
 DEFAULT_CONFIG: dict[str, Any] = {
     "num_envs": 64,
@@ -188,7 +190,7 @@ def _first_nonfinite_gradient(model: nn.Module) -> str | None:
 
 def collect_rollout(
     model: nn.Module,
-    env: OuroborosVecEnv,
+    env: RustVecEnv,
     obs: dict[str, np.ndarray],
     args: argparse.Namespace,
     device: torch.device,
@@ -205,11 +207,15 @@ def collect_rollout(
     prefix_match_ratios: list[torch.Tensor] = []
     for step in range(args.rollout_steps):
         encoded = torch.from_numpy(obs["planes"]).to(device=device)
+        if device.type == "cpu":
+            encoded = encoded.clone()
         encoded = encoded.to(dtype=MODEL_DTYPE if device.type == "cuda" else torch.float32)
         normalizer = _observation_normalizer(model)
         if normalizer is not None:
             encoded = normalizer.update_and_normalize(encoded)
         mask = torch.from_numpy(obs["mask"]).to(device=device)
+        if device.type == "cpu":
+            mask = mask.clone()
         with torch.inference_mode():
             logits, value = _model_forward(model, encoded)
             nonfinite_output = _first_nonfinite_model_output(logits, value)
@@ -230,16 +236,13 @@ def collect_rollout(
         values.append(value.float().cpu())
         masks.append(mask.cpu())
         scores.append(torch.from_numpy(result.score.copy()))
-        prefix_match_ratios.append(torch.from_numpy(result.prefix_match_ratio.copy()))
+        prefix_match_ratios.append(torch.from_numpy(result.metrics["prefix_match_ratio"].copy()))
         obs = result.obs
         if result.done.any():
             obs = env.reset_done(
                 result.done,
                 args.seed_start + step + 1,
                 args.seed_stride,
-                args.fixed_n,
-                args.fixed_m,
-                args.fixed_c,
             )
 
     next_encoded = torch.from_numpy(obs["planes"]).to(device=device)
@@ -505,14 +508,18 @@ def main() -> None:
                 f"total_steps ({args.total_steps}) must be greater than resumed "
                 f"global_step ({global_step})"
             )
-    env = OuroborosVecEnv(
+    env = RustVecEnv(
+        cargo_server_command(RL_TOOLS_MANIFEST),
         args.num_envs,
-        args.seed_start,
-        args.seed_stride,
-        fixed_n=args.fixed_n,
-        fixed_m=args.fixed_m,
-        fixed_c=args.fixed_c,
-        max_steps=args.max_episode_steps,
+        config={
+            "fixed_n": args.fixed_n,
+            "fixed_m": args.fixed_m,
+            "fixed_c": args.fixed_c,
+            "max_steps": args.max_episode_steps,
+        },
+        seed_start=args.seed_start,
+        seed_stride=args.seed_stride,
+        cwd=ROOT,
     )
     model: nn.Module = cast(nn.Module, torch.compile(raw_model) if args.compile else raw_model)
     obs = env.obs

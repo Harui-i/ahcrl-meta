@@ -16,7 +16,7 @@ dist/
 
 **/tools/err/
 **/tools/out/
-**/tools/target/
+**/target/
 **/tools/vis.html
 
 **/eval/**/main.cpp

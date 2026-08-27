@@ -1,0 +1,16 @@
+[package]
+name = "ahc063-rl-tools"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ahcrl-env-core = { path = "../../../crates/ahcrl-env-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tools = { path = "../tools" }
+
+[profile.dev]
+overflow-checks = false
+
+[profile.test]
+overflow-checks = false

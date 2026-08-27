@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help ruff ruff-fix format format-check pyright test check \
-	contest-init
+.PHONY: help ruff ruff-fix format format-check pyright test rust-format-check \
+	rust-clippy rust-test rust-check check contest-init
 
 help: ## 利用可能なコマンドを表示する
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "%-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -32,4 +32,19 @@ pyright: ## Pyright による型検査を実行する
 test: ## Pytest を実行する
 	uv run pytest
 
-check: ruff format-check pyright test ## lint・format・型検査・テストを一括実行する
+rust-format-check: ## 共通EnvとAHC063 Rustコードのフォーマットを検証する
+	cargo fmt --check --manifest-path crates/ahcrl-env-core/Cargo.toml
+	rustfmt --check contests/ahc-063/tools/src/rl_bridge.rs
+	cargo fmt --check --manifest-path contests/ahc-063/rl-tools/Cargo.toml
+
+rust-clippy: ## 共通EnvとAHC063 RustコードをClippyで検証する
+	cargo clippy --manifest-path crates/ahcrl-env-core/Cargo.toml --all-targets --no-deps -- -D warnings
+	cargo clippy --manifest-path contests/ahc-063/rl-tools/Cargo.toml --all-targets --no-deps -- -D warnings
+
+rust-test: ## 共通EnvとAHC063 Rustコードをテストする
+	cargo test --manifest-path crates/ahcrl-env-core/Cargo.toml
+	cargo test --manifest-path contests/ahc-063/rl-tools/Cargo.toml
+
+rust-check: rust-format-check rust-clippy rust-test ## Rustのformat・lint・testを一括実行する
+
+check: ruff format-check pyright test rust-check ## lint・format・型検査・テストを一括実行する
