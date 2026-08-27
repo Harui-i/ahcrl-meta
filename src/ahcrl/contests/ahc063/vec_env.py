@@ -234,7 +234,7 @@ class OuroborosVecEnv:
             self.positions[env_id, :old_length] = moved_positions
             self.colors[env_id, :old_length] = old_colors
 
-    def _is_u_turn(self, env_id: int, row: int, col: int) -> bool:
+    def _is_u_turn(self, env_id: int, row: int, col: int) -> np.bool:
         return (
             self.length[env_id] > 1
             and row == self.positions[env_id, 1, 0]
