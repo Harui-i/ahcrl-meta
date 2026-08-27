@@ -9,6 +9,7 @@ description = "Common RL utilities and contest-specific implementations for AtCo
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "jaxtyping>=0.3.11",
     "numpy>=2.0",
     "torch>=2.3",
     "wandb>=0.28.0",
@@ -16,6 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "beartype>=0.20",
     "pyright>=1.1.390",
     "pytest>=8.0",
     "ruff>=0.8",
@@ -38,6 +40,8 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# F722 F821 UP037: jaxtypingの型ヒントが怒られるので
+ignore = ["F722", "F821", "UP037"]
 
 [tool.pyright]
 include = ["src", "tests", "contests"]
