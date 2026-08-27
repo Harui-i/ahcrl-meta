@@ -1,12 +1,15 @@
-[train]
+[training]
 num_envs = 1024
 total_steps = 20000000
 rollout_steps = 256
-max_episode_steps = 256
 seed_start = 0
 seed_stride = 1
 device = "cuda"
 compile = true
+artifact_dir = "contests/ahc-063/artifacts/ppo"
+checkpoint_interval_updates = 40
+
+[ppo]
 lr = 0.0003
 gamma = 0.995
 gae_lambda = 0.95
@@ -16,14 +19,19 @@ minibatch_size = 1024
 entropy_coef = 0.005
 value_coef = 0.5
 max_grad_norm = 0.5
+
+[wandb]
+enabled = true
+project = "ahcrl-meta-ahc063"
+name = "ahc063-ppo-convnext"
+
+[model]
+channels = 128
+blocks = 6
+block_type = "convnext"
+
+[contest]
+max_episode_steps = 256
 reward_scale = true
 obs_norm = true
 obs_norm_epsilon = 1e-8
-artifact_dir = "contests/ahc-063/artifacts/ppo"
-checkpoint_interval_updates = 40
-model_channels = 128
-model_blocks = 6
-model_block_type = "convnext"
-wandb_enabled = true
-wandb_project = "ahcrl-meta-ahc063"
-wandb_name = "ahc063-ppo-convnext"

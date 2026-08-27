@@ -1,10 +1,7 @@
 """PPO trainer for AHC063 using a SphericalAttentionSimba policy."""
 
 import argparse
-import json
 import time
-import tomllib
-from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,6 +11,22 @@ from torch import nn
 from torch.distributions import Categorical
 
 from ahcrl.envs import RustVecEnv, cargo_server_command
+from ahcrl.training import (
+    TrainingProgress,
+    WandbConfig,
+    build_standard_ppo_metrics,
+    config_for_save,
+    finish_wandb,
+    get_wandb_run_id,
+    init_wandb,
+    load_initial_model,
+    load_latest_training_checkpoint,
+    prepare_run_dir,
+    resolve_config,
+    save_training_checkpoint,
+    update_run_state,
+    write_config,
+)
 
 from .encoder import NUM_PLANES
 from .model import ActorCritic, RunningObservationNormalizer
@@ -52,10 +65,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "model_block_type": "convnext",
     "wandb_enabled": False,
     "wandb_project": "ahcrl-meta",
+    "wandb_entity": None,
     "wandb_name": None,
+    "wandb_mode": "online",
+    "wandb_tags": [],
 }
-RUNTIME_KEYS = {"config", "resume_dir", "run_dir", "init_checkpoint"}
-CHECKPOINT_NAME = "checkpoint_latest.pt"
+RUNTIME_KEYS = {"run_dir", "resume_dir", "init_checkpoint"}
+RESUME_ALLOWED_OVERRIDE_KEYS = {"total_steps", "epochs", "lr", "num_envs", "wandb_name"}
+WANDB_CONFIG_KEYS = {
+    "wandb_enabled",
+    "wandb_project",
+    "wandb_entity",
+    "wandb_name",
+    "wandb_mode",
+    "wandb_tags",
+}
 
 
 class RunningRewardScaler:
@@ -203,8 +227,6 @@ def collect_rollout(
     dones: list[torch.Tensor] = []
     values: list[torch.Tensor] = []
     masks: list[torch.Tensor] = []
-    scores: list[torch.Tensor] = []
-    prefix_match_ratios: list[torch.Tensor] = []
     for step in range(args.rollout_steps):
         encoded = torch.from_numpy(obs["planes"]).to(device=device)
         if device.type == "cpu":
@@ -235,8 +257,6 @@ def collect_rollout(
         dones.append(torch.from_numpy(result.done.astype(np.float32)))
         values.append(value.float().cpu())
         masks.append(mask.cpu())
-        scores.append(torch.from_numpy(result.score.copy()))
-        prefix_match_ratios.append(torch.from_numpy(result.metrics["prefix_match_ratio"].copy()))
         obs = result.obs
         if result.done.any():
             obs = env.reset_done(
@@ -277,59 +297,7 @@ def collect_rollout(
         "advantages": advantages,
         "returns": advantages + stacked_values,
         "masks": torch.stack(masks),
-        "scores": torch.stack(scores),
-        "prefix_match_ratios": torch.stack(prefix_match_ratios),
     }, obs
-
-
-def _last_terminal_values(
-    values: torch.Tensor,
-    dones: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Select each environment's latest terminal value in a rollout."""
-    if values.ndim != 2 or dones.shape != values.shape:
-        raise ValueError("values and dones must both have shape (rollout_steps, num_envs)")
-    terminal_values: list[torch.Tensor] = []
-    for env_id in range(values.shape[1]):
-        terminal_steps = torch.nonzero(dones[:, env_id].bool(), as_tuple=False).flatten()
-        if terminal_steps.numel():
-            terminal_values.append(values[terminal_steps[-1], env_id])
-    if not terminal_values:
-        return values.new_empty(0), values.new_empty(0, dtype=torch.bool)
-    return torch.stack(terminal_values), torch.ones(len(terminal_values), dtype=torch.bool)
-
-
-def build_rollout_metrics(rollout: dict[str, torch.Tensor]) -> dict[str, float | int]:
-    """Build terminal-game metrics for W&B from one PPO rollout."""
-    scores = rollout["scores"].float()
-    dones = rollout["dones"].float()
-    prefix_match_ratios = rollout["prefix_match_ratios"].float()
-    terminal_scores, _ = _last_terminal_values(scores, dones)
-    terminal_prefix_ratios, _ = _last_terminal_values(prefix_match_ratios, dones)
-
-    def summary(values: torch.Tensor, reducer: str) -> float:
-        if values.numel() == 0:
-            return float("nan")
-        if reducer == "mean":
-            return float(values.mean().item())
-        if reducer == "max":
-            return float(values.max().item())
-        return float(values.min().item())
-
-    terminal_count = int(terminal_scores.numel())
-    return {
-        "rollout/final_prefix_match_ratio_mean": summary(terminal_prefix_ratios, "mean"),
-        "rollout/final_prefix_match_ratio_max": summary(terminal_prefix_ratios, "max"),
-        "rollout/final_prefix_match_ratio_min": summary(terminal_prefix_ratios, "min"),
-        "rollout/final_score_mean": summary(terminal_scores, "mean"),
-        "rollout/final_score_max": summary(terminal_scores, "max"),
-        "rollout/final_score_min": summary(terminal_scores, "min"),
-        "rollout/final_done_count": terminal_count,
-        "rollout/final_done_fraction": terminal_count / max(scores.shape[1], 1),
-        "rollout/endpoint_score_mean": float(scores[-1].mean().item()),
-        "rollout/endpoint_score_max": float(scores[-1].max().item()),
-        "rollout/endpoint_score_min": float(scores[-1].min().item()),
-    }
 
 
 def update_model(
@@ -350,7 +318,16 @@ def update_model(
     advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
     batch_size = observations.shape[0]
     minibatch_size = min(args.minibatch_size, batch_size)
-    totals = {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "clip_frac": 0.0}
+    totals = {
+        "policy_loss": 0.0,
+        "value_loss": 0.0,
+        "entropy": 0.0,
+        "clip_frac": 0.0,
+        "weighted_policy_loss": 0.0,
+        "weighted_value_loss": 0.0,
+        "entropy_loss": 0.0,
+        "total_loss": 0.0,
+    }
     count = 0
     grad_norm = 0.0
     for _ in range(args.epochs):
@@ -368,7 +345,10 @@ def update_model(
             policy_loss = -surrogate.mean()
             value_loss = 0.5 * (value.float() - returns[index]).square().mean()
             entropy = dist.entropy().mean()
-            loss = policy_loss + args.value_coef * value_loss - args.entropy_coef * entropy
+            weighted_policy_loss = policy_loss
+            weighted_value_loss = args.value_coef * value_loss
+            entropy_loss = -args.entropy_coef * entropy
+            loss = weighted_policy_loss + weighted_value_loss + entropy_loss
             if not bool(torch.isfinite(loss).item()):
                 raise FloatingPointError(
                     "non-finite PPO loss before backward: "
@@ -417,91 +397,50 @@ def update_model(
             totals["value_loss"] += float(value_loss.item())
             totals["entropy"] += float(entropy.item())
             totals["clip_frac"] += float((ratio.sub(1.0).abs() > args.clip).float().mean().item())
+            totals["weighted_policy_loss"] += float(weighted_policy_loss.item())
+            totals["weighted_value_loss"] += float(weighted_value_loss.item())
+            totals["entropy_loss"] += float(entropy_loss.item())
+            totals["total_loss"] += float(loss.item())
             count += 1
     return {key: value / max(count, 1) for key, value in totals.items()} | {"grad_norm": grad_norm}
 
 
-def save_checkpoint(
-    args: argparse.Namespace,
-    model: ActorCritic,
-    optimizer: torch.optim.Optimizer,
-    scaler: RunningRewardScaler | None,
-    master_weights: FP32MasterWeights,
-    *,
-    global_step: int,
-    update: int,
-) -> Path:
-    path = args.run_dir / "checkpoints" / f"step_{global_step}.pt"
-    checkpoint = {
-        "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "master_weights": master_weights.state_dict(),
-        "config": config_for_save(args),
-        "global_step": global_step,
-        "update": update,
-        "reward_scaler": None if scaler is None else scaler.state_dict(),
-        "torch_rng_state": torch.get_rng_state(),
-        "numpy_rng_state": np.random.get_state(),
-    }
-    torch.save(checkpoint, path)
-    torch.save(checkpoint, args.run_dir / "checkpoints" / CHECKPOINT_NAME)
-    return path
-
-
-def load_checkpoint(
-    run_dir: Path,
-    model: ActorCritic,
-    optimizer: torch.optim.Optimizer,
-    scaler: RunningRewardScaler | None,
-    master_weights: FP32MasterWeights,
-    device: torch.device,
-) -> tuple[int, int]:
-    checkpoint_path = run_dir / "checkpoints" / CHECKPOINT_NAME
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"resume checkpoint not found: {checkpoint_path}")
-    state = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(state["model"])
-    if "master_weights" in state:
-        master_weights.load_state_dict(state["master_weights"])
-    else:
-        master_weights.copy_model_to_master()
-    optimizer.load_state_dict(state["optimizer"])
-    if scaler is not None and state.get("reward_scaler") is not None:
-        scaler.load_state_dict(state["reward_scaler"])
-    if "torch_rng_state" in state:
-        torch.set_rng_state(state["torch_rng_state"].cpu())
-    if "numpy_rng_state" in state:
-        np.random.set_state(state["numpy_rng_state"])
-    return int(state["global_step"]), int(state["update"])
-
-
 def main() -> None:
     args = parse_args()
-    args.run_dir = prepare_run_dir(args)
-    args.run_dir.joinpath("config.json").write_text(
-        json.dumps(config_for_save(args), indent=2, sort_keys=True) + "\n"
+    args.run_dir = prepare_run_dir(
+        artifact_dir=args.artifact_dir,
+        resume_dir=args.resume_dir,
     )
+    saved_config = config_for_save(vars(args), runtime_keys=RUNTIME_KEYS)
     torch.manual_seed(args.seed_start)
     np.random.seed(args.seed_start)
     device = torch.device(args.device)
     raw_model = create_model(args, device)
     print(f"model parameters: {sum(p.numel() for p in raw_model.parameters()):,}")
     if args.init_checkpoint is not None:
-        state = torch.load(args.init_checkpoint, map_location=device, weights_only=False)
-        raw_model.load_state_dict(state["model"])
+        load_initial_model(args.init_checkpoint, model=raw_model, device=device)
     master_weights = FP32MasterWeights(raw_model)
     optimizer = torch.optim.AdamW(master_weights.parameters, lr=args.lr)
     scaler = RunningRewardScaler() if args.reward_scale else None
     global_step = update = 0
     if args.resume_dir is not None:
-        global_step, update = load_checkpoint(
+        checkpoint = load_latest_training_checkpoint(
             args.resume_dir,
-            raw_model,
-            optimizer,
-            scaler,
-            master_weights,
-            device,
+            model=raw_model,
+            optimizer=optimizer,
+            device=device,
         )
+        global_step = checkpoint.progress.global_step
+        update = checkpoint.progress.update
+        master_state = checkpoint.extras.get("master_weights")
+        if not isinstance(master_state, list):
+            raise ValueError("checkpoint extras missing master_weights")
+        master_weights.load_state_dict(master_state)
+        scaler_state = checkpoint.extras.get("reward_scaler")
+        if scaler is not None and scaler_state is not None:
+            if not isinstance(scaler_state, dict):
+                raise ValueError("checkpoint reward_scaler state must be an object")
+            scaler.load_state_dict(scaler_state)
         master_weights.copy_master_to_model()
         if args.total_steps <= global_step:
             raise ValueError(
@@ -525,15 +464,26 @@ def main() -> None:
     obs = env.obs
     started = time.time()
     wandb_run = None
-    if args.wandb_enabled:
-        import wandb
-
-        wandb_run = wandb.init(
-            project=args.wandb_project,
-            name=args.wandb_name,
-            config=config_for_save(args),
-        )
     try:
+        wandb_run = init_wandb(
+            WandbConfig(
+                enabled=args.wandb_enabled,
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=args.wandb_name,
+                mode=args.wandb_mode,
+                tags=args.wandb_tags,
+            ),
+            resolved_config=saved_config,
+            run_id=get_wandb_run_id(args.run_dir),
+        )
+        write_config(args.run_dir, saved_config)
+        update_run_state(
+            args.run_dir,
+            global_step=global_step,
+            update=update,
+            wandb_run_id=None if wandb_run is None else wandb_run.id,
+        )
         while global_step < args.total_steps:
             rollout, obs = collect_rollout(model, env, obs, args, device, scaler)
             stats = update_model(model, raw_model, optimizer, rollout, args, device, master_weights)
@@ -541,48 +491,53 @@ def main() -> None:
             update += 1
             checkpoint = None
             if update % args.checkpoint_interval_updates == 0 or global_step >= args.total_steps:
-                checkpoint = save_checkpoint(
-                    args,
-                    raw_model,
-                    optimizer,
-                    scaler,
-                    master_weights,
-                    global_step=global_step,
-                    update=update,
+                checkpoint = save_training_checkpoint(
+                    args.run_dir,
+                    model=raw_model,
+                    optimizer=optimizer,
+                    config=saved_config,
+                    progress=TrainingProgress(global_step=global_step, update=update),
+                    extras={
+                        "reward_scaler": None if scaler is None else scaler.state_dict(),
+                        "master_weights": master_weights.state_dict(),
+                    },
                 )
-            scores = rollout["scores"].float()
-            rollout_metrics = build_rollout_metrics(rollout)
             elapsed = max(time.time() - started, 1e-6)
+            metrics = build_standard_ppo_metrics(
+                update=update,
+                global_step=global_step,
+                elapsed=elapsed,
+                rollout=rollout,
+                update_stats=stats,
+            )
+            update_run_state(
+                args.run_dir,
+                global_step=global_step,
+                update=update,
+                wandb_run_id=None if wandb_run is None else wandb_run.id,
+            )
             print(
-                f"update={update} step={global_step} fps={global_step / elapsed:.1f} "
-                f"mean_score={scores[-1].mean().item():.1f} "
-                f"mean_reward={rollout['rewards'].mean().item():.5f} "
+                f"update={update} step={global_step} fps={metrics['summary/fps']:.1f} "
+                f"mean_reward={metrics['train/mean_reward']:.5f} "
                 f"policy_loss={stats['policy_loss']:.5f} value_loss={stats['value_loss']:.5f} "
                 f"entropy={stats['entropy']:.5f} checkpoint={checkpoint}",
                 flush=True,
             )
             if wandb_run is not None:
-                wandb_run.log(
-                    {
-                        "train/mean_score": float(scores[-1].mean().item()),
-                        "train/mean_reward": float(rollout["rewards"].mean().item()),
-                        **rollout_metrics,
-                        **{f"train/{key}": value for key, value in stats.items()},
-                    },
-                    step=global_step,
-                )
+                wandb_run.log(metrics, step=global_step)
     finally:
         env.close()
-        if wandb_run is not None:
-            wandb_run.finish()
+        finish_wandb(wandb_run)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, default=None)
-    parser.add_argument("--resume-dir", type=Path, default=None)
-    parser.add_argument("--init-checkpoint", type=Path, default=None)
+    parser.add_argument("--resume-dir", type=Path, default=argparse.SUPPRESS)
+    parser.add_argument("--init-checkpoint", type=Path, default=argparse.SUPPRESS)
     for key, default in DEFAULT_CONFIG.items():
+        if key in WANDB_CONFIG_KEYS:
+            continue
         option = "--" + key.replace("_", "-")
         if isinstance(default, bool):
             parser.add_argument(option, dest=key, action="store_true", default=argparse.SUPPRESS)
@@ -602,53 +557,56 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             parser.add_argument(option, dest=key, type=Path, default=argparse.SUPPRESS)
         else:
             parser.add_argument(option, dest=key, default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--wandb",
+        "--wandb-enabled",
+        dest="wandb_enabled",
+        action="store_true",
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-wandb",
+        "--no-wandb-enabled",
+        dest="wandb_enabled",
+        action="store_false",
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument("--wandb-project", default=argparse.SUPPRESS)
+    parser.add_argument("--wandb-entity", default=argparse.SUPPRESS)
+    parser.add_argument("--wandb-name", default=argparse.SUPPRESS)
+    parser.add_argument(
+        "--wandb-mode",
+        choices=("online", "offline", "disabled"),
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--wandb-tag",
+        dest="wandb_tags",
+        action="append",
+        default=argparse.SUPPRESS,
+    )
+
     cli = vars(parser.parse_args(argv))
     config_path = cli.pop("config", None)
-    resume_dir = cli.get("resume_dir")
-    config = DEFAULT_CONFIG.copy()
-    if resume_dir is not None:
-        config.update(json.loads((Path(resume_dir) / "config.json").read_text()))
-    if config_path is not None:
-        with Path(config_path).open("rb") as file:
-            raw = tomllib.load(file)
-        raw = raw.get("train", raw)
-        unknown = sorted(set(raw) - set(DEFAULT_CONFIG))
-        if unknown:
-            raise ValueError(f"unknown config keys: {', '.join(unknown)}")
-        config.update(raw)
-    config.update(cli)
-    for key in ("artifact_dir", "resume_dir", "init_checkpoint"):
-        if config.get(key) is not None:
-            config[key] = Path(config[key])
-    if config.get("resume_dir") is not None and config.get("init_checkpoint") is not None:
+    resume_dir = cli.pop("resume_dir", None)
+    init_checkpoint = cli.pop("init_checkpoint", None)
+    if resume_dir is not None and init_checkpoint is not None:
         raise ValueError("resume_dir and init_checkpoint are mutually exclusive")
-    if config["device"] == "auto":
-        config["device"] = "cuda" if torch.cuda.is_available() else "cpu"
+    config = resolve_config(
+        DEFAULT_CONFIG,
+        cli_values=cli,
+        config_path=config_path,
+        resume_dir=resume_dir,
+        allowed_resume_override_keys=RESUME_ALLOWED_OVERRIDE_KEYS,
+        path_keys=("artifact_dir",),
+    )
+    config["resume_dir"] = resume_dir
+    config["init_checkpoint"] = init_checkpoint
     if config["model_channels"] % 4:
         raise ValueError("model_channels must be divisible by four")
+    if config["checkpoint_interval_updates"] <= 0:
+        raise ValueError("checkpoint_interval_updates must be positive")
     return argparse.Namespace(**config)
-
-
-def config_for_save(args: argparse.Namespace) -> dict[str, Any]:
-    return {
-        key: str(value) if isinstance(value, Path) else value
-        for key, value in sorted(vars(args).items())
-        if key not in RUNTIME_KEYS
-    }
-
-
-def prepare_run_dir(args: argparse.Namespace) -> Path:
-    if args.resume_dir is not None:
-        return args.resume_dir
-    args.artifact_dir.mkdir(parents=True, exist_ok=True)
-    base = args.artifact_dir / datetime.now().strftime("run_%Y%m%d_%H%M%S")
-    run_dir = base
-    suffix = 1
-    while run_dir.exists():
-        run_dir = Path(f"{base}_{suffix:02d}")
-        suffix += 1
-    (run_dir / "checkpoints").mkdir(parents=True)
-    return run_dir
 
 
 if __name__ == "__main__":
