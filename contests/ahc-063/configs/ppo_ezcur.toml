@@ -28,7 +28,7 @@ name = "ahc063-ezcur"
 [model]
 channels = 256
 blocks = 2
-block_type = "spherical_attention_simba"
+block_type = "convnext"
 
 [contest]
 max_episode_steps = 256
