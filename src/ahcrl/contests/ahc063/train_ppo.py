@@ -212,6 +212,11 @@ def _first_nonfinite_gradient(model: nn.Module) -> str | None:
     return None
 
 
+def _synchronize_device(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
 def collect_rollout(
     model: nn.Module,
     env: RustVecEnv,
@@ -219,7 +224,7 @@ def collect_rollout(
     args: argparse.Namespace,
     device: torch.device,
     reward_scaler: RunningRewardScaler | None,
-) -> tuple[dict[str, torch.Tensor], dict[str, np.ndarray]]:
+) -> tuple[dict[str, torch.Tensor], dict[str, np.ndarray], dict[str, float]]:
     observations: list[torch.Tensor] = []
     actions: list[torch.Tensor] = []
     logprobs: list[torch.Tensor] = []
@@ -227,6 +232,8 @@ def collect_rollout(
     dones: list[torch.Tensor] = []
     values: list[torch.Tensor] = []
     masks: list[torch.Tensor] = []
+    forward_seconds = 0.0
+    env_step_seconds = 0.0
     for step in range(args.rollout_steps):
         encoded = torch.from_numpy(obs["planes"]).to(device=device)
         if device.type == "cpu":
@@ -238,6 +245,8 @@ def collect_rollout(
         mask = torch.from_numpy(obs["mask"]).to(device=device)
         if device.type == "cpu":
             mask = mask.clone()
+        _synchronize_device(device)
+        forward_started = time.perf_counter()
         with torch.inference_mode():
             logits, value = _model_forward(model, encoded)
             nonfinite_output = _first_nonfinite_model_output(logits, value)
@@ -249,7 +258,11 @@ def collect_rollout(
             dist = Categorical(logits=logits.float().masked_fill(~mask, -1e9))
             action = dist.sample()
             logprob = dist.log_prob(action)
+        _synchronize_device(device)
+        forward_seconds += time.perf_counter() - forward_started
+        env_step_started = time.perf_counter()
         result = env.step(action.cpu().numpy())
+        env_step_seconds += time.perf_counter() - env_step_started
         observations.append(encoded.cpu())
         actions.append(action.cpu())
         logprobs.append(logprob.cpu())
@@ -270,8 +283,12 @@ def collect_rollout(
     normalizer = _observation_normalizer(model)
     if normalizer is not None:
         next_encoded = normalizer.normalize(next_encoded)
+    _synchronize_device(device)
+    forward_started = time.perf_counter()
     with torch.inference_mode():
         next_value = _model_forward(model, next_encoded)[1].float().cpu()
+    _synchronize_device(device)
+    forward_seconds += time.perf_counter() - forward_started
     raw_rewards = torch.stack(rewards)
     scaled_rewards = reward_scaler.scale(raw_rewards) if reward_scaler is not None else raw_rewards
     stacked_dones = torch.stack(dones)
@@ -286,18 +303,22 @@ def collect_rollout(
         )
         last_gae = delta + args.gamma * args.gae_lambda * nonterminal * last_gae
         advantages[step] = last_gae
-    return {
-        "obs": torch.stack(observations),
-        "actions": torch.stack(actions),
-        "logprobs": torch.stack(logprobs),
-        "rewards": raw_rewards,
-        "scaled_rewards": scaled_rewards,
-        "dones": stacked_dones,
-        "values": stacked_values,
-        "advantages": advantages,
-        "returns": advantages + stacked_values,
-        "masks": torch.stack(masks),
-    }, obs
+    return (
+        {
+            "obs": torch.stack(observations),
+            "actions": torch.stack(actions),
+            "logprobs": torch.stack(logprobs),
+            "rewards": raw_rewards,
+            "scaled_rewards": scaled_rewards,
+            "dones": stacked_dones,
+            "values": stacked_values,
+            "advantages": advantages,
+            "returns": advantages + stacked_values,
+            "masks": torch.stack(masks),
+        },
+        obs,
+        {"forward_seconds": forward_seconds, "env_step_seconds": env_step_seconds},
+    )
 
 
 def update_model(
@@ -330,10 +351,14 @@ def update_model(
     }
     count = 0
     grad_norm = 0.0
+    forward_seconds = 0.0
+    backward_seconds = 0.0
     for _ in range(args.epochs):
         permutation = torch.randperm(batch_size, device=device)
         for start in range(0, batch_size, minibatch_size):
             index = permutation[start : start + minibatch_size]
+            _synchronize_device(device)
+            forward_started = time.perf_counter()
             logits, value = _model_forward(model, observations[index])
             dist = Categorical(logits=logits.float().masked_fill(~masks[index], -1e9))
             new_logprob = dist.log_prob(actions[index])
@@ -349,6 +374,8 @@ def update_model(
             weighted_value_loss = args.value_coef * value_loss
             entropy_loss = -args.entropy_coef * entropy
             loss = weighted_policy_loss + weighted_value_loss + entropy_loss
+            _synchronize_device(device)
+            forward_seconds += time.perf_counter() - forward_started
             if not bool(torch.isfinite(loss).item()):
                 raise FloatingPointError(
                     "non-finite PPO loss before backward: "
@@ -357,7 +384,11 @@ def update_model(
                 )
             raw_model.zero_grad(set_to_none=True)
             optimizer.zero_grad(set_to_none=True)
+            _synchronize_device(device)
+            backward_started = time.perf_counter()
             loss.backward()
+            _synchronize_device(device)
+            backward_seconds += time.perf_counter() - backward_started
             if master_weights is None:
                 try:
                     grad_norm = float(
@@ -402,7 +433,11 @@ def update_model(
             totals["entropy_loss"] += float(entropy_loss.item())
             totals["total_loss"] += float(loss.item())
             count += 1
-    return {key: value / max(count, 1) for key, value in totals.items()} | {"grad_norm": grad_norm}
+    return {key: value / max(count, 1) for key, value in totals.items()} | {
+        "grad_norm": grad_norm,
+        "forward_seconds": forward_seconds,
+        "backward_seconds": backward_seconds,
+    }
 
 
 def main() -> None:
@@ -463,6 +498,7 @@ def main() -> None:
     model: nn.Module = cast(nn.Module, torch.compile(raw_model) if args.compile else raw_model)
     obs = env.obs
     started = time.time()
+    timing_totals = {"forward_seconds": 0.0, "backward_seconds": 0.0, "env_step_seconds": 0.0}
     wandb_run = None
     try:
         wandb_run = init_wandb(
@@ -485,8 +521,13 @@ def main() -> None:
             wandb_run_id=None if wandb_run is None else wandb_run.id,
         )
         while global_step < args.total_steps:
-            rollout, obs = collect_rollout(model, env, obs, args, device, scaler)
+            rollout, obs, rollout_timing = collect_rollout(model, env, obs, args, device, scaler)
             stats = update_model(model, raw_model, optimizer, rollout, args, device, master_weights)
+            timing_totals["forward_seconds"] += (
+                rollout_timing["forward_seconds"] + stats["forward_seconds"]
+            )
+            timing_totals["backward_seconds"] += stats["backward_seconds"]
+            timing_totals["env_step_seconds"] += rollout_timing["env_step_seconds"]
             global_step += args.num_envs * args.rollout_steps
             update += 1
             checkpoint = None
@@ -510,6 +551,11 @@ def main() -> None:
                 rollout=rollout,
                 update_stats=stats,
             )
+            metrics |= {
+                "timing/forward_seconds_total": timing_totals["forward_seconds"],
+                "timing/backward_seconds_total": timing_totals["backward_seconds"],
+                "timing/env_step_seconds_total": timing_totals["env_step_seconds"],
+            }
             update_run_state(
                 args.run_dir,
                 global_step=global_step,

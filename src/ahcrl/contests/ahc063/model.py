@@ -8,7 +8,7 @@ from torch import nn
 from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock, SpatialSelfAttentionBlock
 from ahcrl.nn.components import make_group_norm
 
-from .encoder import ACTION_COUNT, MAX_BOARD_SIZE, NUM_PLANES
+from .encoder import ACTION_COUNT, NUM_PLANES
 
 
 class ActorCritic(nn.Module):
