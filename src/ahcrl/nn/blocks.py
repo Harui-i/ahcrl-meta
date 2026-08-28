@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import torch
+from jaxtyping import Float
 from torch import nn
 
 from ahcrl.nn.components import (
@@ -41,7 +42,9 @@ class ResidualBlock(nn.Module):
         )
         self.activation = nn.ReLU(inplace=True)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels H W"]
+    ) -> Float[torch.Tensor, "batch channels H W"]:
         return self.activation(x + self.net(x))
 
 
@@ -82,7 +85,9 @@ class ConvNeXtBlock(nn.Module):
         )
         self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels H W"]
+    ) -> Float[torch.Tensor, "batch channels H W"]:
         residual = x
         y = self.depthwise(x)
         y = y.permute(0, 2, 3, 1)
@@ -120,7 +125,9 @@ class PerCellMLPBlock(nn.Module):
         )
         self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels H W"]
+    ) -> Float[torch.Tensor, "batch channels H W"]:
         if x.ndim != 4:
             raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
         residual = x
@@ -171,7 +178,9 @@ class SimbaV2Block(nn.Module):
         )
         self.eps = eps
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels H W"]
+    ) -> Float[torch.Tensor, "batch channels H W"]:
         if x.ndim != 4:
             raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
         residual = x
@@ -218,5 +227,7 @@ class SphericalAttentionSimbaBlock(nn.Module):
             eps=eps,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels H W"]
+    ) -> Float[torch.Tensor, "batch channels H W"]:
         return self.attention(self.per_cell(x))
