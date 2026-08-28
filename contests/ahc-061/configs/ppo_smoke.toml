@@ -1,14 +1,15 @@
-[train]
+[training]
 num_envs = 2
 total_steps = 128
 rollout_steps = 64
 seed_start = 0
 seed_stride = 1
-fixed_m = 4
-fixed_u = 3
-pf_particles = 16
 device = "cpu"
 compile = false
+artifact_dir = "contests/ahc-061/artifacts/ppo"
+checkpoint_interval_updates = 1
+
+[ppo]
 lr = 0.0003
 gamma = 0.995
 gae_lambda = 0.95
@@ -18,9 +19,15 @@ minibatch_size = 1024
 entropy_coef = 0.01
 value_coef = 0.5
 max_grad_norm = 0.5
-critic_feature_mode = "oracle"
-artifact_dir = "contests/ahc-061/artifacts/ppo"
-checkpoint_interval_updates = 1
-model_channels = 64
-model_blocks = 4
-model_block_type = "convnext"
+reward_scale = true
+obs_norm = true
+
+[model]
+channels = 64
+blocks = 4
+block_type = "convnext"
+
+[contest]
+fixed_m = 4
+fixed_u = 3
+pf_particles = 16

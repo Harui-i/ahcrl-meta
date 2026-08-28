@@ -14,7 +14,7 @@
 ## PPO訓練
 
 ```bash
-uv run python3 -m ahcrl.contests.ahc061.train_ppo --config contests/ahc-061/configs/ppo_smoke.toml
+uv run python3 -m ahcrl.contests.ahc061.train_ppo --config contests/ahc-061/configs/ppo_train.toml
 ```
 
 設定はTOMLの `[train]` に書く。CLIで同じオプションを指定した場合はCLI側を優先する。

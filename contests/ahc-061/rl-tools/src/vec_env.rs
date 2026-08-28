@@ -74,27 +74,27 @@ impl EnvSlot {
         let candidates = (0..self.input.M)
             .map(|player| get_candidates(&self.input, &self.state, player))
             .collect::<Vec<_>>();
-        if action >= n * n || !candidates[0].iter().any(|&xy| xy == action_xy) {
+        if action >= n * n || !candidates[0].contains(&action_xy) {
             return Err(format!("invalid player0 action index {}", action));
         }
 
         let mut moves = vec![action_xy];
-        for i in 1..self.input.M {
+        for (i, candidates) in candidates.iter().enumerate().skip(1) {
             moves.push(decide_ai_move_from_candidates(
                 &self.input,
                 &self.state,
                 i - 1,
                 self.turn,
-                &candidates[i],
+                candidates,
             ));
         }
-        for i in 1..self.input.M {
+        for (i, candidates) in candidates.iter().enumerate().skip(1) {
             self.pfilters[i - 1].update_with_candidates(
                 &self.input,
                 &self.state,
                 i,
                 moves[i],
-                &candidates[i],
+                candidates,
             );
         }
         let (next_state, next_score_sums) =

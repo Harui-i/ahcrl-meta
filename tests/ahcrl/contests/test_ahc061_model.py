@@ -7,10 +7,8 @@ from ahcrl.contests.ahc061.encoder import (
     BOARD_SIZE,
     CRITIC_FEATURE_SHAPE,
     NUM_PLANES,
-    PLANE_M,
-    PLANE_U,
 )
-from ahcrl.contests.ahc061.model import ActorCritic, KeyedObservationNormalizer
+from ahcrl.contests.ahc061.model import ActorCritic, RunningObservationNormalizer
 
 
 @pytest.mark.parametrize(
@@ -45,7 +43,7 @@ def test_actor_critic_can_be_traced() -> None:
 
 
 def test_critic_actor_critic_can_be_traced_without_critic_features() -> None:
-    model = ActorCritic(channels=8, blocks=1, critic_feature_mode="oracle").eval()
+    model = ActorCritic(channels=8, blocks=1).eval()
     x = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
 
     traced = cast(Any, torch.jit.trace(model, x, strict=True))
@@ -67,38 +65,16 @@ def test_actor_critic_runs_with_bfloat16_weights_and_inputs() -> None:
 
 def test_observation_normalizer_is_model_state_and_normalizes_raw_inputs() -> None:
     model = ActorCritic(channels=8, blocks=1)
-    normalizer = KeyedObservationNormalizer(NUM_PLANES, epsilon=1e-8)
+    normalizer = RunningObservationNormalizer(NUM_PLANES, epsilon=1e-8)
     model.observation_normalizer = normalizer
     observations = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
-    normalizer.update(observations)
-
-    normalized = normalizer(observations)
+    normalized = normalizer.update_and_normalize(observations)
     state = model.state_dict()
 
     assert "observation_normalizer.count" in state
     assert "observation_normalizer.mean" in state
     assert torch.allclose(normalized.mean(dim=(0, 2, 3)), torch.zeros(NUM_PLANES), atol=1e-5)
     assert torch.equal(state["observation_normalizer.mean"], normalizer.mean)
-
-
-def test_grouped_observation_normalizer_derives_m_u_keys_from_raw_input() -> None:
-    model = ActorCritic(channels=8, blocks=1)
-    normalizer = KeyedObservationNormalizer(NUM_PLANES, epsilon=1e-8, grouping="m_u")
-    model.observation_normalizer = normalizer
-    observations = torch.zeros(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
-    observations[0, PLANE_M] = 2.0 / 8.0
-    observations[0, PLANE_U] = 1.0 / 5.0
-    observations[1, PLANE_M] = 3.0 / 8.0
-    observations[1, PLANE_U] = 2.0 / 5.0
-    observations[0, 0] = 1.0
-    observations[1, 0] = 10.0
-
-    normalized = normalizer.update_and_normalize(observations)
-
-    assert normalizer.group_count[2 * 6 + 1].item() == 100
-    assert normalizer.group_count[3 * 6 + 2].item() == 100
-    assert torch.equal(normalized[:, PLANE_M], observations[:, PLANE_M])
-    assert torch.equal(normalized[:, PLANE_U], observations[:, PLANE_U])
 
 
 def test_actor_critic_reports_trunk_feature_norm_stats() -> None:
@@ -132,7 +108,7 @@ def test_value_head_receives_gradients() -> None:
 
 
 def test_critic_features_only_affect_value_head() -> None:
-    model = ActorCritic(channels=8, blocks=1, critic_feature_mode="oracle")
+    model = ActorCritic(channels=8, blocks=1)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
     zero_features = torch.zeros(3, *CRITIC_FEATURE_SHAPE)
     oracle_features = torch.rand(3, *CRITIC_FEATURE_SHAPE)

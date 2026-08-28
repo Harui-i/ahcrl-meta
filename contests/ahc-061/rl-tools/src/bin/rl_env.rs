@@ -1,8 +1,14 @@
 use std::io::{self, BufRead, Read, Write};
 use std::time::Instant;
 
-use ahc061_rl_tools::vec_env::{EnvSlot, DEFAULT_PF_PARTICLES};
+use ahcrl_env_core::{
+    write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, TensorSpec, PROTOCOL_VERSION,
+};
 use rayon::prelude::*;
+use serde::Deserialize;
+use serde_json::Value;
+
+use crate::vec_env::{EnvSlot, DEFAULT_PF_PARTICLES};
 
 const BOARD_SIZE: usize = 10;
 const MAX_PLAYERS: usize = 8;
@@ -847,4 +853,175 @@ fn init_rayon_pool() {
             err
         );
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Ahc061Config {
+    pub fixed_m: Option<usize>,
+    pub fixed_u: Option<usize>,
+    pub pf_particles: usize,
+}
+
+impl Default for Ahc061Config {
+    fn default() -> Self {
+        Self {
+            fixed_m: None,
+            fixed_u: None,
+            pf_particles: DEFAULT_PF_PARTICLES,
+        }
+    }
+}
+
+impl Ahc061Config {
+    fn validate(&self) -> Result<(), String> {
+        if self.pf_particles == 0 {
+            return Err("pf_particles must be positive".to_owned());
+        }
+        if let Some(m) = self.fixed_m {
+            if !(2..=MAX_PLAYERS).contains(&m) {
+                return Err(format!("fixed_m must be in 2..={MAX_PLAYERS}, got {m}"));
+            }
+        }
+        if let Some(u) = self.fixed_u {
+            if !(1..=MAX_LEVEL).contains(&u) {
+                return Err(format!("fixed_u must be in 1..={MAX_LEVEL}, got {u}"));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub struct Ahc061Factory {
+    config: Ahc061Config,
+}
+
+impl EnvFactory for Ahc061Factory {
+    type Env = EnvSlot;
+
+    fn from_config(config: Value) -> Result<Self, String> {
+        let config: Ahc061Config =
+            serde_json::from_value(config).map_err(|error| error.to_string())?;
+        config.validate()?;
+        Ok(Self { config })
+    }
+
+    fn spec(&self) -> EnvSpec {
+        EnvSpec {
+            protocol_version: PROTOCOL_VERSION,
+            observations: vec![
+                TensorSpec {
+                    name: "planes".to_owned(),
+                    dtype: DType::F32,
+                    shape: vec![NUM_PLANES, BOARD_SIZE, BOARD_SIZE],
+                },
+                TensorSpec {
+                    name: "mask".to_owned(),
+                    dtype: DType::U8,
+                    shape: vec![BOARD_CELLS],
+                },
+                TensorSpec {
+                    name: "critic_oracle".to_owned(),
+                    dtype: DType::F32,
+                    shape: vec![MAX_PLAYERS, ORACLE_PARAMS_PER_PLAYER],
+                },
+            ],
+            metrics: vec![],
+        }
+    }
+
+    fn create(&self, seed: u64) -> Result<Self::Env, String> {
+        Ok(EnvSlot::from_seed_with_pf(
+            seed,
+            self.config.fixed_m,
+            self.config.fixed_u,
+            self.config.pf_particles,
+        ))
+    }
+}
+
+impl ContestEnv for EnvSlot {
+    fn validate_action(&self, action: u32) -> Result<(), String> {
+        let action = action as usize;
+        if self.done {
+            return Err("cannot step a finished environment".to_owned());
+        }
+        if action >= BOARD_CELLS || !self.mask()[action] {
+            return Err(format!("invalid action {action}"));
+        }
+        Ok(())
+    }
+
+    fn step(&mut self, action: u32) -> Result<(), String> {
+        self.validate_action(action)?;
+        self.step_action_index(action as usize)
+    }
+
+    fn reward(&self) -> f32 {
+        self.reward as f32
+    }
+
+    fn done(&self) -> bool {
+        self.done
+    }
+
+    fn score(&self) -> i64 {
+        self.score()
+    }
+
+    fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
+        let encoded = encode_slot(self);
+        match name {
+            "planes" => write_f32_slice(&decode_f16(&encoded.plane_bytes), destination),
+            "mask" => {
+                if destination.len() != BOARD_CELLS {
+                    return Err(format!(
+                        "mask destination has {} bytes, expected {BOARD_CELLS}",
+                        destination.len()
+                    ));
+                }
+                destination.copy_from_slice(&encoded.mask);
+                Ok(())
+            }
+            "critic_oracle" => {
+                write_f32_slice(&decode_f16(&encoded.critic_oracle_bytes), destination)
+            }
+            _ => Err(format!("unknown observation {name}")),
+        }
+    }
+
+    fn write_metric(&self, name: &str, _destination: &mut [u8]) -> Result<(), String> {
+        Err(format!("unknown metric {name}"))
+    }
+}
+
+fn decode_f16(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(2)
+        .map(|chunk| f16_to_f32(u16::from_le_bytes([chunk[0], chunk[1]])))
+        .collect()
+}
+
+fn f16_to_f32(bits: u16) -> f32 {
+    let sign = ((bits & 0x8000) as u32) << 16;
+    let exponent = (bits >> 10) & 0x1f;
+    let mantissa = (bits & 0x03ff) as u32;
+    let value = if exponent == 0 {
+        if mantissa == 0 {
+            sign
+        } else {
+            let mut exponent = -14_i32;
+            let mut mantissa = mantissa;
+            while (mantissa & 0x400) == 0 {
+                mantissa <<= 1;
+                exponent -= 1;
+            }
+            sign | (((exponent + 127) as u32) << 23) | ((mantissa & 0x3ff) << 13)
+        }
+    } else if exponent == 0x1f {
+        sign | 0x7f80_0000 | (mantissa << 13)
+    } else {
+        sign | ((exponent as u32 + 112) << 23) | (mantissa << 13)
+    };
+    f32::from_bits(value)
 }

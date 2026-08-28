@@ -10,7 +10,7 @@ from typing import Any, cast
 import torch
 
 from ahcrl.contests.ahc061.encoder import NUM_PLANES
-from ahcrl.contests.ahc061.model import ActorCritic, KeyedObservationNormalizer
+from ahcrl.contests.ahc061.model import ActorCritic, RunningObservationNormalizer
 
 BASE91_ALPHABET = (
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~"'
@@ -53,21 +53,17 @@ def c_string_literal_chunks(s: str, *, width: int = 120) -> str:
 
 def load_export_model(checkpoint_path: Path, config: dict[str, object]) -> ActorCritic:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if "model" not in checkpoint:
-        raise ValueError("checkpoint must contain a model state")
-    if checkpoint.get("obs_normalizer") is not None:
-        raise ValueError("legacy top-level obs_normalizer state is not supported")
+    if checkpoint.get("format_version") != 1 or "model" not in checkpoint:
+        raise ValueError("checkpoint must use the shared training checkpoint format")
     model = ActorCritic(
         channels=int(cast(Any, config["model_channels"])),
         blocks=int(cast(Any, config["model_blocks"])),
         block_type=str(config["model_block_type"]),
-        critic_feature_mode=str(config.get("critic_feature_mode", "oracle")),
     ).to(dtype=torch.bfloat16)
-    if str(config.get("obs_norm_mode", "none")) != "none":
-        model.observation_normalizer = KeyedObservationNormalizer(
+    if bool(config.get("obs_norm", True)):
+        model.observation_normalizer = RunningObservationNormalizer(
             NUM_PLANES,
-            epsilon=float(cast(Any, config.get("obs_norm_epsilon", 1e-8))),
-            grouping=str(config.get("normalization_grouping", "none")),
+            float(cast(Any, config.get("obs_norm_epsilon", 1e-8))),
         )
     model.load_state_dict(checkpoint["model"])
     model.eval()
@@ -88,10 +84,16 @@ def pack_q4_policy(checkpoint_path: Path, config: dict[str, object]) -> bytes:
         if name.startswith("trunk.") or name.startswith("policy.")
     ]
     obs_normalizer = model.observation_normalizer
-    if obs_normalizer is None or obs_normalizer.grouping == "m_u":
-        raise ValueError("q4 submit currently requires ungrouped observation normalization")
+    if obs_normalizer is None:
+        raise ValueError("q4 submit requires observation normalization")
     mean = obs_normalizer.mean.detach().float().contiguous()
-    invstd = torch.rsqrt(obs_normalizer.variance + obs_normalizer.epsilon).contiguous()
+    count = obs_normalizer.count.to(dtype=obs_normalizer.m2.dtype).clamp_min(1)
+    variance = torch.where(
+        obs_normalizer.count > 0,
+        obs_normalizer.m2 / count,
+        torch.ones_like(obs_normalizer.m2),
+    )
+    invstd = torch.rsqrt(variance + obs_normalizer.epsilon).contiguous()
 
     packed = bytearray(b"AHC061Q4\x01")
     packed += struct.pack("<H", len(tensors))

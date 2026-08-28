@@ -71,6 +71,10 @@ impl ParticleFilterSmc {
         self.particles.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.particles.is_empty()
+    }
+
     pub fn particles(&self) -> &[Particle] {
         &self.particles
     }
@@ -124,7 +128,7 @@ impl ParticleFilterSmc {
         let mut max_log = f64::NEG_INFINITY;
         let mut logs = Vec::with_capacity(self.particles.len());
         for (particle, &weight) in self.particles.iter().zip(self.weights.iter()) {
-            let p = move_probability(input, state, player, &summary, particle).max(1e-300);
+            let p = move_probability(input, state, player, summary, particle).max(1e-300);
             let log_w = weight.max(1e-300).ln() + p.ln();
             max_log = max_log.max(log_w);
             logs.push(log_w);
@@ -185,13 +189,7 @@ impl ParticleFilterSmc {
         }
         for (particle, &weight) in self.particles.iter().zip(self.weights.iter()) {
             add_policy_distribution(
-                input,
-                state,
-                player,
-                &candidates,
-                particle,
-                weight,
-                &mut dist,
+                input, state, player, candidates, particle, weight, &mut dist,
             );
         }
         dist.into_iter().map(|v| v as f32).collect()

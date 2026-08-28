@@ -90,8 +90,7 @@ pub fn update_state(
     let mut new_state = state.clone();
     new_state.selected = moves.to_vec();
 
-    for i in 0..input.M {
-        let target = moves[i];
+    for (i, &target) in moves.iter().enumerate().take(input.M) {
         if !is_valid_move(input, state, i, target) {
             return Err(format!(
                 "Player {} attempted invalid move from ({}, {}) to ({}, {}).",
@@ -195,7 +194,5 @@ pub fn is_valid_move(input: &Input, state: &State, player: usize, target: (usize
             return false;
         }
     }
-    get_candidates(input, state, player)
-        .iter()
-        .any(|&candidate| candidate == target)
+    get_candidates(input, state, player).contains(&target)
 }

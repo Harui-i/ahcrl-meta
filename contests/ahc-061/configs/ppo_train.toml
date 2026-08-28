@@ -1,12 +1,15 @@
-[train]
+[training]
 num_envs = 1024
 total_steps = 20000000
 rollout_steps = 100
 seed_start = 0
 seed_stride = 1
-pf_particles = 16
 device = "cuda"
 compile = true
+artifact_dir = "contests/ahc-061/artifacts/ppo"
+checkpoint_interval_updates = 40
+
+[ppo]
 lr = 0.0003
 gamma = 0.99
 gae_lambda = 0.95
@@ -16,19 +19,20 @@ minibatch_size = 1024
 entropy_coef = 0.0001
 value_coef = 0.5
 max_grad_norm = 0.5
-reward_scale_mode = "simbav2"
-reward_scale_epsilon = 1e-8
-reward_scale_g_max = 5.0
-obs_norm_mode = "running_channel"
+reward_scale = true
+obs_norm = true
 obs_norm_epsilon = 1e-8
-normalization_grouping = "none"
-critic_feature_mode = "oracle"
-artifact_dir = "contests/ahc-061/artifacts/ppo"
-checkpoint_interval_updates = 40
-model_channels = 256
-model_blocks = 2
-model_block_type = "spherical_attention_simba"
-wandb_enabled = true
-wandb_project = "ahcrl-meta"
-wandb_name = "ahc061-ppo"
-wandb_tags = ["ahc061", "ppo"]
+
+[model]
+channels = 256
+blocks = 2
+block_type = "spherical_attention_simba"
+
+[contest]
+pf_particles = 16
+
+[wandb]
+enabled = true
+project = "ahcrl-meta-ahc061"
+name = "ahc061-ppo"
+tags = ["ahc061", "ppo"]
