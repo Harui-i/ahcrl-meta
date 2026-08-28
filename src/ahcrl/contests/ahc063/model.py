@@ -32,6 +32,10 @@ class ActorCritic(nn.Module):
             channels=channels,
             blocks=blocks,
         )
+        # Keep max pooling as an explicit op.  With a bf16 hyperspherical trunk,
+        # Inductor can fuse the final fp32-to-bf16 cast into Tensor.amax and make
+        # its tie-counting backward divide by zero.
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
         self.policy = nn.Sequential(
             nn.Linear(channels * 2, channels),
             nn.ReLU(inplace=True),
@@ -50,7 +54,7 @@ class ActorCritic(nn.Module):
             raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
         h = self.trunk(x)
         pooled = torch.cat(
-            [h.mean(dim=(-2, -1)), h.amax(dim=(-2, -1))],
+            [h.mean(dim=(-2, -1)), self.max_pool(h).flatten(1)],
             dim=1,
         )
         return self.policy(pooled), self.value(pooled).squeeze(-1)
