@@ -237,7 +237,7 @@ class SphericalAttentionSimbaBlock(nn.Module):
         *,
         expansion: int = 4,
         heads: int = 4,
-        max_spatial_size: int = 10,
+        max_spatial_size: int = 16,
         scaler_init: float | None = None,
         scaler_scale: float | None = None,
         alpha_init: float = 0.2,

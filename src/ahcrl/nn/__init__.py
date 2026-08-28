@@ -23,6 +23,7 @@ from ahcrl.nn.components import (
     project_hyperspherical_weights_,
     project_weight_to_unit_norm_,
 )
+from ahcrl.nn.trunk import make_block_factory, make_trunk
 
 __all__ = [
     "ConvNeXtBlock",
@@ -42,6 +43,8 @@ __all__ = [
     "SphericalSelfAttentionLERP2d",
     "l2_normalize",
     "make_group_norm",
+    "make_block_factory",
+    "make_trunk",
     "project_hyperspherical_weights_",
     "project_weight_to_unit_norm_",
 ]

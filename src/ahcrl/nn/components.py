@@ -309,7 +309,7 @@ class SphericalSelfAttentionLERP2d(nn.Module):
         channels: int,
         *,
         heads: int = 4,
-        max_spatial_size: int = 10,
+        max_spatial_size: int = 16,
         alpha_init: float = 0.05,
         alpha_scale: float | None = None,
         output_scaler_init: float | None = None,

@@ -15,8 +15,8 @@ gamma = 0.995
 gae_lambda = 0.95
 clip = 0.2
 epochs = 1
-minibatch_size = 1024
-entropy_coef = 0.005
+minibatch_size = 256
+entropy_coef = 0.0001
 value_coef = 0.5
 max_grad_norm = 0.5
 
@@ -26,9 +26,9 @@ project = "ahcrl-meta-ahc063"
 name = "ahc063-ezcur"
 
 [model]
-channels = 128
-blocks = 6
-block_type = "convnext"
+channels = 256
+blocks = 2
+block_type = "spherical_attention_simba"
 
 [contest]
 max_episode_steps = 256

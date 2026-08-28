@@ -1,12 +1,10 @@
-from functools import partial
 from typing import cast
 
 import torch
 from jaxtyping import Float
 from torch import nn
 
-from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock, SpatialSelfAttentionBlock
-from ahcrl.nn.components import make_group_norm
+from ahcrl.nn.trunk import make_trunk
 
 from .encoder import ACTION_COUNT, NUM_PLANES
 
@@ -27,21 +25,12 @@ class ActorCritic(nn.Module):
 
         if channels <= 0 or blocks <= 0:
             raise ValueError("channels and blocks must be positive")
-        if block_type not in ("convnext", "residual", "spatial-att"):
-            raise ValueError(f"unknown block_type: {block_type}")
-
         self.observation_normalizer: nn.Module | None = None
-        if block_type == "convnext":
-            make_block = partial(ConvNeXtBlock, channels)
-        elif block_type == "spatial-att":
-            make_block = partial(SpatialSelfAttentionBlock, channels, heads=4)
-        else:
-            make_block = partial(ResidualBlock, channels)
-        self.trunk = nn.Sequential(
-            nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False),
-            make_group_norm(channels),
-            nn.ReLU(inplace=True),
-            *[make_block() for _ in range(blocks)],
+        self.trunk = make_trunk(
+            block_type=block_type,
+            in_channels=in_channels,
+            channels=channels,
+            blocks=blocks,
         )
         self.policy = nn.Sequential(
             nn.Linear(channels * 2, channels),

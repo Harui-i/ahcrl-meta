@@ -8,14 +8,8 @@ from ahcrl.contests.ahc061.encoder import (
     MAX_PLAYERS,
     NUM_PLANES,
 )
-from ahcrl.nn.blocks import (
-    ConvNeXtBlock,
-    PerCellMLPBlock,
-    ResidualBlock,
-    SimbaV2Block,
-    SphericalAttentionSimbaBlock,
-)
-from ahcrl.nn.components import HyperEmbedder2d, make_group_norm
+from ahcrl.nn.components import make_group_norm
+from ahcrl.nn.trunk import make_block_factory, make_trunk
 
 
 class RunningObservationNormalizer(nn.Module):
@@ -89,8 +83,8 @@ class ActorCritic(nn.Module):
     ) -> None:
         super().__init__()
         self.observation_normalizer: RunningObservationNormalizer | None = None
-        block_factory = _block_factory(block_type, channels=channels, blocks=blocks)
-        self.trunk = _make_trunk(
+        block_factory = make_block_factory(block_type, channels=channels, blocks=blocks)
+        self.trunk = make_trunk(
             block_type=block_type,
             in_channels=in_channels,
             channels=channels,
@@ -188,43 +182,3 @@ class RichValueHead(nn.Module):
         features.append(self.critic_encoder(critic_embedding))
         features = torch.cat(features, dim=1)
         return self.mlp(features)
-
-
-def _make_trunk(
-    *,
-    block_type: str,
-    in_channels: int,
-    channels: int,
-    blocks: int,
-    block_factory: Callable[[], nn.Module],
-) -> nn.Sequential:
-    if block_type in (
-        "simbav2_block",
-        "spherical_attention_simba",
-    ):
-        return nn.Sequential(
-            HyperEmbedder2d(in_channels, channels),
-            *[block_factory() for _ in range(blocks)],
-        )
-    return nn.Sequential(
-        nn.Conv2d(in_channels, channels, kernel_size=3, padding=1, bias=False),
-        make_group_norm(channels),
-        nn.ReLU(inplace=True),
-        *[block_factory() for _ in range(blocks)],
-    )
-
-
-def _block_factory(block_type: str, *, channels: int, blocks: int) -> Callable[[], nn.Module]:
-    if block_type == "convnext":
-        return lambda: ConvNeXtBlock(channels)
-    if block_type == "per_cell_mlp":
-        return lambda: PerCellMLPBlock(channels)
-    if block_type == "simbav2_block":
-        alpha_init = 1.0 / (blocks + 1)
-        return lambda: SimbaV2Block(channels, alpha_init=alpha_init)
-    if block_type == "spherical_attention_simba":
-        alpha_init = 1.0 / (blocks + 1)
-        return lambda: SphericalAttentionSimbaBlock(channels, alpha_init=alpha_init)
-    if block_type == "residual":
-        return lambda: ResidualBlock(channels)
-    raise ValueError(f"unknown block_type: {block_type}")
