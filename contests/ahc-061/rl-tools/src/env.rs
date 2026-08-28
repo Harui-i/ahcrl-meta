@@ -1,10 +1,8 @@
-use std::io::{self, BufRead, Read, Write};
-use std::time::Instant;
+//! AHC061 adapter for the shared vector-environment protocol.
 
 use ahcrl_env_core::{
     write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, TensorSpec, PROTOCOL_VERSION,
 };
-use rayon::prelude::*;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -144,15 +142,6 @@ fn reach_mask_and_candidates_from_bits(
     )
 }
 
-fn official_score_from_scores(scores: &[i64]) -> i64 {
-    let player0_score = scores[0];
-    let mut max_ai_score = 0_i64;
-    for &score in scores.iter().skip(1) {
-        max_ai_score = max_ai_score.max(score);
-    }
-    (1e5 * (1.0 + player0_score as f64 / max_ai_score as f64).log2()).round() as i64
-}
-
 fn dist_to_sources(sources: &BoolBoard) -> FloatBoard {
     const INF: i32 = 1 << 20;
     let mut dist = [INF; BOARD_CELLS];
@@ -204,24 +193,17 @@ fn dist_to_sources(sources: &BoolBoard) -> FloatBoard {
 
 struct EncodedSlot {
     plane_bytes: Vec<u8>,
-    critic_posterior_bytes: Vec<u8>,
     critic_oracle_bytes: Vec<u8>,
     mask: [u8; BOARD_CELLS],
-    reward: f32,
-    done: u8,
-    score: i64,
 }
 
 fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
     let mut plane_bytes =
         vec![0_u8; NUM_PLANES * BOARD_SIZE * BOARD_SIZE * std::mem::size_of::<u16>()];
-    let mut critic_posterior_bytes =
-        vec![0_u8; MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER * std::mem::size_of::<u16>()];
     let mut critic_oracle_bytes =
         vec![0_u8; MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER * std::mem::size_of::<u16>()];
     let mut value_sum = 0.0_f32;
     let mut scores = vec![0.0_f32; slot.input.M];
-    let mut score_ints = vec![0_i64; slot.input.M];
     let mut owner_bits = vec![0_u128; slot.input.M];
 
     for x in 0..BOARD_SIZE {
@@ -232,12 +214,10 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
             if owner >= 0 {
                 let player = owner as usize;
                 scores[player] += value * slot.state.level[x][y] as f32;
-                score_ints[player] += slot.input.V[x][y] as i64 * slot.state.level[x][y] as i64;
                 owner_bits[player] |= 1_u128 << (x * BOARD_SIZE + y);
             }
         }
     }
-    let score = official_score_from_scores(&score_ints);
     let mean_value = (value_sum / (BOARD_SIZE * BOARD_SIZE) as f32).max(1.0);
     for x in 0..BOARD_SIZE {
         for y in 0..BOARD_SIZE {
@@ -285,8 +265,7 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
         }
     }
 
-    for player in 0..slot.input.M {
-        let mapped_player = player_map[player];
+    for (player, &mapped_player) in player_map.iter().enumerate() {
         let (x, y) = slot.state.pos[player];
         if mapped_player < MAX_PLAYERS && x < BOARD_SIZE && y < BOARD_SIZE {
             set_plane(&mut plane_bytes, 15 + mapped_player, x, y, 1.0);
@@ -352,10 +331,10 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
         })
         .collect::<Vec<_>>();
     let mut next_move_planes = Vec::with_capacity(slot.input.M);
-    for player in 0..slot.input.M {
+    for (player, reach_entry) in reach.iter().enumerate() {
         if player == 0 {
             let mut plane = [0.0_f32; BOARD_CELLS];
-            for (idx, &ok) in reach[player].0.iter().enumerate() {
+            for (idx, &ok) in reach_entry.0.iter().enumerate() {
                 plane[idx] = if ok { 1.0 } else { 0.0 };
             }
             next_move_planes.push(plane);
@@ -365,7 +344,7 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
                     &slot.input,
                     &slot.state,
                     player,
-                    &reach[player].1,
+                    &reach_entry.1,
                 ),
             );
         }
@@ -430,8 +409,6 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
                 fill_plane(&mut plane_bytes, param_start + param_idx, posterior_value);
                 let feature_idx = mapped_player * ORACLE_PARAMS_PER_PLAYER + param_idx;
                 let feature_offset = feature_idx * std::mem::size_of::<u16>();
-                critic_posterior_bytes[feature_offset..feature_offset + 2]
-                    .copy_from_slice(&f32_to_f16_bits(posterior_value).to_le_bytes());
                 critic_oracle_bytes[feature_offset..feature_offset + 2]
                     .copy_from_slice(&f32_to_f16_bits(oracle_value as f32).to_le_bytes());
             }
@@ -500,7 +477,7 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
         let mut owner_level_value_sum = 0.0_f32;
         let mut comp_level_sum = 0.0_f32;
         let mut comp_level_value_sum = 0.0_f32;
-        for idx in 0..BOARD_SIZE * BOARD_SIZE {
+        for (idx, &in_component) in comp_masks[player].iter().enumerate() {
             let x = idx / BOARD_SIZE;
             let y = idx % BOARD_SIZE;
             let level = slot.state.level[x][y] as f32;
@@ -509,7 +486,7 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
                 owner_level_sum += level;
                 owner_level_value_sum += level_value;
             }
-            if comp_masks[player][idx] {
+            if in_component {
                 comp_level_sum += level;
                 comp_level_value_sum += level_value;
             }
@@ -579,17 +556,9 @@ fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
 
     EncodedSlot {
         plane_bytes,
-        critic_posterior_bytes,
         critic_oracle_bytes,
         mask,
-        reward: slot.reward as f32,
-        done: if slot.done { 1 } else { 0 },
-        score,
     }
-}
-
-fn encode_slots(slots: &[EnvSlot]) -> Vec<EncodedSlot> {
-    slots.par_iter().map(encode_slot).collect()
 }
 
 fn f32_to_f16_bits(value: f32) -> u16 {
@@ -628,231 +597,6 @@ fn f32_to_f16_bits(value: f32) -> u16 {
         half = half.wrapping_add(1);
     }
     half
-}
-
-fn write_encoded_obs(slots: &[EnvSlot], out: &mut impl Write) -> io::Result<()> {
-    writeln!(
-        out,
-        "OKF16 {} {} {} {} {}",
-        slots.len(),
-        NUM_PLANES,
-        BOARD_SIZE,
-        BOARD_SIZE,
-        MAX_PLAYERS * ORACLE_PARAMS_PER_PLAYER
-    )?;
-    let encoded = encode_slots(slots);
-    for item in &encoded {
-        out.write_all(&item.plane_bytes)?;
-    }
-    for item in &encoded {
-        out.write_all(&item.critic_posterior_bytes)?;
-    }
-    for item in &encoded {
-        out.write_all(&item.critic_oracle_bytes)?;
-    }
-
-    let mut mask_bytes = Vec::with_capacity(encoded.len() * BOARD_SIZE * BOARD_SIZE);
-    for item in &encoded {
-        mask_bytes.extend_from_slice(&item.mask);
-    }
-    out.write_all(&mask_bytes)?;
-    for item in &encoded {
-        out.write_all(&item.reward.to_le_bytes())?;
-    }
-    for item in &encoded {
-        out.write_all(&[item.done])?;
-    }
-    for item in &encoded {
-        out.write_all(&item.score.to_le_bytes())?;
-    }
-    writeln!(out, "END")?;
-    out.flush()
-}
-
-fn first_legal_action(slot: &EnvSlot) -> Result<usize, String> {
-    if slot.done {
-        return Ok(0);
-    }
-    slot.mask()
-        .iter()
-        .position(|&ok| ok)
-        .ok_or_else(|| "no legal action".to_string())
-}
-
-fn step_first_legal_noobs(slots: &mut [EnvSlot], out: &mut impl Write) -> Result<(), String> {
-    slots.par_iter_mut().try_for_each(|slot| {
-        let action = first_legal_action(slot)?;
-        slot.step_action_index(action)
-    })?;
-    writeln!(out, "OK_NOOBS").map_err(|err| err.to_string())?;
-    out.flush().map_err(|err| err.to_string())
-}
-
-fn bench_first_legal_internal(
-    slots: &mut [EnvSlot],
-    steps: usize,
-    out: &mut impl Write,
-) -> Result<(), String> {
-    let started = Instant::now();
-    let mut env_steps = 0_usize;
-    for _ in 0..steps {
-        slots.par_iter_mut().try_for_each(|slot| {
-            let action = first_legal_action(slot)?;
-            slot.step_action_index(action)
-        })?;
-        env_steps += slots.len();
-    }
-    let elapsed = started.elapsed().as_secs_f64();
-    writeln!(out, "OK_BENCH {} {:.12}", env_steps, elapsed).map_err(|err| err.to_string())?;
-    out.flush().map_err(|err| err.to_string())
-}
-
-fn parse_opt_usize(token: &str) -> Result<Option<usize>, String> {
-    let value = token
-        .parse::<usize>()
-        .map_err(|_| format!("failed to parse usize: {}", token))?;
-    if value == 0 {
-        Ok(None)
-    } else {
-        Ok(Some(value))
-    }
-}
-
-fn main() {
-    init_rayon_pool();
-    let stdin = io::stdin();
-    let mut reader = io::BufReader::new(stdin.lock());
-    let mut stdout = io::BufWriter::new(io::stdout());
-    let mut slots: Vec<EnvSlot> = vec![];
-    let pf_particles = std::env::var("AHC061_PF_PARTICLES")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|&value| value > 0)
-        .unwrap_or(DEFAULT_PF_PARTICLES);
-
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(err) => {
-                let _ = writeln!(stdout, "ERR stdin {}", err);
-                let _ = stdout.flush();
-                break;
-            }
-        }
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        let result: Result<(), String> = match tokens.first().copied() {
-            Some("RESET") => {
-                if tokens.len() != 6 {
-                    Err("RESET requires: num_envs seed_start seed_stride M_or_0 U_or_0".to_string())
-                } else {
-                    let num_envs = tokens[1]
-                        .parse::<usize>()
-                        .map_err(|_| "bad num_envs".to_string());
-                    let seed_start = tokens[2]
-                        .parse::<u64>()
-                        .map_err(|_| "bad seed_start".to_string());
-                    let seed_stride = tokens[3]
-                        .parse::<u64>()
-                        .map_err(|_| "bad seed_stride".to_string());
-                    let m_opt = parse_opt_usize(tokens[4]);
-                    let u_opt = parse_opt_usize(tokens[5]);
-                    match (num_envs, seed_start, seed_stride, m_opt, u_opt) {
-                        (Ok(num_envs), Ok(seed_start), Ok(seed_stride), Ok(m_opt), Ok(u_opt)) => {
-                            slots = (0..num_envs)
-                                .map(|i| {
-                                    EnvSlot::from_seed_with_pf(
-                                        seed_start + seed_stride * i as u64,
-                                        m_opt,
-                                        u_opt,
-                                        pf_particles,
-                                    )
-                                })
-                                .collect();
-                            write_encoded_obs(&slots, &mut stdout).map_err(|err| err.to_string())
-                        }
-                        _ => Err("failed to parse RESET".to_string()),
-                    }
-                }
-            }
-            Some("STEP") => (|| -> Result<(), String> {
-                if tokens.len() != slots.len() + 1 {
-                    return Err(format!("STEP requires {} actions", slots.len()));
-                }
-                for (slot, token) in slots.iter_mut().zip(tokens.iter().skip(1)) {
-                    let action = token
-                        .parse::<usize>()
-                        .map_err(|_| format!("bad action: {}", token))?;
-                    slot.step_action_index(action)?;
-                }
-                write_encoded_obs(&slots, &mut stdout).map_err(|err| err.to_string())
-            })(),
-            Some("STEP_BIN") => (|| -> Result<(), String> {
-                if tokens.len() != 1 {
-                    return Err("STEP_BIN takes no arguments".to_string());
-                }
-                let mut actions = vec![0_u8; slots.len()];
-                reader
-                    .read_exact(&mut actions)
-                    .map_err(|err| format!("failed to read STEP_BIN actions: {}", err))?;
-                slots
-                    .par_iter_mut()
-                    .zip(actions.par_iter())
-                    .try_for_each(|(slot, &action)| slot.step_action_index(action as usize))?;
-                write_encoded_obs(&slots, &mut stdout).map_err(|err| err.to_string())
-            })(),
-            Some("STEP_FIRST_LEGAL_NOOBS") => {
-                if tokens.len() != 1 {
-                    Err("STEP_FIRST_LEGAL_NOOBS takes no arguments".to_string())
-                } else {
-                    step_first_legal_noobs(&mut slots, &mut stdout)
-                }
-            }
-            Some("BENCH_FIRST_LEGAL_INTERNAL") => {
-                if tokens.len() != 2 {
-                    Err("BENCH_FIRST_LEGAL_INTERNAL requires: steps".to_string())
-                } else {
-                    match tokens[1].parse::<usize>() {
-                        Ok(steps) => bench_first_legal_internal(&mut slots, steps, &mut stdout),
-                        Err(_) => Err("bad steps".to_string()),
-                    }
-                }
-            }
-            Some("QUIT") => break,
-            Some(other) => Err(format!("unknown command: {}", other)),
-            None => Ok(()),
-        };
-
-        if let Err(err) = result {
-            let _ = writeln!(stdout, "ERR {}", err);
-            let _ = stdout.flush();
-        }
-    }
-}
-
-fn init_rayon_pool() {
-    let Some(threads) = std::env::var("AHC061_ENCODE_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|&value| value > 0)
-    else {
-        return;
-    };
-    if let Err(err) = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build_global()
-    {
-        eprintln!(
-            "warning: failed to initialize rayon global thread pool: {}",
-            err
-        );
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]

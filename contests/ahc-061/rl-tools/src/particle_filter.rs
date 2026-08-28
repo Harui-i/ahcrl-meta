@@ -67,14 +67,6 @@ impl ParticleFilterSmc {
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.particles.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.particles.is_empty()
-    }
-
     pub fn particles(&self) -> &[Particle] {
         &self.particles
     }
@@ -446,7 +438,7 @@ mod tests {
     #[test]
     fn prior_particles_are_in_bounds_and_normalized() {
         let pf = ParticleFilterSmc::new(16, 1);
-        assert_eq!(pf.len(), 16);
+        assert_eq!(pf.particles().len(), 16);
         assert!((pf.weights().iter().sum::<f64>() - 1.0).abs() < 1e-12);
         for p in pf.particles() {
             assert!((WA_MIN..=WA_MAX).contains(&p.wa));

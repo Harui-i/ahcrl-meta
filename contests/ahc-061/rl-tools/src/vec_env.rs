@@ -1,4 +1,4 @@
-use tools::{gen, parse_input, Input, State};
+use tools::{gen, Input, State};
 
 use crate::official_compat::{current_scores, get_candidates, legal_mask};
 use crate::particle_filter::ParticleFilterSmc;
@@ -29,14 +29,6 @@ impl EnvSlot {
         pf_particles: usize,
     ) -> Self {
         Self::new_with_seed(gen(seed, m_opt, u_opt), pf_particles, seed)
-    }
-
-    pub fn from_input_text(text: &str) -> Self {
-        Self::new(parse_input(text))
-    }
-
-    pub fn new(input: Input) -> Self {
-        Self::new_with_seed(input, DEFAULT_PF_PARTICLES, 0)
     }
 
     pub fn new_with_seed(input: Input, pf_particles: usize, seed: u64) -> Self {
