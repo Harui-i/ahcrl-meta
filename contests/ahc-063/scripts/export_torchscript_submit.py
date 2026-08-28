@@ -396,7 +396,7 @@ SOFTMAX_ACTION_SELECTION = """        auto probabilities =
 
 def find_latest_run(artifact_dir: Path) -> Path:
     runs = [path for path in artifact_dir.glob("run_*") if path.is_dir()]
-    runs = [path for path in runs if (path / "checkpoints" / "checkpoint_latest.pt").exists()]
+    runs = [path for path in runs if (path / "checkpoint_latest.pt").exists()]
     if not runs:
         raise FileNotFoundError(f"no completed PPO run found under {artifact_dir}")
     return max(runs, key=lambda path: path.stat().st_mtime)
@@ -414,7 +414,7 @@ def main() -> None:
     args = parser.parse_args()
     run_dir = args.run_dir or find_latest_run(ROOT / "contests/ahc-063/artifacts/ppo")
     config = json.loads((run_dir / "config.json").read_text())
-    checkpoint = run_dir / "checkpoints" / "checkpoint_latest.pt"
+    checkpoint = run_dir / "checkpoint_latest.pt"
     output = args.output or run_dir / "submit.cpp"
     model_bytes = export_torchscript(checkpoint, config, args.softmax)
     action_selection = SOFTMAX_ACTION_SELECTION if args.softmax else ARGMAX_ACTION_SELECTION
