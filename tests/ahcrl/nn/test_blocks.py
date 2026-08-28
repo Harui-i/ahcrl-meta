@@ -13,6 +13,8 @@ from ahcrl.nn import (
     Scaler,
     ShiftL2Norm,
     SimbaV2Block,
+    SpatialSelfAttention2d,
+    SpatialSelfAttentionBlock,
     l2_normalize,
     make_group_norm,
     project_hyperspherical_weights_,
@@ -110,6 +112,47 @@ def test_per_cell_mlp_block_rejects_non_positive_expansion() -> None:
 def test_per_cell_mlp_block_rejects_negative_layer_scale() -> None:
     with pytest.raises(ValueError, match="layer_scale_init"):
         PerCellMLPBlock(channels=8, layer_scale_init=-1e-6)
+
+
+def test_spatial_self_attention_2d_preserves_shape() -> None:
+    attention = SpatialSelfAttention2d(channels=8, heads=2)
+    x = torch.randn(4, 8, 3, 5)
+
+    y = attention(x)
+
+    assert y.shape == x.shape
+
+
+def test_spatial_self_attention_block_preserves_shape() -> None:
+    block = SpatialSelfAttentionBlock(channels=8, heads=2)
+    x = torch.randn(4, 8, 3, 5)
+
+    y = block(x)
+
+    assert y.shape == x.shape
+
+
+def test_spatial_self_attention_block_mixes_spatial_cells() -> None:
+    block = SpatialSelfAttentionBlock(channels=4, heads=1, layer_scale_init=1.0)
+    x = torch.randn(1, 4, 2, 2)
+
+    y = block(x)
+    changed = x.clone()
+    changed[:, 0, 0, 1] += 10.0
+    changed_y = block(changed)
+
+    assert not torch.allclose(y[:, :, 1, 0], changed_y[:, :, 1, 0])
+
+
+@pytest.mark.parametrize("heads", [0, 3])
+def test_spatial_self_attention_block_rejects_invalid_heads(heads: int) -> None:
+    with pytest.raises(ValueError, match="heads|divisible"):
+        SpatialSelfAttentionBlock(channels=8, heads=heads)
+
+
+def test_spatial_self_attention_block_rejects_negative_layer_scale() -> None:
+    with pytest.raises(ValueError, match="layer_scale_init"):
+        SpatialSelfAttentionBlock(channels=8, layer_scale_init=-1e-6)
 
 
 def test_hyperspherical_feature_norm_preserves_shape_and_returns_finite_values() -> None:

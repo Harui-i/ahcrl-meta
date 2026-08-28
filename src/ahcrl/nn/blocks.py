@@ -11,6 +11,7 @@ from torch import nn
 from ahcrl.nn.components import (
     HyperMLP,
     Scaler,
+    SpatialSelfAttention2d,
     SphericalSelfAttentionLERP2d,
     l2_normalize,
     make_group_norm,
@@ -21,6 +22,7 @@ __all__ = [
     "PerCellMLPBlock",
     "ResidualBlock",
     "SimbaV2Block",
+    "SpatialSelfAttentionBlock",
     "SphericalAttentionSimbaBlock",
 ]
 
@@ -137,6 +139,41 @@ class PerCellMLPBlock(nn.Module):
         y = self.layer_scale * y
         y = y.permute(0, 3, 1, 2)
         return residual + y
+
+
+class SpatialSelfAttentionBlock(nn.Module):
+    """Shape-preserving global self-attention block for spatial feature mixing."""
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        heads: int = 4,
+        layer_scale_init: float = 1e-6,
+    ) -> None:
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        if heads <= 0:
+            raise ValueError(f"heads must be positive, got {heads}")
+        if channels % heads != 0:
+            raise ValueError(f"channels must be divisible by heads, got {channels} and {heads}")
+        if layer_scale_init < 0.0:
+            raise ValueError(f"layer_scale_init must be non-negative, got {layer_scale_init}")
+
+        self.norm = nn.LayerNorm(channels)
+        self.attention = SpatialSelfAttention2d(channels, heads=heads)
+        self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
+
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels H W"]
+    ) -> Float[torch.Tensor, "batch channels H W"]:
+        if x.ndim != 4:
+            raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
+        residual = x
+        y = self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        y = self.attention(y)
+        return residual + self.layer_scale.view(1, -1, 1, 1) * y
 
 
 class SimbaV2Block(nn.Module):

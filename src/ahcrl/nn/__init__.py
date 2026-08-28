@@ -5,6 +5,7 @@ from ahcrl.nn.blocks import (
     PerCellMLPBlock,
     ResidualBlock,
     SimbaV2Block,
+    SpatialSelfAttentionBlock,
     SphericalAttentionSimbaBlock,
 )
 from ahcrl.nn.components import (
@@ -15,6 +16,7 @@ from ahcrl.nn.components import (
     LinearScaler,
     Scaler,
     ShiftL2Norm,
+    SpatialSelfAttention2d,
     SphericalSelfAttentionLERP2d,
     l2_normalize,
     make_group_norm,
@@ -34,6 +36,8 @@ __all__ = [
     "Scaler",
     "ShiftL2Norm",
     "SimbaV2Block",
+    "SpatialSelfAttention2d",
+    "SpatialSelfAttentionBlock",
     "SphericalAttentionSimbaBlock",
     "SphericalSelfAttentionLERP2d",
     "l2_normalize",

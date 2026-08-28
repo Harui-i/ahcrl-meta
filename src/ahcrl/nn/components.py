@@ -15,6 +15,7 @@ __all__ = [
     "LinearScaler",
     "Scaler",
     "ShiftL2Norm",
+    "SpatialSelfAttention2d",
     "SphericalSelfAttentionLERP2d",
     "l2_normalize",
     "make_group_norm",
@@ -271,6 +272,33 @@ class HyperEmbedder2d(nn.Module):
         y = self.scaler(self.linear(y))
         y = l2_normalize(y, dim=-1, eps=self.eps)
         return y.permute(0, 3, 1, 2)
+
+
+class SpatialSelfAttention2d(nn.Module):
+    """Global multi-head self-attention over the spatial cells of an NCHW tensor."""
+
+    def __init__(self, channels: int, *, heads: int = 4) -> None:
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, got {channels}")
+        if heads <= 0:
+            raise ValueError(f"heads must be positive, got {heads}")
+        if channels % heads != 0:
+            raise ValueError(f"channels must be divisible by heads, got {channels} and {heads}")
+
+        self.channels = channels
+        self.attention = nn.MultiheadAttention(channels, heads, batch_first=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 4:
+            raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
+        batch, channels, height, width = x.shape
+        if channels != self.channels:
+            raise ValueError(f"expected {self.channels} channels, got {channels}")
+
+        tokens = x.permute(0, 2, 3, 1).reshape(batch, height * width, channels)
+        attended, _ = self.attention(tokens, tokens, tokens, need_weights=False)
+        return attended.reshape(batch, height, width, channels).permute(0, 3, 1, 2)
 
 
 class SphericalSelfAttentionLERP2d(nn.Module):

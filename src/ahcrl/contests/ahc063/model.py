@@ -5,14 +5,14 @@ import torch
 from jaxtyping import Float
 from torch import nn
 
-from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock, SphericalAttentionSimbaBlock
+from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock, SpatialSelfAttentionBlock
 from ahcrl.nn.components import make_group_norm
 
 from .encoder import ACTION_COUNT, MAX_BOARD_SIZE, NUM_PLANES
 
 
 class ActorCritic(nn.Module):
-    """A shared spherical-attention trunk with four directional actions."""
+    """A shared trunk with four directional actions."""
 
     def __init__(
         self,
@@ -27,16 +27,14 @@ class ActorCritic(nn.Module):
 
         if channels <= 0 or blocks <= 0:
             raise ValueError("channels and blocks must be positive")
-        if block_type not in ("convnext", "residual", "spherical"):
+        if block_type not in ("convnext", "residual", "spatial-att"):
             raise ValueError(f"unknown block_type: {block_type}")
 
         self.observation_normalizer: nn.Module | None = None
         if block_type == "convnext":
             make_block = partial(ConvNeXtBlock, channels)
-        elif block_type == "spherical":
-            make_block = partial(
-                SphericalAttentionSimbaBlock, channels, max_spatial_size=MAX_BOARD_SIZE
-            )
+        elif block_type == "spatial-att":
+            make_block = partial(SpatialSelfAttentionBlock, channels, heads=4)
         else:
             make_block = partial(ResidualBlock, channels)
         self.trunk = nn.Sequential(
