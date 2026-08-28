@@ -9,7 +9,7 @@ from .checkpoint import (
     save_training_checkpoint,
 )
 from .config import config_for_save, load_toml_config, resolve_config
-from .metrics import build_standard_ppo_metrics
+from .metrics import build_completed_episode_score_metrics, build_standard_ppo_metrics
 from .run import get_wandb_run_id, prepare_run_dir, update_run_state, write_config
 from .wandb import WandbConfig, finish_wandb, init_wandb
 
@@ -18,6 +18,7 @@ __all__ = [
     "LoadedTrainingCheckpoint",
     "TrainingProgress",
     "WandbConfig",
+    "build_completed_episode_score_metrics",
     "build_standard_ppo_metrics",
     "config_for_save",
     "finish_wandb",

@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 import torch
 
-from ahcrl.training.metrics import build_standard_ppo_metrics
+from ahcrl.training.metrics import build_completed_episode_score_metrics, build_standard_ppo_metrics
 from ahcrl.training.wandb import WandbConfig, finish_wandb, init_wandb
 
 
@@ -48,6 +48,54 @@ def test_standard_ppo_metrics_contains_only_common_diagnostics() -> None:
     assert metrics["loss/total"] == 0.17
     assert metrics["model/grad_norm"] == 0.5
     assert not any("score" in key or "prefix" in key for key in metrics)
+
+
+def test_completed_episode_score_metrics_selects_only_done_episodes() -> None:
+    metrics = build_completed_episode_score_metrics(
+        scores=torch.tensor([[10, 99], [30, 40]]),
+        dones=torch.tensor([[False, True], [True, False]]),
+    )
+
+    assert metrics == {
+        "episode/completed_count": 2,
+        "episode/score_mean": 64.5,
+        "episode/score_min": 30.0,
+        "episode/score_max": 99.0,
+        "episode/score_std": 34.5,
+    }
+
+
+def test_standard_ppo_metrics_includes_completed_episode_scores_when_available() -> None:
+    rollout = {
+        "rewards": torch.tensor([[1.0, 3.0]]),
+        "dones": torch.tensor([[0.0, 1.0]]),
+        "scores": torch.tensor([[10, 20]]),
+        "values": torch.tensor([[1.0, 2.0]]),
+        "advantages": torch.tensor([[-1.0, 1.0]]),
+        "returns": torch.tensor([[2.0, 3.0]]),
+    }
+    stats = {
+        "policy_loss": 0.1,
+        "value_loss": 0.2,
+        "weighted_policy_loss": 0.1,
+        "weighted_value_loss": 0.1,
+        "entropy_loss": -0.03,
+        "total_loss": 0.17,
+        "entropy": 0.3,
+        "clip_frac": 0.4,
+        "grad_norm": 0.5,
+    }
+
+    metrics = build_standard_ppo_metrics(
+        update=1,
+        global_step=2,
+        elapsed=1.0,
+        rollout=rollout,
+        update_stats=stats,
+    )
+
+    assert metrics["episode/completed_count"] == 1
+    assert metrics["episode/score_mean"] == 20.0
 
 
 def test_wandb_initialization_and_resume_are_configured(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,6 +5,30 @@ from collections.abc import Mapping
 import torch
 
 
+def build_completed_episode_score_metrics(
+    scores: torch.Tensor,
+    dones: torch.Tensor,
+) -> dict[str, float | int]:
+    """終了したエピソードだけの score 集計を返す。
+
+    ``score`` は RustVecEnv の共通プロトコルで提供される、環境ごとの
+    コンテスト定義スコアである。未終了エピソードの途中経過を混ぜないため、
+    ``done`` の位置だけを W&B に記録する。
+    """
+    completed_scores = scores.double()[dones.bool()]
+    count = int(completed_scores.numel())
+    metrics: dict[str, float | int] = {"episode/completed_count": count}
+    if count == 0:
+        return metrics
+    metrics |= {
+        "episode/score_mean": float(completed_scores.mean().item()),
+        "episode/score_min": float(completed_scores.min().item()),
+        "episode/score_max": float(completed_scores.max().item()),
+        "episode/score_std": float(completed_scores.std(unbiased=False).item()),
+    }
+    return metrics
+
+
 def build_standard_ppo_metrics(
     *,
     update: int,
@@ -29,7 +53,7 @@ def build_standard_ppo_metrics(
         )
     valid_action_fraction = 1.0 if masks is None else float(masks.float().mean().item())
 
-    return {
+    metrics: dict[str, float | int] = {
         "summary/cumulative_env_steps": global_step,
         "summary/updates": update,
         "summary/elapsed_sec": elapsed,
@@ -54,3 +78,7 @@ def build_standard_ppo_metrics(
         "train/clip_fraction": update_stats["clip_frac"],
         "model/grad_norm": update_stats["grad_norm"],
     }
+    scores = rollout.get("scores")
+    if scores is not None:
+        metrics |= build_completed_episode_score_metrics(scores, dones)
+    return metrics

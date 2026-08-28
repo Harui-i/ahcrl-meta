@@ -230,6 +230,7 @@ def collect_rollout(
     logprobs: list[torch.Tensor] = []
     rewards: list[torch.Tensor] = []
     dones: list[torch.Tensor] = []
+    scores: list[torch.Tensor] = []
     values: list[torch.Tensor] = []
     masks: list[torch.Tensor] = []
     forward_seconds = 0.0
@@ -268,6 +269,7 @@ def collect_rollout(
         logprobs.append(logprob.cpu())
         rewards.append(torch.from_numpy(result.reward.copy()))
         dones.append(torch.from_numpy(result.done.astype(np.float32)))
+        scores.append(torch.from_numpy(result.score.copy()))
         values.append(value.float().cpu())
         masks.append(mask.cpu())
         obs = result.obs
@@ -311,6 +313,7 @@ def collect_rollout(
             "rewards": raw_rewards,
             "scaled_rewards": scaled_rewards,
             "dones": stacked_dones,
+            "scores": torch.stack(scores),
             "values": stacked_values,
             "advantages": advantages,
             "returns": advantages + stacked_values,
