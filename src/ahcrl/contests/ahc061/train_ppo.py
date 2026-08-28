@@ -547,7 +547,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             parser.add_argument(
                 option,
                 dest=key,
-                type=int if key in {"fixed_m", "fixed_u"} else None,
+                type=int if key in {"fixed_m", "fixed_u"} else str,
                 default=argparse.SUPPRESS,
             )
         elif isinstance(default, int):
