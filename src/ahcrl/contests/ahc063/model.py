@@ -1,6 +1,7 @@
 from typing import cast
 
 import torch
+from jaxtyping import Float
 from torch import nn
 
 from ahcrl.nn.blocks import ConvNeXtBlock, ResidualBlock
@@ -20,6 +21,9 @@ class ActorCritic(nn.Module):
         block_type: str = "convnext",
     ) -> None:
         super().__init__()
+        self.NUM_PLANES = NUM_PLANES
+        self.ACTION_COUNT = ACTION_COUNT
+
         if channels <= 0 or blocks <= 0:
             raise ValueError("channels and blocks must be positive")
         if block_type not in ("convnext", "residual"):
@@ -44,7 +48,9 @@ class ActorCritic(nn.Module):
             nn.Linear(channels, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: Float[torch.Tensor, "batch {self.NUM_PLANES} H W"]
+    ) -> tuple[Float[torch.Tensor, "batch {self.ACTION_COUNT}"], Float[torch.Tensor, "batch"]]:
         if x.ndim != 4:
             raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
         h = self.trunk(x)
@@ -55,7 +61,9 @@ class ActorCritic(nn.Module):
         return self.policy(pooled), self.value(pooled).squeeze(-1)
 
     @torch.no_grad()
-    def feature_norm_stats(self, x: torch.Tensor) -> dict[str, float]:
+    def feature_norm_stats(
+        self, x: Float[torch.Tensor, "batch {self.NUM_PLANES} H W"]
+    ) -> dict[str, float]:
         h = cast(torch.Tensor, self.trunk(x))
         norm = h.float().pow(2).sum(dim=1).sqrt()
         return {
