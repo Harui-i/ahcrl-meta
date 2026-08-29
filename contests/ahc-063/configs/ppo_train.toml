@@ -7,7 +7,7 @@ seed_stride = 1
 device = "cuda"
 compile = true
 artifact_dir = "contests/ahc-063/artifacts/ppo"
-checkpoint_interval_updates = 40
+checkpoint_interval_updates = 10
 
 [ppo]
 lr = 0.0003
@@ -37,9 +37,9 @@ obs_norm = true
 obs_norm_epsilon = 1e-8
 
 [evaluation]
-enabled = false
+enabled = true
 seed_start = 0
-seed_num = 100
+seed_num = 1024
 seed_stride = 1
 temperature = 0.0
 max_episode_steps = 256
