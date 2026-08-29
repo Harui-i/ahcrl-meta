@@ -9,7 +9,7 @@ from ahcrl.nn.blocks import (
     PerCellMLPBlock,
     ResidualBlock,
     SimbaV2Block,
-    SpatialSelfAttentionBlock,
+    SpatialTransformerBlock,
     SphericalAttentionSimbaBlock,
 )
 from ahcrl.nn.components import HyperEmbedder2d, make_group_norm
@@ -54,6 +54,6 @@ def make_block_factory(block_type: str, *, channels: int, blocks: int) -> Callab
         return lambda: SphericalAttentionSimbaBlock(channels, alpha_init=alpha_init)
     if block_type == "residual":
         return lambda: ResidualBlock(channels)
-    if block_type == "spatial-att":
-        return lambda: SpatialSelfAttentionBlock(channels, heads=4)
+    if block_type == "spatial-transformer":
+        return lambda: SpatialTransformerBlock(channels, heads=4)
     raise ValueError(f"unknown block_type: {block_type}")

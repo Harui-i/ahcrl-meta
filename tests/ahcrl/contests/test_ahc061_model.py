@@ -17,6 +17,7 @@ from ahcrl.contests.ahc061.model import ActorCritic, RunningObservationNormalize
         "convnext",
         "per_cell_mlp",
         "residual",
+        "spatial-transformer",
         "simbav2_block",
         "spherical_attention_simba",
     ],

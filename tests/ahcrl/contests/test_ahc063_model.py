@@ -15,6 +15,16 @@ def test_actor_critic_convnext() -> None:
     assert value.shape == (batch_size,)
 
 
+def test_actor_critic_spatial_transformer() -> None:
+    model = ActorCritic(NUM_PLANES, 16, 2, "spatial-transformer")
+    x = torch.randn(3, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
+
+    policy, value = model(x)
+
+    assert policy.shape == (3, ACTION_COUNT)
+    assert value.shape == (3,)
+
+
 def test_actor_critic_uses_explicit_max_pool_for_compile_safety() -> None:
     model = ActorCritic(NUM_PLANES, 16, 1, "spherical_attention_simba")
     features = torch.randn(2, 16, MAX_BOARD_SIZE, MAX_BOARD_SIZE)

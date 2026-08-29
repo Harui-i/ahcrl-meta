@@ -275,9 +275,9 @@ class HyperEmbedder2d(nn.Module):
 
 
 class SpatialSelfAttention2d(nn.Module):
-    """Global multi-head self-attention over the spatial cells of an NCHW tensor."""
+    """Global multi-head self-attention with a learnable 2D relative position bias."""
 
-    def __init__(self, channels: int, *, heads: int = 4) -> None:
+    def __init__(self, channels: int, *, heads: int = 4, max_spatial_size: int = 16) -> None:
         super().__init__()
         if channels <= 0:
             raise ValueError(f"channels must be positive, got {channels}")
@@ -285,9 +285,17 @@ class SpatialSelfAttention2d(nn.Module):
             raise ValueError(f"heads must be positive, got {heads}")
         if channels % heads != 0:
             raise ValueError(f"channels must be divisible by heads, got {channels} and {heads}")
+        if max_spatial_size <= 0:
+            raise ValueError(f"max_spatial_size must be positive, got {max_spatial_size}")
 
         self.channels = channels
-        self.attention = nn.MultiheadAttention(channels, heads, batch_first=True)
+        self.heads = heads
+        self.head_dim = channels // heads
+        self.max_spatial_size = max_spatial_size
+        self.qkv = nn.Linear(channels, channels * 3)
+        self.output = nn.Linear(channels, channels)
+        table_size = max_spatial_size * 2 - 1
+        self.relative_position_bias = nn.Parameter(torch.zeros(heads, table_size, table_size))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim != 4:
@@ -296,9 +304,35 @@ class SpatialSelfAttention2d(nn.Module):
         if channels != self.channels:
             raise ValueError(f"expected {self.channels} channels, got {channels}")
 
-        tokens = x.permute(0, 2, 3, 1).reshape(batch, height * width, channels)
-        attended, _ = self.attention(tokens, tokens, tokens, need_weights=False)
-        return attended.reshape(batch, height, width, channels).permute(0, 3, 1, 2)
+        if height > self.max_spatial_size or width > self.max_spatial_size:
+            raise ValueError(
+                "input spatial size exceeds relative position bias table: "
+                f"got {height}x{width}, max {self.max_spatial_size}"
+            )
+
+        tokens = height * width
+        sequence = x.permute(0, 2, 3, 1).reshape(batch, tokens, channels)
+        qkv = self.qkv(sequence).view(batch, tokens, 3, self.heads, self.head_dim)
+        q, k, v = qkv.unbind(dim=2)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+        logits = torch.matmul(q.float(), k.float().transpose(-2, -1)) / math.sqrt(self.head_dim)
+        logits = logits + self._relative_position_bias(height, width).float()
+        attention = torch.softmax(logits, dim=-1).to(dtype=x.dtype)
+        attended = torch.matmul(attention, v)
+        attended = attended.transpose(1, 2).reshape(batch, tokens, channels)
+        return self.output(attended).reshape(batch, height, width, channels).permute(0, 3, 1, 2)
+
+    def _relative_position_bias(self, height: int, width: int) -> torch.Tensor:
+        rows = torch.arange(height, device=self.relative_position_bias.device)
+        cols = torch.arange(width, device=self.relative_position_bias.device)
+        coordinates = torch.stack(torch.meshgrid(rows, cols, indexing="ij")).flatten(1)
+        relative = coordinates[:, :, None] - coordinates[:, None, :]
+        relative_rows = relative[0] + self.max_spatial_size - 1
+        relative_cols = relative[1] + self.max_spatial_size - 1
+        bias = self.relative_position_bias[:, relative_rows, relative_cols]
+        return bias.unsqueeze(0)
 
 
 class SphericalSelfAttentionLERP2d(nn.Module):

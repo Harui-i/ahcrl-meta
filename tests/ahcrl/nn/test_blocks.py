@@ -14,7 +14,7 @@ from ahcrl.nn import (
     ShiftL2Norm,
     SimbaV2Block,
     SpatialSelfAttention2d,
-    SpatialSelfAttentionBlock,
+    SpatialTransformerBlock,
     l2_normalize,
     make_group_norm,
     project_hyperspherical_weights_,
@@ -123,8 +123,8 @@ def test_spatial_self_attention_2d_preserves_shape() -> None:
     assert y.shape == x.shape
 
 
-def test_spatial_self_attention_block_preserves_shape() -> None:
-    block = SpatialSelfAttentionBlock(channels=8, heads=2)
+def test_spatial_transformer_block_preserves_shape() -> None:
+    block = SpatialTransformerBlock(channels=8, heads=2)
     x = torch.randn(4, 8, 3, 5)
 
     y = block(x)
@@ -132,8 +132,8 @@ def test_spatial_self_attention_block_preserves_shape() -> None:
     assert y.shape == x.shape
 
 
-def test_spatial_self_attention_block_mixes_spatial_cells() -> None:
-    block = SpatialSelfAttentionBlock(channels=4, heads=1, layer_scale_init=1.0)
+def test_spatial_transformer_block_mixes_spatial_cells() -> None:
+    block = SpatialTransformerBlock(channels=4, heads=1, layer_scale_init=1.0)
     x = torch.randn(1, 4, 2, 2)
 
     y = block(x)
@@ -147,12 +147,31 @@ def test_spatial_self_attention_block_mixes_spatial_cells() -> None:
 @pytest.mark.parametrize("heads", [0, 3])
 def test_spatial_self_attention_block_rejects_invalid_heads(heads: int) -> None:
     with pytest.raises(ValueError, match="heads|divisible"):
-        SpatialSelfAttentionBlock(channels=8, heads=heads)
+        SpatialTransformerBlock(channels=8, heads=heads)
 
 
-def test_spatial_self_attention_block_rejects_negative_layer_scale() -> None:
+def test_spatial_transformer_block_rejects_negative_layer_scale() -> None:
     with pytest.raises(ValueError, match="layer_scale_init"):
-        SpatialSelfAttentionBlock(channels=8, layer_scale_init=-1e-6)
+        SpatialTransformerBlock(channels=8, layer_scale_init=-1e-6)
+
+
+def test_spatial_self_attention_2d_has_directional_relative_position_bias() -> None:
+    attention = SpatialSelfAttention2d(channels=8, heads=2, max_spatial_size=4)
+    with torch.no_grad():
+        attention.relative_position_bias[0, 3, 4] = 1.0
+        attention.relative_position_bias[0, 3, 2] = 2.0
+
+    bias = attention._relative_position_bias(1, 3)
+
+    assert bias.shape == (1, 2, 3, 3)
+    assert bias[0, 0, 1, 0] == 1.0
+    assert bias[0, 0, 0, 1] == 2.0
+
+
+def test_spatial_transformer_block_contains_per_cell_mlp() -> None:
+    block = SpatialTransformerBlock(channels=8, heads=2)
+
+    assert isinstance(block.mlp, PerCellMLPBlock)
 
 
 def test_hyperspherical_feature_norm_preserves_shape_and_returns_finite_values() -> None:

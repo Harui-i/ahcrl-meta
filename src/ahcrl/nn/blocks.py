@@ -22,7 +22,7 @@ __all__ = [
     "PerCellMLPBlock",
     "ResidualBlock",
     "SimbaV2Block",
-    "SpatialSelfAttentionBlock",
+    "SpatialTransformerBlock",
     "SphericalAttentionSimbaBlock",
 ]
 
@@ -141,14 +141,16 @@ class PerCellMLPBlock(nn.Module):
         return residual + y
 
 
-class SpatialSelfAttentionBlock(nn.Module):
-    """Shape-preserving global self-attention block for spatial feature mixing."""
+class SpatialTransformerBlock(nn.Module):
+    """Pre-norm spatial Transformer block with relative position bias and FFN."""
 
     def __init__(
         self,
         channels: int,
         *,
         heads: int = 4,
+        expansion: int = 4,
+        max_spatial_size: int = 16,
         layer_scale_init: float = 1e-6,
     ) -> None:
         super().__init__()
@@ -158,12 +160,19 @@ class SpatialSelfAttentionBlock(nn.Module):
             raise ValueError(f"heads must be positive, got {heads}")
         if channels % heads != 0:
             raise ValueError(f"channels must be divisible by heads, got {channels} and {heads}")
+        if expansion <= 0:
+            raise ValueError(f"expansion must be positive, got {expansion}")
+        if max_spatial_size <= 0:
+            raise ValueError(f"max_spatial_size must be positive, got {max_spatial_size}")
         if layer_scale_init < 0.0:
             raise ValueError(f"layer_scale_init must be non-negative, got {layer_scale_init}")
 
-        self.norm = nn.LayerNorm(channels)
-        self.attention = SpatialSelfAttention2d(channels, heads=heads)
-        self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
+        self.attention_norm = nn.LayerNorm(channels)
+        self.attention = SpatialSelfAttention2d(
+            channels, heads=heads, max_spatial_size=max_spatial_size
+        )
+        self.attention_layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
+        self.mlp = PerCellMLPBlock(channels, expansion=expansion, layer_scale_init=layer_scale_init)
 
     def forward(
         self, x: Float[torch.Tensor, "batch channels H W"]
@@ -171,9 +180,10 @@ class SpatialSelfAttentionBlock(nn.Module):
         if x.ndim != 4:
             raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
         residual = x
-        y = self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        y = self.attention_norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
         y = self.attention(y)
-        return residual + self.layer_scale.view(1, -1, 1, 1) * y
+        y = residual + self.attention_layer_scale.view(1, -1, 1, 1) * y
+        return self.mlp(y)
 
 
 class SimbaV2Block(nn.Module):
