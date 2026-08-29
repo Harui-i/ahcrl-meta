@@ -76,8 +76,17 @@ def test_starter_uses_shared_rust_env_protocol(tmp_path: Path) -> None:
     assert 'tools = { path = "../tools" }' in manifest
     assert "impl EnvFactory for Ahc068Factory" in library
     assert "impl ContestEnv for Ahc068Env" in library
+    assert "pub fn from_seed(seed: u64, _config: &Ahc068EnvConfig)" in library
+    assert "TODO: 公式 simulator を1ターン進める" in library
     assert "server_main::<Ahc068Factory>()" in server
     assert "src/ahcrl/contests/ahc068/rust_vec_env.py" not in files
+    assert files["contests/ahc-068/rust-toolchain.toml"].startswith(
+        '[toolchain]\nchannel = "stable"'
+    )
+    assert (
+        "公式toolsをどこまで編集してよいか" in files["contests/ahc-068/rl-tools/IMPLEMENTATION.md"]
+    )
+    assert "tools/src/rl_bridge.rs" in files["contests/ahc-068/README.md"]
 
     library_path = tmp_path / "lib.rs"
     library_path.write_text(library, encoding="utf-8")

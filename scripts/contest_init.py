@@ -80,7 +80,7 @@ def download_tools(url: str, destination: Path) -> None:
 
 
 def starter_files(slug: str, directory: str) -> dict[str, str]:
-    return {
+    files = {
         f"contests/{directory}/AGENTS.md": f"""# {slug.upper()}\n\n問題文とコンテスト固有の制約を確認してから実装する。\n""",
         f"contests/{directory}/README.md": f"""# {slug.upper()}\n\n新しいAHCの作業ディレクトリ。\n\n- コンテスト: https://atcoder.jp/contests/{slug}\n- 問題文: [problem_ja.md](problem_ja.md) / [problem_en.md](problem_en.md)\n- 公式tools: `tools/`（取得後は原則編集しない）\n- Rust RL環境: `rl-tools/`（`ahcrl-env-core` protocolを実装する）\n- PPO設定: `configs/`（`ahcrl.training` の名前空間付きTOML）\n- Pahcer設定: `eval/pahcer_config.toml`\n- PPO成果物: `artifacts/ppo/`（git管理外）\n\n## 最初にすること\n\n1. `problem_ja.md` と `problem_en.md` に問題文を保存する。\n2. `tools/` にAtCoder公式toolsを配置し、`cargo build --release --manifest-path tools/Cargo.toml`する。\n3. `rl-tools/src/lib.rs` の `EnvFactory` / `ContestEnv` を、公式toolsを使う simulator・観測・action space・metricsで実装する。\n4. `src/ahcrl/contests/{slug}/` のencoder・model・`train_ppo.py`を実装し、`ahcrl.envs.RustVecEnv` と `ahcrl.training` を利用する。\n5. Rust環境の実装後に `make contest-check CONTEST={directory}` を通す。\n6. `eval/main.cpp`を公式visで検証し、`make check`を通してからPPOを開始する。\n""",
         f"contests/{directory}/problem_ja.md": "# 問題文（日本語）\n\nTODO: AtCoderの問題文を保存する。\n",
@@ -123,6 +123,157 @@ def starter_files(slug: str, directory: str) -> dict[str, str]:
             directory=directory,
         ),
     }
+    files[f"contests/{directory}/rust-toolchain.toml"] = """[toolchain]
+channel = "stable"
+profile = "minimal"
+"""
+    files[f"contests/{directory}/rl-tools/IMPLEMENTATION.md"] = """# RL環境の実装順
+
+`rl-tools/src/lib.rs` は「公式toolsをRL用プロトコルへ接続する層」である。公式の状態遷移・入力生成・採点をコピーして実装しない。
+
+1. 公式toolsで `Input`、入力生成関数、状態型、状態遷移関数（`apply` / `step` など）、採点関数を探す。
+2. `AhcXXXEnv::from_seed` で公式 generator から `Input` を作り、公式状態型を初期化する。固定入力で検証したい場合は `new(input)` も追加する。
+3. 行動を `u32` の連番に割り当て、`validate_action` で範囲と合法性を確認する。action mask が必要なら観測に `mask: U8[action_count]` を追加する。
+4. `step` は公式の状態遷移を一度だけ呼び、直前・直後の公式 score/cost から reward を作る。終了条件も公式のターン数・完了判定に合わせる。
+5. `encode_*` で状態を固定shapeの `f32` tensor にし、`write_observation` から `write_f32_slice` で書き込む。
+6. 少数seedの軌跡について、RL環境の最終scoreと公式 scorer のscoreが一致するテストを書く。
+
+## 公式toolsをどこまで編集してよいか
+
+原則は無編集。状態の必要な値が private で読めない場合だけ、次の最小差分を入れる。
+
+```rust
+// tools/src/lib.rs
+pub mod rl_bridge;
+```
+
+```rust
+// tools/src/rl_bridge.rs
+// 公式Stateの private field を借用で公開する StateView と state_view を置く。
+// 状態変更用の関数は追加しない。
+```
+
+AHC063 はこの方式の実例で、`tools/src/rl_bridge.rs` が唯一の追加ファイルである。
+"""
+    files[f"contests/{directory}/README.md"] = (
+        files[f"contests/{directory}/README.md"].replace(
+            "3. `rl-tools/src/lib.rs` の `EnvFactory` / `ContestEnv` を、公式toolsを使う simulator・観測・action space・metricsで実装する。",
+            "3. [rl-tools/IMPLEMENTATION.md](rl-tools/IMPLEMENTATION.md) の順に、公式simulator・行動空間・観測・報酬を接続する。",
+        )
+        + """\n## 公式toolsとの境界
+
+`tools/` は公式スナップショットであり、状態遷移・採点・入力生成の再実装先ではない。RL環境は `rl-tools/` に置く。
+公式状態の非公開フィールドを読む必要があるときだけ、`tools/src/rl_bridge.rs` と `tools/src/lib.rs` の `pub mod rl_bridge;` を追加してよい。bridge は読み取り専用のviewだけを公開し、状態遷移は必ず公式の `apply` / `step` を呼ぶ。
+
+AHC063 の実例では、公式toolsからのソース差分はこの bridge と `pub mod rl_bridge;` だけである。次で確認できる。
+
+```bash
+git diff --no-index contests/ahc-063/eval/ahc063/tools/src/lib.rs contests/ahc-063/tools/src/lib.rs
+git diff --no-index /dev/null contests/ahc-063/tools/src/rl_bridge.rs
+```
+"""
+    )
+    files[f"contests/{directory}/problem_en.md"] = (
+        "# Problem Statement (English)\n\nTODO: AtCoder の英語問題文を保存する。\n"
+    )
+    files[f"src/ahcrl/contests/{slug}/encoder.py"] = (
+        '"""コンテスト固有の観測エンコーダ。"""\n\n'
+        "# TODO: Rust・Python・提出用 C++ で共有する観測レイアウトを定義する。\n"
+    )
+    files[f"src/ahcrl/contests/{slug}/model.py"] = (
+        '"""コンテスト固有の Actor-Critic モデル。"""\n\n'
+        "# TODO: ahcrl.nn の block を再利用して policy/value head を実装する。\n"
+    )
+    files[f"src/ahcrl/contests/{slug}/train_ppo.py"] = (
+        '"""コンテスト固有の PPO エントリポイント。"""\n\n'
+        "# TODO: Rust環境とモデルの完成後、コンテスト固有の PPO loop を実装する。\n"
+    )
+    files[f"contests/{directory}/scripts/README.md"] = """# Scripts
+
+観測エンコーダと C++ の状態遷移が確定してから `export_torchscript_submit.py` を追加する。
+AHC061/AHC063 の exporter を参考にする。
+"""
+    files[f"contests/{directory}/rl-tools/src/lib.rs"] = render(
+        """use ahcrl_env_core::{ContestEnv, EnvFactory, EnvSpec};
+use serde::Deserialize;
+use serde_json::Value;
+
+/// Python に提供するコンテスト固有環境の factory。
+pub struct __FACTORY__ {
+    config: __ENV__Config,
+}
+
+/// 1問の環境。公式 simulator の状態をここに保持する。
+pub struct __ENV__ {
+    _seed: u64,
+}
+
+/// Python 側から渡すコンテスト固有設定。
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct __ENV__Config {}
+
+impl EnvFactory for __FACTORY__ {
+    type Env = __ENV__;
+
+    fn from_config(config: Value) -> Result<Self, String> {
+        // TODO: 設定項目を追加したら、ここで deserialize と検証を行う。
+        let config = serde_json::from_value(config).map_err(|error| error.to_string())?;
+        Ok(Self { config })
+    }
+
+    fn spec(&self) -> EnvSpec {
+        // TODO: Python と共有する observation / metric の TensorSpec を返す。
+        panic!("TODO: コンテスト環境の仕様を定義する")
+    }
+
+    fn create(&self, seed: u64) -> Result<Self::Env, String> {
+        __ENV__::from_seed(seed, &self.config)
+    }
+}
+
+impl __ENV__ {
+    /// seed から公式入力を生成して1問の環境を作る。
+    pub fn from_seed(seed: u64, _config: &__ENV__Config) -> Result<Self, String> {
+        // TODO: `tools::gen(seed)` と公式 simulator の `new` を呼び、状態を初期化する。
+        Ok(Self { _seed: seed })
+    }
+}
+
+impl ContestEnv for __ENV__ {
+    fn validate_action(&self, _action: u32) -> Result<(), String> {
+        Err("TODO: コンテストの action を検証する".to_owned())
+    }
+
+    fn step(&mut self, _action: u32) -> Result<(), String> {
+        Err("TODO: 公式 simulator を1ターン進める".to_owned())
+    }
+
+    fn reward(&self) -> f32 {
+        0.0
+    }
+
+    fn done(&self) -> bool {
+        false
+    }
+
+    fn score(&self) -> i64 {
+        0
+    }
+
+    fn write_observation(&self, _name: &str, _destination: &mut [u8]) -> Result<(), String> {
+        Err("TODO: 観測 tensor を書き込む".to_owned())
+    }
+
+    fn write_metric(&self, _name: &str, _destination: &mut [u8]) -> Result<(), String> {
+        Err("TODO: metric tensor を書き込む".to_owned())
+    }
+}
+""",
+        slug=slug,
+        directory=directory,
+    )
+    return files
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

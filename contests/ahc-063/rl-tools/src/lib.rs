@@ -82,7 +82,7 @@ pub struct Ahc063Factory {
 }
 
 impl EnvFactory for Ahc063Factory {
-    type Env = EnvSlot;
+    type Env = Ahc063Env;
 
     fn from_config(config: Value) -> Result<Self, String> {
         let config: Ahc063Config =
@@ -132,11 +132,11 @@ impl EnvFactory for Ahc063Factory {
             self.config.fixed_m,
             self.config.fixed_c,
         );
-        Ok(EnvSlot::new(input, self.config.max_steps))
+        Ok(Ahc063Env::new(input, self.config.max_steps))
     }
 }
 
-pub struct EnvSlot {
+pub struct Ahc063Env {
     pub input: Input,
     pub state: State,
     pub actions: Vec<usize>,
@@ -147,7 +147,7 @@ pub struct EnvSlot {
     done: bool,
 }
 
-impl EnvSlot {
+impl Ahc063Env {
     pub fn from_seed(seed: u64, config: &Ahc063Config) -> Result<Self, String> {
         config.validate()?;
         let factory = Ahc063Factory {
@@ -274,7 +274,7 @@ impl EnvSlot {
     }
 }
 
-impl ContestEnv for EnvSlot {
+impl ContestEnv for Ahc063Env {
     fn validate_action(&self, action: u32) -> Result<(), String> {
         if self.done {
             return Err("cannot step a finished environment".to_owned());
@@ -368,10 +368,10 @@ mod tests {
 
     #[test]
     fn legal_mask_agrees_with_official_apply() {
-        let slot = EnvSlot::from_seed(0, &default_config()).unwrap();
+        let slot = Ahc063Env::from_seed(0, &default_config()).unwrap();
         let mask = slot.legal_mask();
         for (action, &legal) in mask.iter().enumerate() {
-            let mut candidate = EnvSlot::from_seed(0, &default_config()).unwrap();
+            let mut candidate = Ahc063Env::from_seed(0, &default_config()).unwrap();
             assert_eq!(candidate.state.apply(action).is_ok(), legal != 0);
             assert_eq!(candidate.validate_action(action as u32).is_ok(), legal != 0);
         }
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn trajectories_match_official_score_and_reward_delta() {
         for seed in [0_u64, 1, 3, 99] {
-            let mut slot = EnvSlot::from_seed(seed, &default_config()).unwrap();
+            let mut slot = Ahc063Env::from_seed(seed, &default_config()).unwrap();
             let initial_score = slot.score();
             let mut reward_sum = 0.0_f32;
             for turn in 0..512 {
@@ -434,7 +434,7 @@ mod tests {
             max_steps: 1,
             ..default_config()
         };
-        let mut slot = EnvSlot::from_seed(0, &config).unwrap();
+        let mut slot = Ahc063Env::from_seed(0, &config).unwrap();
         let action = slot
             .legal_mask()
             .iter()
