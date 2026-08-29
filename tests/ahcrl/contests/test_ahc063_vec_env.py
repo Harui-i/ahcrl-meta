@@ -92,6 +92,15 @@ def test_step_mask_preserves_inactive_environment_without_validating_its_action(
         assert result.done.tolist() == [False]
 
 
+def test_visualizer_data_matches_the_official_input_and_output_format() -> None:
+    with create_env(seed_start=3) as env:
+        action = np.argmax(env.obs["mask"], axis=1).astype(np.uint32)
+        env.step(action)
+        input_text, output_text = env.visualizer_data()[0]
+        assert len(input_text.splitlines()[0].split()) == 3
+        assert output_text in {"U\n", "D\n", "L\n", "R\n"}
+
+
 def test_client_validation_and_process_failure() -> None:
     env = create_env()
     with pytest.raises(TypeError, match="integer dtype"):

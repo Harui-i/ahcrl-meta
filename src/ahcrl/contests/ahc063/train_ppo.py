@@ -337,6 +337,7 @@ def evaluate_policy(
             seed_num=args.eval_seed_num,
             seed_stride=args.eval_seed_stride,
             num_envs=args.num_envs,
+            collect_visualizer_data=True,
         )
     finally:
         model.train(was_training)

@@ -15,6 +15,7 @@ from .evaluation import (
     append_evaluation_record,
     build_evaluation_metrics,
     evaluate_fixed_seeds,
+    write_visualizer_artifacts,
 )
 from .metrics import build_completed_episode_score_metrics, build_standard_ppo_metrics
 from .run import get_wandb_run_id, prepare_run_dir, update_run_state, write_config
@@ -44,4 +45,5 @@ __all__ = [
     "save_training_checkpoint",
     "update_run_state",
     "write_config",
+    "write_visualizer_artifacts",
 ]

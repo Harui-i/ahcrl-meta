@@ -29,6 +29,8 @@ class EvaluationEnv(Protocol):
 
     def step_mask(self, active: np.ndarray, actions: np.ndarray) -> EvaluationStepResult: ...
 
+    def visualizer_data(self) -> list[tuple[str, str]]: ...
+
 
 EvaluationEnvFactory = Callable[[int, int, int], EvaluationEnv]
 EvaluationActionSelector = Callable[[dict[str, np.ndarray], np.ndarray, np.ndarray], np.ndarray]
@@ -40,6 +42,7 @@ class FixedSeedEvaluation:
 
     seed_scores: tuple[tuple[int, int], ...]
     elapsed_seconds: float
+    seed_visualizer_data: tuple[tuple[int, str, str], ...] = ()
 
     def summary(self) -> dict[str, float | int]:
         scores = np.asarray([score for _, score in self.seed_scores], dtype=np.float64)
@@ -62,6 +65,7 @@ def evaluate_fixed_seeds(
     seed_num: int,
     seed_stride: int,
     num_envs: int,
+    collect_visualizer_data: bool = False,
 ) -> FixedSeedEvaluation:
     """固定 seed 列の各エピソードを最後まで rollout する。
 
@@ -74,6 +78,7 @@ def evaluate_fixed_seeds(
 
     started = time.perf_counter()
     scores: list[tuple[int, int]] = []
+    visualizer_data: list[tuple[int, str, str]] = []
     for offset in range(0, seed_num, num_envs):
         batch_size = min(num_envs, seed_num - offset)
         batch_seed_start = seed_start + offset * seed_stride
@@ -96,9 +101,29 @@ def evaluate_fixed_seeds(
                     for index in np.flatnonzero(completed)
                 )
                 active &= ~result.done
+            if collect_visualizer_data:
+                batch_visualizer_data = env.visualizer_data()
+                if len(batch_visualizer_data) != batch_size:
+                    raise RuntimeError(
+                        "visualizer data count does not match the evaluation batch size"
+                    )
+                visualizer_data.extend(
+                    (int(seed), input_text, output_text)
+                    for seed, (input_text, output_text) in zip(
+                        seeds, batch_visualizer_data, strict=True
+                    )
+                )
     if len(scores) != seed_num:
         raise RuntimeError(f"evaluation completed {len(scores)} seeds, expected {seed_num}")
-    return FixedSeedEvaluation(tuple(sorted(scores)), time.perf_counter() - started)
+    if collect_visualizer_data and len(visualizer_data) != seed_num:
+        raise RuntimeError(
+            f"evaluation collected {len(visualizer_data)} visualizer outputs, expected {seed_num}"
+        )
+    return FixedSeedEvaluation(
+        tuple(sorted(scores)),
+        time.perf_counter() - started,
+        tuple(sorted(visualizer_data)),
+    )
 
 
 def build_evaluation_metrics(
@@ -131,6 +156,7 @@ def append_evaluation_record(
         checkpoint = checkpoint_path.relative_to(run_dir)
     except ValueError as error:
         raise ValueError("checkpoint_path must be inside run_dir") from error
+    visualizer_dir = write_visualizer_artifacts(run_dir, global_step=global_step, result=result)
     record = {
         "global_step": global_step,
         "update": update,
@@ -140,10 +166,30 @@ def append_evaluation_record(
         "summary": result.summary(),
         "seed_scores": [{"seed": seed, "score": score} for seed, score in result.seed_scores],
     }
+    if visualizer_dir is not None:
+        record["visualizer_dir"] = str(visualizer_dir.relative_to(run_dir))
     path = run_dir / EVALUATIONS_FILE_NAME
     with path.open("a", encoding="utf-8") as file:
         file.write(json.dumps(record, sort_keys=True) + "\n")
     return path
+
+
+def write_visualizer_artifacts(
+    run_dir: Path, *, global_step: int, result: FixedSeedEvaluation
+) -> Path | None:
+    """可視化ツールへ渡せる ``in/`` と ``out/`` を評価 run に保存する。"""
+    if not result.seed_visualizer_data:
+        return None
+    directory = run_dir / "evaluations" / f"step_{global_step}"
+    input_dir = directory / "in"
+    output_dir = directory / "out"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for seed, input_text, output_text in result.seed_visualizer_data:
+        filename = f"{seed:04d}.txt"
+        (input_dir / filename).write_text(input_text)
+        (output_dir / filename).write_text(output_text)
+    return directory
 
 
 def _validate_evaluation_seeds(seed_start: int, seed_num: int, seed_stride: int) -> None:

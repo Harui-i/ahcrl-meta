@@ -166,6 +166,37 @@ class RustVecEnv:
         self.obs = result.obs
         return result
 
+    def visualizer_data(self) -> list[tuple[str, str]]:
+        """現在の各 environment の可視化用 input / output テキストを返す。"""
+        self._send_line("VISUALIZER_DATA")
+        header = self._readline()
+        self._raise_if_error(header)
+        parts = header.split()
+        if len(parts) != 2 or parts[0] != "OK_VISUALIZER_DATA":
+            raise RuntimeError(f"unexpected VISUALIZER_DATA response: {header!r}")
+        try:
+            length = int(parts[1])
+        except ValueError as error:
+            raise RuntimeError(f"invalid visualizer data length in {header!r}") from error
+        try:
+            raw = json.loads(self._read_exact(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("invalid visualizer data payload") from error
+        if self._read_exact(1) != b"\n":
+            raise RuntimeError("visualizer data was not newline terminated")
+        if not isinstance(raw, list) or len(raw) != self.num_envs:
+            raise RuntimeError("visualizer data has an invalid environment count")
+        data: list[tuple[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise RuntimeError("visualizer data item must be an object")
+            input_text = item.get("input")
+            output_text = item.get("output")
+            if not isinstance(input_text, str) or not isinstance(output_text, str):
+                raise RuntimeError("visualizer data item must contain string input and output")
+            data.append((input_text, output_text))
+        return data
+
     def close(self) -> None:
         if self._closed:
             return

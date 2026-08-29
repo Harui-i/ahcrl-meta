@@ -1,5 +1,6 @@
 use ahcrl_env_core::{
-    write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, TensorSpec, PROTOCOL_VERSION,
+    write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, TensorSpec, VisualizerData,
+    PROTOCOL_VERSION,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -335,6 +336,13 @@ impl ContestEnv for EnvSlot {
             "prefix_match_ratio" => write_f32_slice(&[self.prefix_match_ratio()], destination),
             _ => Err(format!("unknown metric {name}")),
         }
+    }
+
+    fn visualizer_data(&self) -> Result<VisualizerData, String> {
+        Ok(VisualizerData {
+            input: self.input.to_string(),
+            output: self.output_text(),
+        })
     }
 }
 

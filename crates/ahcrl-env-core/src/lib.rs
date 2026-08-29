@@ -114,6 +114,16 @@ pub trait ContestEnv {
     fn score(&self) -> i64;
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String>;
     fn write_metric(&self, name: &str, destination: &mut [u8]) -> Result<(), String>;
+
+    fn visualizer_data(&self) -> Result<VisualizerData, String> {
+        Err("visualizer data is unsupported for this environment".to_owned())
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct VisualizerData {
+    pub input: String,
+    pub output: String,
 }
 
 pub trait EnvFactory: Sized {
@@ -261,6 +271,18 @@ impl<F: EnvFactory> VecEnvServer<F> {
             }
         }
         Ok(())
+    }
+
+    pub fn visualizer_data(&self) -> Result<Vec<VisualizerData>, String> {
+        self.require_initialized()?;
+        self.envs
+            .iter()
+            .enumerate()
+            .map(|(env_id, env)| {
+                env.visualizer_data()
+                    .map_err(|error| format!("env {env_id}: {error}"))
+            })
+            .collect()
     }
 
     pub fn encode_batch(&self) -> Result<Vec<u8>, String> {
@@ -515,6 +537,32 @@ where
                     continue;
                 }
                 write_batch(server, &mut writer)?;
+            }
+            "VISUALIZER_DATA" => {
+                if parts.next().is_some() {
+                    send_error(&mut writer, "VISUALIZER_DATA takes no arguments")?;
+                    continue;
+                }
+                let Some(server) = server.as_ref() else {
+                    send_error(&mut writer, "INIT must be sent first")?;
+                    continue;
+                };
+                let data = match server.visualizer_data() {
+                    Ok(data) => data,
+                    Err(error) => {
+                        send_error(&mut writer, &error)?;
+                        continue;
+                    }
+                };
+                let payload = serde_json::to_vec(&data)
+                    .map_err(|error| format!("failed to serialize visualizer data: {error}"))?;
+                writeln!(writer, "OK_VISUALIZER_DATA {}", payload.len())
+                    .map_err(|error| format!("failed to write visualizer data header: {error}"))?;
+                writer
+                    .write_all(&payload)
+                    .and_then(|()| writer.write_all(b"\n"))
+                    .and_then(|()| writer.flush())
+                    .map_err(|error| format!("failed to write visualizer data: {error}"))?;
             }
             "QUIT" => {
                 if parts.next().is_some() {

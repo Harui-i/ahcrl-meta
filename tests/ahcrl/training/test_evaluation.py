@@ -39,6 +39,9 @@ class FakeEnv:
         self.done |= self.remaining == 0
         return FakeStepResult(done=self.done.copy(), score=(self.seeds * 10).astype(np.int64))
 
+    def visualizer_data(self) -> list[tuple[str, str]]:
+        return [(f"input {seed}\n", f"output {seed}\n") for seed in self.seeds]
+
 
 def test_evaluate_fixed_seeds_handles_different_episode_lengths_and_writes_jsonl(
     tmp_path: Path,
@@ -56,9 +59,16 @@ def test_evaluate_fixed_seeds_handles_different_episode_lengths_and_writes_jsonl
         seed_num=4,
         seed_stride=2,
         num_envs=3,
+        collect_visualizer_data=True,
     )
 
     assert result.seed_scores == ((3, 30), (5, 50), (7, 70), (9, 90))
+    assert result.seed_visualizer_data == (
+        (3, "input 3\n", "output 3\n"),
+        (5, "input 5\n", "output 5\n"),
+        (7, "input 7\n", "output 7\n"),
+        (9, "input 9\n", "output 9\n"),
+    )
     assert result.summary() == {
         "count": 4,
         "mean": 60.0,
@@ -81,9 +91,12 @@ def test_evaluate_fixed_seeds_handles_different_episode_lengths_and_writes_jsonl
     )
     record = json.loads(path.read_text())
     assert record["checkpoint"] == "checkpoints/step_12.pt"
+    assert record["visualizer_dir"] == "evaluations/step_12"
     assert record["seed_scores"] == [
         {"seed": 3, "score": 30},
         {"seed": 5, "score": 50},
         {"seed": 7, "score": 70},
         {"seed": 9, "score": 90},
     ]
+    assert (tmp_path / "evaluations" / "step_12" / "in" / "0003.txt").read_text() == "input 3\n"
+    assert (tmp_path / "evaluations" / "step_12" / "out" / "0009.txt").read_text() == "output 9\n"

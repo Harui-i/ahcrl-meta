@@ -138,6 +138,8 @@ def test_evaluate_policy_rolls_out_fixed_seeds_reproducibly_without_updating_obs
 
     assert metrics["eval/seed_count"] == 3
     assert first.seed_scores == second.seed_scores
+    assert len(first.seed_visualizer_data) == 3
+    assert first.seed_visualizer_data[0][2]
     assert torch.equal(normalizer.count, count_before)
     assert model.training
 
