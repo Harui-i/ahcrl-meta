@@ -139,8 +139,8 @@ using namespace std;
 namespace {
 constexpr int MAX_N = 16;
 constexpr int MAX_COLORS = 7;
-constexpr int NUM_PLANES = 43;
-constexpr int MAX_STEPS = 100000;
+constexpr int NUM_PLANES = 44;
+constexpr int MAX_STEPS_PER_CELL = @MAX_STEPS_PER_CELL@;
 const string kAlphabet =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
     "!#$%&()*+,./:;<=>?@[]^_`{|}~\"";
@@ -183,11 +183,25 @@ struct Snake {
     int c = 0;
     int steps = 0;
     int previous_action = -1;
+    int best_score = 0;
     vector<int> desired;
     int food[MAX_N][MAX_N]{};
     vector<pair<int, int>> position;
     vector<int> color;
 };
+
+int max_steps(const Snake& snake) {
+    return MAX_STEPS_PER_CELL * snake.n * snake.n;
+}
+
+int absolute_score(const Snake& snake) {
+    int errors = 0;
+    for (int index = 0; index < static_cast<int>(snake.color.size()); ++index)
+        errors += snake.color[index] != snake.desired[index];
+    return snake.steps + 10000 * (
+        errors + 2 * (snake.m - static_cast<int>(snake.color.size()))
+    );
+}
 
 torch::jit::script::Module load_model() {
     auto bytes = decode_base91(kModel);
@@ -262,7 +276,7 @@ void encode(const Snake& snake, vector<float>& planes) {
                 at(23 + color, row, col) = static_cast<float>(remaining) / max(snake.m, 1);
     }
     const auto [head_row, head_col] = snake.position[0];
-    const float scalars[8] = {
+    const float scalars[9] = {
         static_cast<float>(snake.n) / MAX_N,
         static_cast<float>(snake.c) / MAX_COLORS,
         static_cast<float>(length) / max(snake.m, 1),
@@ -270,16 +284,17 @@ void encode(const Snake& snake, vector<float>& planes) {
         static_cast<float>(head_row) / max(snake.n - 1, 1),
         static_cast<float>(head_col) / max(snake.n - 1, 1),
         static_cast<float>(food_count(snake)) / max(snake.m - 5, 1),
-        static_cast<float>(snake.steps) / MAX_STEPS,
+        static_cast<float>(snake.steps) / max(max_steps(snake), 1),
+        static_cast<float>(absolute_score(snake) - snake.best_score) / 10000.0f,
     };
-    for (int index = 0; index < 8; ++index)
+    for (int index = 0; index < 9; ++index)
         for (int row = 0; row < snake.n; ++row)
             for (int col = 0; col < snake.n; ++col)
                 at(31 + index, row, col) = scalars[index];
     if (snake.previous_action >= 0)
         for (int row = 0; row < snake.n; ++row)
             for (int col = 0; col < snake.n; ++col)
-                at(39 + snake.previous_action, row, col) = 1.0f;
+                at(40 + snake.previous_action, row, col) = 1.0f;
 }
 
 void step(Snake& snake, int action) {
@@ -331,11 +346,12 @@ int main() {
     snake.position.resize(5);
     snake.color.assign(5, 1);
     for (int index = 0; index < 5; ++index) snake.position[index] = {4 - index, 0};
+    snake.best_score = absolute_score(snake);
 
     auto module = load_model();
     torch::NoGradGuard no_grad;
     vector<float> planes(NUM_PLANES * MAX_N * MAX_N);
-    while (snake.steps < MAX_STEPS &&
+    while (snake.steps < max_steps(snake) &&
            (food_count(snake) > 0 || !target_sequence_matches(snake))) {
         encode(snake, planes);
         auto input = torch::from_blob(
@@ -348,6 +364,7 @@ int main() {
         static constexpr char directions[4] = {'U', 'D', 'L', 'R'};
         cout << directions[action] << '\n';
         step(snake, action);
+        snake.best_score = min(snake.best_score, absolute_score(snake));
     }
     return 0;
 }
@@ -419,6 +436,7 @@ def main() -> None:
     model_bytes = export_torchscript(checkpoint, config, args.softmax)
     action_selection = SOFTMAX_ACTION_SELECTION if args.softmax else ARGMAX_ACTION_SELECTION
     source = CPP_TEMPLATE.replace("@MODEL@", c_string_chunks(base91_encode(model_bytes)))
+    source = source.replace("@MAX_STEPS_PER_CELL@", str(int(config["max_steps_per_cell"])))
     output.write_text(source.replace("@ACTION_SELECTION@", action_selection))
     print(f"run_dir={run_dir}")
     print(f"checkpoint={checkpoint}")

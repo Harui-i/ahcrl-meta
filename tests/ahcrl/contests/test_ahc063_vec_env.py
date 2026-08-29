@@ -23,7 +23,7 @@ def create_env(
             "fixed_n": None,
             "fixed_m": None,
             "fixed_c": None,
-            "max_steps": 100_000,
+            "max_steps_per_cell": 4,
         },
         seed_start=seed_start,
         seed_stride=seed_stride,
@@ -34,7 +34,7 @@ def create_env(
 def test_schema_and_observations_match_numpy_golden() -> None:
     golden = np.load(GOLDEN)
     with create_env() as env:
-        assert env.obs["planes"].shape == (1, 43, 16, 16)
+        assert env.obs["planes"].shape == (1, 44, 16, 16)
         assert env.obs["planes"].dtype == np.float32
         assert env.obs["mask"].shape == (1, 4)
         assert env.obs["mask"].dtype == np.bool_
@@ -82,6 +82,16 @@ def test_invalid_batch_is_rejected_without_mutation() -> None:
         result = env.step(np.asarray([1], dtype=np.uint32))
         assert result.score[0] == golden["score"][1]
         np.testing.assert_array_equal(result.obs["planes"][0], golden["planes"][1])
+
+
+def test_removed_fixed_max_steps_config_is_rejected() -> None:
+    with pytest.raises(RuntimeError, match="unknown field `max_steps`"):
+        RustVecEnv(
+            cargo_server_command(MANIFEST, release=False),
+            1,
+            config={"max_steps": 256},
+            cwd=ROOT,
+        )
 
 
 def test_step_mask_preserves_inactive_environment_without_validating_its_action() -> None:

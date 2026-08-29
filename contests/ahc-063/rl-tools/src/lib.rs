@@ -10,9 +10,10 @@ use tools::{gen, Input, State, DIR};
 pub const MAX_BOARD_SIZE: usize = 16;
 pub const MAX_COLORS: usize = 7;
 pub const ACTION_COUNT: usize = 4;
-pub const NUM_PLANES: usize = 43;
+pub const NUM_PLANES: usize = 44;
 pub const INITIAL_SNAKE_LENGTH: usize = 5;
 const MAX_OFFICIAL_STEPS: usize = 100_000;
+const DEFAULT_MAX_STEPS_PER_CELL: usize = 4;
 
 fn plane_index(plane: usize, row: usize, col: usize) -> usize {
     (plane * MAX_BOARD_SIZE + row) * MAX_BOARD_SIZE + col
@@ -32,7 +33,7 @@ pub struct Ahc063Config {
     pub fixed_n: Option<usize>,
     pub fixed_m: Option<usize>,
     pub fixed_c: Option<usize>,
-    pub max_steps: usize,
+    pub max_steps_per_cell: usize,
 }
 
 impl Default for Ahc063Config {
@@ -41,7 +42,7 @@ impl Default for Ahc063Config {
             fixed_n: None,
             fixed_m: None,
             fixed_c: None,
-            max_steps: MAX_OFFICIAL_STEPS,
+            max_steps_per_cell: DEFAULT_MAX_STEPS_PER_CELL,
         }
     }
 }
@@ -67,10 +68,10 @@ impl Ahc063Config {
                 ));
             }
         }
-        if !(1..=MAX_OFFICIAL_STEPS).contains(&self.max_steps) {
+        if self.max_steps_per_cell == 0 {
             return Err(format!(
-                "max_steps must be in 1..={MAX_OFFICIAL_STEPS}, got {}",
-                self.max_steps
+                "max_steps_per_cell must be positive, got {}",
+                self.max_steps_per_cell
             ));
         }
         Ok(())
@@ -132,7 +133,7 @@ impl EnvFactory for Ahc063Factory {
             self.config.fixed_m,
             self.config.fixed_c,
         );
-        Ok(Ahc063Env::new(input, self.config.max_steps))
+        Ahc063Env::new(input, self.config.max_steps_per_cell)
     }
 }
 
@@ -142,7 +143,7 @@ pub struct Ahc063Env {
     pub actions: Vec<usize>,
     max_steps: usize,
     previous_action: Option<usize>,
-    previous_score: i64,
+    best_score: i64,
     reward: f32,
     done: bool,
 }
@@ -156,19 +157,28 @@ impl Ahc063Env {
         factory.create(seed)
     }
 
-    pub fn new(input: Input, max_steps: usize) -> Self {
+    pub fn new(input: Input, max_steps_per_cell: usize) -> Result<Self, String> {
         let state = State::new(&input);
-        let previous_score = state.score();
-        Self {
+        let max_steps = max_steps_per_cell
+            .checked_mul(input.N)
+            .and_then(|value| value.checked_mul(input.N))
+            .ok_or_else(|| "max_steps_per_cell * N^2 overflowed usize".to_owned())?;
+        if max_steps > MAX_OFFICIAL_STEPS {
+            return Err(format!(
+                "max_steps_per_cell * N^2 must be at most {MAX_OFFICIAL_STEPS}, got {max_steps}"
+            ));
+        }
+        let best_score = state.score();
+        Ok(Self {
             input,
             state,
             actions: Vec::new(),
             max_steps,
             previous_action: None,
-            previous_score,
+            best_score,
             reward: 0.0,
             done: false,
-        }
+        })
     }
 
     pub fn legal_mask(&self) -> [u8; ACTION_COUNT] {
@@ -263,12 +273,13 @@ impl Ahc063Env {
             head_col as f32 / (n - 1).max(1) as f32,
             food_count as f32 / (m - INITIAL_SNAKE_LENGTH).max(1) as f32,
             view.turn as f32 / self.max_steps.max(1) as f32,
+            (self.state.score() - self.best_score) as f32 / 10_000.0,
         ];
         for (offset, value) in scalar_values.into_iter().enumerate() {
             fill_actual_board(&mut planes, n, 31 + offset, value);
         }
         if let Some(action) = self.previous_action {
-            fill_actual_board(&mut planes, n, 39 + action, 1.0);
+            fill_actual_board(&mut planes, n, 40 + action, 1.0);
         }
         planes
     }
@@ -292,9 +303,13 @@ impl ContestEnv for Ahc063Env {
         self.state.apply(action)?;
         self.actions.push(action);
         self.previous_action = Some(action);
-        let score = self.state.score();
-        self.reward = (self.previous_score - score) as f32 / 10_000.0;
-        self.previous_score = score;
+        let current_score = self.state.score();
+        if current_score < self.best_score {
+            self.reward = (self.best_score - current_score) as f32 / 10_000.0;
+            self.best_score = current_score;
+        } else {
+            self.reward = 0.0;
+        }
         let view = state_view(&self.state);
         self.done = is_complete(&self.input, &view) || view.turn >= self.max_steps;
         Ok(())
@@ -309,7 +324,7 @@ impl ContestEnv for Ahc063Env {
     }
 
     fn score(&self) -> i64 {
-        self.state.score()
+        self.best_score
     }
 
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
@@ -378,10 +393,13 @@ mod tests {
     }
 
     #[test]
-    fn trajectories_match_official_score_and_reward_delta() {
+    fn trajectories_track_official_prefix_best_score_and_reward_delta() {
+        let mut saw_positive_reward = false;
+        let mut saw_final_score_above_best = false;
         for seed in [0_u64, 1, 3, 99] {
             let mut slot = Ahc063Env::from_seed(seed, &default_config()).unwrap();
             let initial_score = slot.score();
+            let mut expected_best_score = initial_score;
             let mut reward_sum = 0.0_f32;
             for turn in 0..512 {
                 if slot.done() {
@@ -396,12 +414,56 @@ mod tests {
                 let action = candidates[(turn * 17 + seed as usize) % candidates.len()];
                 slot.step(action as u32).unwrap();
                 reward_sum += slot.reward();
+                saw_positive_reward |= slot.reward() > 0.0;
+                let (prefix_score, error, _) = compute_score_details(&slot.input, &slot.actions);
+                assert_eq!(error, "");
+                expected_best_score = expected_best_score.min(prefix_score);
+                assert_eq!(slot.score(), expected_best_score);
+                assert!(slot.reward() >= 0.0);
             }
-            let (official_score, error, _) = compute_score_details(&slot.input, &slot.actions);
-            assert_eq!(error, "");
-            assert_eq!(slot.score(), official_score);
-            let expected_reward = (initial_score - official_score) as f32 / 10_000.0;
+            let expected_reward = (initial_score - expected_best_score) as f32 / 10_000.0;
             assert!((reward_sum - expected_reward).abs() < 1e-3);
+            assert_eq!(slot.output_text().lines().count(), slot.actions.len());
+            let (final_score, error, _) = compute_score_details(&slot.input, &slot.actions);
+            assert_eq!(error, "");
+            saw_final_score_above_best |= final_score > slot.score();
+        }
+        assert!(saw_positive_reward);
+        assert!(saw_final_score_above_best);
+    }
+
+    #[test]
+    fn drawdown_plane_tracks_current_score_above_best() {
+        let mut slot = Ahc063Env::from_seed(0, &default_config()).unwrap();
+        let view = state_view(&slot.state);
+        let (row, col) = view.positions[0];
+        let action = [(-1_i32, 0_i32), (1, 0), (0, -1), (0, 1)]
+            .iter()
+            .enumerate()
+            .find_map(|(action, &(dr, dc))| {
+                let new_row = (row as i32 + dr) as usize;
+                let new_col = (col as i32 + dc) as usize;
+                (slot.legal_mask()[action] != 0 && view.food[new_row][new_col] == 0)
+                    .then_some(action)
+            })
+            .unwrap();
+
+        slot.step(action as u32).unwrap();
+
+        assert_eq!(slot.reward(), 0.0);
+        let planes = slot.encode_planes();
+        assert!((planes[plane_index(39, 0, 0)] - 0.0001).abs() < 1e-7);
+    }
+
+    #[test]
+    fn max_steps_scales_with_board_area() {
+        for (n, expected) in [(8, 256), (16, 1024)] {
+            let config = Ahc063Config {
+                fixed_n: Some(n),
+                ..default_config()
+            };
+            let slot = Ahc063Env::from_seed(0, &config).unwrap();
+            assert_eq!(slot.max_steps, expected);
         }
     }
 
@@ -431,17 +493,21 @@ mod tests {
     #[test]
     fn max_steps_finishes_episode() {
         let config = Ahc063Config {
-            max_steps: 1,
+            max_steps_per_cell: 1,
             ..default_config()
         };
         let mut slot = Ahc063Env::from_seed(0, &config).unwrap();
-        let action = slot
-            .legal_mask()
-            .iter()
-            .position(|&legal| legal != 0)
-            .unwrap();
-        slot.step(action as u32).unwrap();
+        let expected_steps = slot.input.N * slot.input.N;
+        while !slot.done() {
+            let action = slot
+                .legal_mask()
+                .iter()
+                .position(|&legal| legal != 0)
+                .unwrap();
+            slot.step(action as u32).unwrap();
+        }
+        assert_eq!(slot.actions.len(), expected_steps);
         assert!(slot.done());
-        assert!(slot.validate_action(action as u32).is_err());
+        assert!(slot.validate_action(0).is_err());
     }
 }

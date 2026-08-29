@@ -97,6 +97,18 @@ def test_parse_args_rejects_invalid_evaluation_values() -> None:
         parse_args(["--eval-temperature", "-0.1"])
     with pytest.raises(ValueError, match="eval_seed_num"):
         parse_args(["--eval-seed-num", "0"])
+    with pytest.raises(ValueError, match="max_steps_per_cell"):
+        parse_args(["--max-steps-per-cell", "0"])
+    with pytest.raises(ValueError, match="eval_max_steps_per_cell"):
+        parse_args(["--eval-max-steps-per-cell", "0"])
+
+
+def test_parse_args_rejects_removed_fixed_step_options(tmp_path: Path) -> None:
+    config_path = tmp_path / "legacy.toml"
+    config_path.write_text("[contest]\nmax_episode_steps = 256\n")
+
+    with pytest.raises(ValueError, match="unknown config keys: max_episode_steps"):
+        parse_args(["--config", str(config_path)])
 
 
 def test_parse_args_supports_proximal_ewma_and_rejects_invalid_com() -> None:
@@ -137,7 +149,7 @@ def test_evaluate_policy_rolls_out_fixed_seeds_reproducibly_without_updating_obs
             "16",
             "--eval-fixed-c",
             "3",
-            "--eval-max-episode-steps",
+            "--eval-max-steps-per-cell",
             "1",
         ]
     )

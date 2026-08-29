@@ -21,6 +21,17 @@ uv run python3 -m ahcrl.contests.ahc063.train_ppo \
 `checkpoint_latest.pt` が export 対象で、`config.json` からモデル構成と
 観測正規化の状態を復元する。
 
+環境は各時点までの公式絶対スコアの最小値を trajectory best として保持する。
+`score` は trajectory best、reward は trajectory best を更新した量を `10000` で
+割った非負値である。盤面上の現在スコアが best より悪い場合、その差も観測 plane に
+含める。episode と提出コードの探索上限はともに `max_steps_per_cell * N^2` で、標準の
+`max_steps_per_cell = 4` では N=8 が256手、N=16が1024手となる。
+
+visualizer と提出コードが出力するのは best prefix ではなく、実際に選択した全行動である。
+したがって環境が報告する trajectory-best score と、全出力を公式 scorer で採点した最終
+状態のscoreは一致しない場合がある。drawdown plane の追加により観測は44 planesとなり、
+43 planesで学習した既存checkpointとは互換性がない。
+
 ## 学習済みモデルの export と評価
 
 以下では、評価したい run を `RUN_DIR` に指定する。`--run-dir` を省略すると、

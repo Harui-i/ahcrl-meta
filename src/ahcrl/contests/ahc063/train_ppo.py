@@ -49,7 +49,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "fixed_n": None,
     "fixed_m": None,
     "fixed_c": None,
-    "max_episode_steps": 100_000,
+    "max_steps_per_cell": 4,
     "device": "auto",
     "compile": True,
     "lr": 3e-4,
@@ -76,7 +76,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "eval_fixed_n": None,
     "eval_fixed_m": None,
     "eval_fixed_c": None,
-    "eval_max_episode_steps": 100_000,
+    "eval_max_steps_per_cell": 4,
     "model_channels": 128,
     "model_blocks": 3,
     "model_block_type": "convnext",
@@ -97,7 +97,7 @@ EVALUATION_CONFIG_KEYS = {
     "eval_fixed_n",
     "eval_fixed_m",
     "eval_fixed_c",
-    "eval_max_episode_steps",
+    "eval_max_steps_per_cell",
 }
 RESUME_ALLOWED_OVERRIDE_KEYS = {
     "total_steps",
@@ -401,7 +401,7 @@ def evaluate_policy(
                 "fixed_n": args.eval_fixed_n,
                 "fixed_m": args.eval_fixed_m,
                 "fixed_c": args.eval_fixed_c,
-                "max_steps": args.eval_max_episode_steps,
+                "max_steps_per_cell": args.eval_max_steps_per_cell,
             },
             seed_start=seed_start,
             seed_stride=seed_stride,
@@ -870,7 +870,7 @@ def main() -> None:
             "fixed_n": args.fixed_n,
             "fixed_m": args.fixed_m,
             "fixed_c": args.fixed_c,
-            "max_steps": args.max_episode_steps,
+            "max_steps_per_cell": args.max_steps_per_cell,
         },
         seed_start=args.seed_start,
         seed_stride=args.seed_stride,
@@ -1103,8 +1103,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("eval_seed_num must be positive")
     if config["eval_seed_stride"] <= 0:
         raise ValueError("eval_seed_stride must be positive")
-    if config["eval_max_episode_steps"] <= 0:
-        raise ValueError("eval_max_episode_steps must be positive")
+    if config["max_steps_per_cell"] <= 0:
+        raise ValueError("max_steps_per_cell must be positive")
+    if config["eval_max_steps_per_cell"] <= 0:
+        raise ValueError("eval_max_steps_per_cell must be positive")
     uint64_max = np.iinfo(np.uint64).max
     if not 0 <= config["eval_seed_start"] <= uint64_max:
         raise ValueError("eval_seed_start must fit in uint64")

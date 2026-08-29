@@ -31,7 +31,7 @@ blocks = 2
 block_type = "convnext"
 
 [contest]
-max_episode_steps = 256
+max_steps_per_cell = 4
 reward_scale = true
 obs_norm = true
 obs_norm_epsilon = 1e-8
@@ -42,4 +42,4 @@ seed_start = 0
 seed_num = 1024
 seed_stride = 1
 temperature = 0.0
-max_episode_steps = 256
+max_steps_per_cell = 4
