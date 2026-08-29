@@ -221,6 +221,48 @@ impl<F: EnvFactory> VecEnvServer<F> {
         Ok(())
     }
 
+    /// Advance only the environments selected by `mask`.
+    ///
+    /// This is primarily useful for finite evaluation batches: environments that
+    /// have already finished can remain in the batch without requiring a reset.
+    pub fn step_mask(&mut self, mask: &[u8], actions: &[u32]) -> Result<(), String> {
+        self.require_initialized()?;
+        if mask.len() != self.num_envs {
+            return Err(format!(
+                "step mask length must be {}, got {}",
+                self.num_envs,
+                mask.len()
+            ));
+        }
+        if actions.len() != self.num_envs {
+            return Err(format!(
+                "action count must be {}, got {}",
+                self.num_envs,
+                actions.len()
+            ));
+        }
+        if let Some(value) = mask.iter().find(|&&value| value > 1) {
+            return Err(format!("step mask contains invalid byte {value}"));
+        }
+        for (env_id, ((env, &selected), &action)) in
+            self.envs.iter().zip(mask).zip(actions).enumerate()
+        {
+            if selected != 0 {
+                env.validate_action(action)
+                    .map_err(|error| format!("env {env_id}: {error}"))?;
+            }
+        }
+        for (env_id, ((env, &selected), &action)) in
+            self.envs.iter_mut().zip(mask).zip(actions).enumerate()
+        {
+            if selected != 0 {
+                env.step(action)
+                    .map_err(|error| format!("internal step failure in env {env_id}: {error}"))?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn encode_batch(&self) -> Result<Vec<u8>, String> {
         self.require_initialized()?;
         let capacity = self.spec.batch_bytes(self.num_envs)?;
@@ -447,6 +489,33 @@ where
                 server.step(&actions)?;
                 write_batch(server, &mut writer)?;
             }
+            "STEP_MASK" => {
+                if parts.next().is_some() {
+                    send_error(&mut writer, "STEP_MASK takes no arguments")?;
+                    continue;
+                }
+                let Some(server) = server.as_mut() else {
+                    send_error(&mut writer, "INIT must be sent first")?;
+                    continue;
+                };
+                let mut mask = vec![0_u8; server.num_envs];
+                reader
+                    .read_exact(&mut mask)
+                    .map_err(|error| format!("failed to read step mask: {error}"))?;
+                let mut bytes = vec![0_u8; server.num_envs * std::mem::size_of::<u32>()];
+                reader
+                    .read_exact(&mut bytes)
+                    .map_err(|error| format!("failed to read actions: {error}"))?;
+                let actions = bytes
+                    .chunks_exact(4)
+                    .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("four-byte chunk")))
+                    .collect::<Vec<_>>();
+                if let Err(error) = server.step_mask(&mask, &actions) {
+                    send_error(&mut writer, &error)?;
+                    continue;
+                }
+                write_batch(server, &mut writer)?;
+            }
             "QUIT" => {
                 if parts.next().is_some() {
                     send_error(&mut writer, "QUIT takes no arguments")?;
@@ -642,6 +711,15 @@ mod tests {
         server.reset_all(5, 1).unwrap();
         assert!(server.step(&[1, 9]).is_err());
         assert_eq!(server.envs[0].value, 5);
+        assert_eq!(server.envs[1].value, 6);
+    }
+
+    #[test]
+    fn step_mask_skips_unselected_slots_without_validating_their_actions() {
+        let mut server = VecEnvServer::new(DummyFactory, 2).unwrap();
+        server.reset_all(5, 1).unwrap();
+        server.step_mask(&[1, 0], &[2, 99]).unwrap();
+        assert_eq!(server.envs[0].value, 7);
         assert_eq!(server.envs[1].value, 6);
     }
 

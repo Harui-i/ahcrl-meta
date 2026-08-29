@@ -23,3 +23,11 @@ fixed_m = 16
 fixed_c = 3
 reward_scale = false
 obs_norm = false
+
+[evaluation]
+enabled = false
+seed_start = 0
+seed_num = 100
+seed_stride = 1
+temperature = 0.0
+max_episode_steps = 100000

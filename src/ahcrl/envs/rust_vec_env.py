@@ -138,6 +138,34 @@ class RustVecEnv:
         self.obs = result.obs
         return result
 
+    def step_mask(self, active: np.ndarray, actions: np.ndarray) -> StepResult:
+        """Advance only environments selected by ``active``.
+
+        Actions for inactive environments are ignored by the server and need
+        not be legal. This lets a finite evaluation batch retain environments
+        that have already reached ``done`` while the remaining ones finish.
+        """
+        mask = np.asarray(active, dtype=np.bool_)
+        if mask.shape != (self.num_envs,):
+            raise ValueError(f"active must have shape ({self.num_envs},), got {mask.shape}")
+        values = np.asarray(actions)
+        if values.shape != (self.num_envs,):
+            raise ValueError(f"actions must have shape ({self.num_envs},), got {values.shape}")
+        if not np.issubdtype(values.dtype, np.integer):
+            raise TypeError(f"actions must have an integer dtype, got {values.dtype}")
+        selected = values[mask]
+        if selected.size:
+            minimum = int(selected.min())
+            maximum = int(selected.max())
+            if minimum < 0 or maximum > np.iinfo(np.uint32).max:
+                raise ValueError("active actions must fit in uint32")
+        encoded = np.asarray(values, dtype="<u4", order="C")
+        payload = mask.view(np.uint8).tobytes() + encoded.tobytes()
+        self._send_line("STEP_MASK", payload)
+        result = self._read_batch()
+        self.obs = result.obs
+        return result
+
     def close(self) -> None:
         if self._closed:
             return

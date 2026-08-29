@@ -12,10 +12,14 @@ from torch.distributions import Categorical
 
 from ahcrl.envs import RustVecEnv, cargo_server_command
 from ahcrl.training import (
+    FixedSeedEvaluation,
     TrainingProgress,
     WandbConfig,
+    append_evaluation_record,
+    build_evaluation_metrics,
     build_standard_ppo_metrics,
     config_for_save,
+    evaluate_fixed_seeds,
     finish_wandb,
     get_wandb_run_id,
     init_wandb,
@@ -60,6 +64,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "obs_norm_epsilon": 1e-8,
     "artifact_dir": ROOT / "contests/ahc-063/artifacts/ppo",
     "checkpoint_interval_updates": 20,
+    "eval_enabled": False,
+    "eval_seed_start": 0,
+    "eval_seed_num": 100,
+    "eval_seed_stride": 1,
+    "eval_temperature": 0.0,
+    "eval_fixed_n": None,
+    "eval_fixed_m": None,
+    "eval_fixed_c": None,
+    "eval_max_episode_steps": 100_000,
     "model_channels": 128,
     "model_blocks": 3,
     "model_block_type": "convnext",
@@ -71,7 +84,24 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "wandb_tags": [],
 }
 RUNTIME_KEYS = {"run_dir", "resume_dir", "init_checkpoint"}
-RESUME_ALLOWED_OVERRIDE_KEYS = {"total_steps", "epochs", "lr", "num_envs", "wandb_name"}
+EVALUATION_CONFIG_KEYS = {
+    "eval_enabled",
+    "eval_seed_start",
+    "eval_seed_num",
+    "eval_seed_stride",
+    "eval_temperature",
+    "eval_fixed_n",
+    "eval_fixed_m",
+    "eval_fixed_c",
+    "eval_max_episode_steps",
+}
+RESUME_ALLOWED_OVERRIDE_KEYS = {
+    "total_steps",
+    "epochs",
+    "lr",
+    "num_envs",
+    "wandb_name",
+} | EVALUATION_CONFIG_KEYS
 WANDB_CONFIG_KEYS = {
     "wandb_enabled",
     "wandb_project",
@@ -79,6 +109,14 @@ WANDB_CONFIG_KEYS = {
     "wandb_name",
     "wandb_mode",
     "wandb_tags",
+}
+OPTIONAL_INTEGER_CONFIG_KEYS = {
+    "fixed_n",
+    "fixed_m",
+    "fixed_c",
+    "eval_fixed_n",
+    "eval_fixed_m",
+    "eval_fixed_c",
 }
 
 
@@ -215,6 +253,94 @@ def _first_nonfinite_gradient(model: nn.Module) -> str | None:
 def _synchronize_device(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
+
+
+def _to_model_tensor(array: np.ndarray, device: torch.device) -> torch.Tensor:
+    tensor = torch.from_numpy(array).to(device=device)
+    if device.type == "cpu":
+        tensor = tensor.clone()
+    return tensor.to(dtype=MODEL_DTYPE if device.type == "cuda" else torch.float32)
+
+
+def _evaluation_generator_seed(seed: int) -> int:
+    """環境 seed と独立した、再現可能な推論 RNG seed を返す。"""
+    value = (seed + 0x9E3779B97F4A7C15) & ((1 << 64) - 1)
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & ((1 << 64) - 1)
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & ((1 << 64) - 1)
+    return (value ^ (value >> 31)) & ((1 << 64) - 1)
+
+
+def evaluate_policy(
+    model: ActorCritic,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> tuple[dict[str, float | int], FixedSeedEvaluation]:
+    """現在の方策を固定 seed 集合で評価し、W&B メトリクスも返す。"""
+    generators: dict[int, torch.Generator] = {}
+
+    def make_env(num_envs: int, seed_start: int, seed_stride: int) -> RustVecEnv:
+        return RustVecEnv(
+            cargo_server_command(RL_TOOLS_MANIFEST),
+            num_envs,
+            config={
+                "fixed_n": args.eval_fixed_n,
+                "fixed_m": args.eval_fixed_m,
+                "fixed_c": args.eval_fixed_c,
+                "max_steps": args.eval_max_episode_steps,
+            },
+            seed_start=seed_start,
+            seed_stride=seed_stride,
+            cwd=ROOT,
+        )
+
+    def select_actions(
+        obs: dict[str, np.ndarray], active: np.ndarray, seeds: np.ndarray
+    ) -> np.ndarray:
+        encoded = _to_model_tensor(obs["planes"], device)
+        normalizer = _observation_normalizer(model)
+        if normalizer is not None:
+            encoded = normalizer.normalize(encoded)
+        mask = torch.from_numpy(obs["mask"]).to(device=device)
+        if device.type == "cpu":
+            mask = mask.clone()
+        with torch.inference_mode():
+            logits, value = _model_forward(model, encoded)
+            nonfinite_output = _first_nonfinite_model_output(logits, value)
+            if nonfinite_output is not None:
+                raise FloatingPointError(f"non-finite {nonfinite_output} during evaluation")
+            masked_logits = logits.float().masked_fill(~mask, -1e9)
+            if args.eval_temperature == 0.0:
+                actions = masked_logits.argmax(dim=1)
+            else:
+                probabilities = torch.softmax(masked_logits / args.eval_temperature, dim=1)
+                actions = torch.zeros(len(seeds), dtype=torch.long, device=device)
+                for index in np.flatnonzero(active):
+                    seed = int(seeds[index])
+                    generator = generators.get(seed)
+                    if generator is None:
+                        generator = torch.Generator(device=device).manual_seed(
+                            _evaluation_generator_seed(seed)
+                        )
+                        generators[seed] = generator
+                    actions[index] = torch.multinomial(
+                        probabilities[index], 1, generator=generator
+                    ).squeeze(0)
+        return actions.cpu().numpy()
+
+    was_training = model.training
+    model.eval()
+    try:
+        result = evaluate_fixed_seeds(
+            make_env=make_env,
+            action_selector=select_actions,
+            seed_start=args.eval_seed_start,
+            seed_num=args.eval_seed_num,
+            seed_stride=args.eval_seed_stride,
+            num_envs=args.num_envs,
+        )
+    finally:
+        model.train(was_training)
+    return build_evaluation_metrics(result, temperature=args.eval_temperature), result
 
 
 def collect_rollout(
@@ -534,6 +660,7 @@ def main() -> None:
             global_step += args.num_envs * args.rollout_steps
             update += 1
             checkpoint = None
+            evaluation_metrics: dict[str, float | int] = {}
             if update % args.checkpoint_interval_updates == 0 or global_step >= args.total_steps:
                 checkpoint = save_training_checkpoint(
                     args.run_dir,
@@ -546,6 +673,18 @@ def main() -> None:
                         "master_weights": master_weights.state_dict(),
                     },
                 )
+                if args.eval_enabled:
+                    evaluation_metrics, evaluation = evaluate_policy(raw_model, args, device)
+                    append_evaluation_record(
+                        args.run_dir,
+                        global_step=global_step,
+                        update=update,
+                        checkpoint_path=checkpoint,
+                        evaluation_config={
+                            key: getattr(args, key) for key in sorted(EVALUATION_CONFIG_KEYS)
+                        },
+                        result=evaluation,
+                    )
             elapsed = max(time.time() - started, 1e-6)
             metrics = build_standard_ppo_metrics(
                 update=update,
@@ -559,6 +698,7 @@ def main() -> None:
                 "timing/backward_seconds_total": timing_totals["backward_seconds"],
                 "timing/env_step_seconds_total": timing_totals["env_step_seconds"],
             }
+            metrics |= evaluation_metrics
             update_run_state(
                 args.run_dir,
                 global_step=global_step,
@@ -597,7 +737,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                 default=argparse.SUPPRESS,
             )
         elif default is None:
-            parser.add_argument(option, dest=key, default=argparse.SUPPRESS)
+            if key in OPTIONAL_INTEGER_CONFIG_KEYS:
+                parser.add_argument(option, dest=key, type=int, default=argparse.SUPPRESS)
+            else:
+                parser.add_argument(option, dest=key, default=argparse.SUPPRESS)
         elif isinstance(default, int):
             parser.add_argument(option, dest=key, type=int, default=argparse.SUPPRESS)
         elif isinstance(default, float):
@@ -655,6 +798,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("model_channels must be divisible by four")
     if config["checkpoint_interval_updates"] <= 0:
         raise ValueError("checkpoint_interval_updates must be positive")
+    if config["eval_temperature"] < 0.0:
+        raise ValueError("eval_temperature must be non-negative")
+    if config["eval_seed_num"] <= 0:
+        raise ValueError("eval_seed_num must be positive")
+    if config["eval_seed_stride"] <= 0:
+        raise ValueError("eval_seed_stride must be positive")
+    if config["eval_max_episode_steps"] <= 0:
+        raise ValueError("eval_max_episode_steps must be positive")
+    uint64_max = np.iinfo(np.uint64).max
+    if not 0 <= config["eval_seed_start"] <= uint64_max:
+        raise ValueError("eval_seed_start must fit in uint64")
+    if (
+        config["eval_seed_start"] + (config["eval_seed_num"] - 1) * config["eval_seed_stride"]
+        > uint64_max
+    ):
+        raise ValueError("evaluation seed range must fit in uint64")
     return argparse.Namespace(**config)
 
 

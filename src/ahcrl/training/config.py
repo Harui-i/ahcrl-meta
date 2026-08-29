@@ -13,6 +13,7 @@ TOML_SECTION_PREFIXES = {
     "training": "",
     "ppo": "",
     "wandb": "wandb_",
+    "evaluation": "eval_",
     "model": "model_",
     "contest": "",
 }

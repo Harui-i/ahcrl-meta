@@ -35,3 +35,11 @@ max_episode_steps = 256
 reward_scale = true
 obs_norm = true
 obs_norm_epsilon = 1e-8
+
+[evaluation]
+enabled = false
+seed_start = 0
+seed_num = 100
+seed_stride = 1
+temperature = 0.0
+max_episode_steps = 256

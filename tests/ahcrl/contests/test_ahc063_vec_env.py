@@ -84,6 +84,14 @@ def test_invalid_batch_is_rejected_without_mutation() -> None:
         np.testing.assert_array_equal(result.obs["planes"][0], golden["planes"][1])
 
 
+def test_step_mask_preserves_inactive_environment_without_validating_its_action() -> None:
+    with create_env() as env:
+        before = env.obs["planes"].copy()
+        result = env.step_mask(np.asarray([False]), np.asarray([999], dtype=np.int64))
+        np.testing.assert_array_equal(result.obs["planes"], before)
+        assert result.done.tolist() == [False]
+
+
 def test_client_validation_and_process_failure() -> None:
     env = create_env()
     with pytest.raises(TypeError, match="integer dtype"):

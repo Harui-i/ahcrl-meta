@@ -83,6 +83,9 @@ def test_load_toml_config_flattens_named_sections(tmp_path: Path) -> None:
                 "[model]",
                 "channels = 8",
                 "",
+                "[evaluation]",
+                "enabled = true",
+                "",
                 "[contest]",
                 "fixed_size = 3",
             ]
@@ -96,6 +99,7 @@ def test_load_toml_config_flattens_named_sections(tmp_path: Path) -> None:
             "lr": 0.1,
             "wandb_project": "default",
             "model_channels": 4,
+            "eval_enabled": False,
             "fixed_size": None,
         },
     )
@@ -105,6 +109,7 @@ def test_load_toml_config_flattens_named_sections(tmp_path: Path) -> None:
         "lr": 0.2,
         "wandb_project": "project",
         "model_channels": 8,
+        "eval_enabled": True,
         "fixed_size": 3,
     }
 
