@@ -1,6 +1,8 @@
 """PPO trainer for AHC063 using a SphericalAttentionSimba policy."""
 
 import argparse
+import copy
+import math
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -8,7 +10,7 @@ from typing import Any, cast
 import numpy as np
 import torch
 from torch import nn
-from torch.distributions import Categorical
+from torch.distributions import Categorical, kl_divergence
 
 from ahcrl.envs import RustVecEnv, cargo_server_command
 from ahcrl.training import (
@@ -59,6 +61,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "entropy_coef": 0.01,
     "value_coef": 0.5,
     "max_grad_norm": 0.5,
+    "proximal_ewma": False,
+    "proximal_ewma_com": 1024.0,
     "reward_scale": True,
     "obs_norm": True,
     "obs_norm_epsilon": 1e-8,
@@ -206,6 +210,117 @@ class FP32MasterWeights:
             )
         for parameter, saved in zip(self.parameters, state, strict=True):
             parameter.copy_(saved.to(device=parameter.device, dtype=torch.float32))
+
+
+class ProximalPolicyEWMA:
+    """FP32で平均を保持し、推論用モデルへ同期するproximal policy。"""
+
+    def __init__(
+        self,
+        model: ActorCritic,
+        source_parameters: list[nn.Parameter],
+        center_of_mass: float,
+    ) -> None:
+        if not math.isfinite(center_of_mass) or center_of_mass <= 0.0:
+            raise ValueError("proximal_ewma_com must be finite and positive")
+        self.center_of_mass = center_of_mass
+        self.decay = center_of_mass / (center_of_mass + 1.0)
+        self.model = copy.deepcopy(model)
+        self.model.eval()
+        source_parameter_names = [
+            name for name, parameter in model.named_parameters() if parameter.requires_grad
+        ]
+        if len(source_parameter_names) != len(source_parameters):
+            raise ValueError("proximal model parameter count mismatch")
+        self.parameter_indices = [
+            index
+            for index, name in enumerate(source_parameter_names)
+            if not name.startswith("value.")
+        ]
+        proximal_parameters = dict(self.model.named_parameters())
+        self.model_parameters = [
+            proximal_parameters[source_parameter_names[index]] for index in self.parameter_indices
+        ]
+        for parameter in self.model.parameters():
+            parameter.requires_grad_(False)
+        self.master_parameters = [
+            source_parameters[index].detach().float().clone() for index in self.parameter_indices
+        ]
+        self.total_weight = 1.0
+        self.weighted_age = 0.0
+        self._copy_master_to_model()
+
+    @torch.no_grad()
+    def _copy_master_to_model(self) -> None:
+        for model_parameter, master_parameter in zip(
+            self.model_parameters, self.master_parameters, strict=True
+        ):
+            model_parameter.copy_(master_parameter.to(dtype=model_parameter.dtype))
+
+    @torch.no_grad()
+    def update(self, source_parameters: list[nn.Parameter]) -> None:
+        if len(source_parameters) <= max(self.parameter_indices, default=-1):
+            raise ValueError("proximal source parameter count mismatch")
+        previous_weight = self.total_weight
+        new_weight = 1.0 + self.decay * previous_weight
+        previous_coefficient = self.decay * previous_weight / new_weight
+        current_coefficient = 1.0 / new_weight
+        for proximal, index in zip(self.master_parameters, self.parameter_indices, strict=True):
+            current = source_parameters[index]
+            proximal.mul_(previous_coefficient).add_(
+                current.detach().float(), alpha=current_coefficient
+            )
+        self.weighted_age = self.decay * (self.weighted_age + previous_weight)
+        self.total_weight = new_weight
+        self._copy_master_to_model()
+
+    @property
+    def effective_center_of_mass(self) -> float:
+        return self.weighted_age / self.total_weight
+
+    @torch.no_grad()
+    def parameter_rms(self, source_parameters: list[nn.Parameter]) -> float:
+        squared_sum = torch.zeros((), device=self.master_parameters[0].device)
+        count = 0
+        if len(source_parameters) <= max(self.parameter_indices, default=-1):
+            raise ValueError("proximal source parameter count mismatch")
+        for proximal, index in zip(self.master_parameters, self.parameter_indices, strict=True):
+            current = source_parameters[index]
+            difference = current.detach().float() - proximal
+            squared_sum.add_(difference.square().sum())
+            count += difference.numel()
+        return math.sqrt(float(squared_sum.item()) / max(count, 1))
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "center_of_mass": self.center_of_mass,
+            "total_weight": self.total_weight,
+            "weighted_age": self.weighted_age,
+            "master_parameters": [
+                parameter.detach().cpu().clone() for parameter in self.master_parameters
+            ],
+        }
+
+    @torch.no_grad()
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        saved_center_of_mass = float(state["center_of_mass"])
+        if not math.isclose(saved_center_of_mass, self.center_of_mass):
+            raise ValueError(
+                "proximal EWMA center of mass mismatch: "
+                f"checkpoint has {saved_center_of_mass}, configured {self.center_of_mass}"
+            )
+        saved_parameters = state["master_parameters"]
+        if not isinstance(saved_parameters, list) or len(saved_parameters) != len(
+            self.master_parameters
+        ):
+            raise ValueError("proximal EWMA parameter count mismatch")
+        self.total_weight = float(state["total_weight"])
+        self.weighted_age = float(state["weighted_age"])
+        for parameter, saved in zip(self.master_parameters, saved_parameters, strict=True):
+            if not isinstance(saved, torch.Tensor):
+                raise ValueError("proximal EWMA parameters must be tensors")
+            parameter.copy_(saved.to(device=parameter.device, dtype=torch.float32))
+        self._copy_master_to_model()
 
 
 def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
@@ -451,6 +566,44 @@ def collect_rollout(
     )
 
 
+def _policy_surrogate(
+    *,
+    new_logprob: torch.Tensor,
+    behavior_logprob: torch.Tensor,
+    advantages: torch.Tensor,
+    clip: float,
+    proximal_logprob: torch.Tensor | None,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """通常PPOまたはbehavior/proximalを分離したPPO-EWMA objectiveを返す。"""
+    current_behavior_log_ratio = new_logprob - behavior_logprob
+    current_behavior_ratio = current_behavior_log_ratio.exp()
+    if not bool(torch.isfinite(current_behavior_ratio).all().item()):
+        raise FloatingPointError("non-finite current/behavior policy ratio")
+
+    if proximal_logprob is None:
+        clipping_ratio = current_behavior_ratio
+        importance_weight = torch.ones_like(clipping_ratio)
+    else:
+        current_proximal_log_ratio = new_logprob - proximal_logprob
+        clipping_ratio = current_proximal_log_ratio.exp()
+        importance_weight = (proximal_logprob - behavior_logprob).exp()
+        if not bool(torch.isfinite(clipping_ratio).all().item()):
+            raise FloatingPointError("non-finite current/proximal policy ratio")
+        if not bool(torch.isfinite(importance_weight).all().item()):
+            raise FloatingPointError("non-finite proximal/behavior importance ratio")
+
+    surrogate = importance_weight * torch.min(
+        clipping_ratio * advantages,
+        clipping_ratio.clamp(1.0 - clip, 1.0 + clip) * advantages,
+    )
+    return -surrogate.mean(), {
+        "clipping_ratio": clipping_ratio.detach(),
+        "current_behavior_log_ratio": current_behavior_log_ratio.detach(),
+        "current_behavior_ratio": current_behavior_ratio.detach(),
+        "proximal_behavior_ratio": importance_weight.detach(),
+    }
+
+
 def update_model(
     model: nn.Module,
     raw_model: ActorCritic,
@@ -459,7 +612,11 @@ def update_model(
     args: argparse.Namespace,
     device: torch.device,
     master_weights: FP32MasterWeights | None = None,
+    proximal_ewma: ProximalPolicyEWMA | None = None,
+    proximal_model: nn.Module | None = None,
 ) -> dict[str, float]:
+    if (proximal_ewma is None) != (proximal_model is None):
+        raise ValueError("proximal EWMA state and model must be provided together")
     observations = rollout["obs"].flatten(0, 1).to(device)
     actions = rollout["actions"].flatten().to(device)
     old_logprobs = rollout["logprobs"].flatten().to(device)
@@ -483,6 +640,15 @@ def update_model(
     grad_norm = 0.0
     forward_seconds = 0.0
     backward_seconds = 0.0
+    proximal_forward_seconds = 0.0
+    current_behavior_approx_kl_total = 0.0
+    behavior_proximal_approx_kl_total = 0.0
+    proximal_current_kl_total = 0.0
+    proximal_behavior_ratio_sum = 0.0
+    proximal_behavior_ratio_square_sum = 0.0
+    proximal_behavior_ratio_min = float("inf")
+    proximal_behavior_ratio_max = float("-inf")
+    proximal_behavior_ratio_count = 0
     for _ in range(args.epochs):
         permutation = torch.randperm(batch_size, device=device)
         for start in range(0, batch_size, minibatch_size):
@@ -492,12 +658,26 @@ def update_model(
             logits, value = _model_forward(model, observations[index])
             dist = Categorical(logits=logits.float().masked_fill(~masks[index], -1e9))
             new_logprob = dist.log_prob(actions[index])
-            ratio = (new_logprob - old_logprobs[index]).exp()
-            surrogate = torch.min(
-                ratio * advantages[index],
-                ratio.clamp(1.0 - args.clip, 1.0 + args.clip) * advantages[index],
+            proximal_logprob = None
+            proximal_dist = None
+            if proximal_model is not None:
+                _synchronize_device(device)
+                proximal_forward_started = time.perf_counter()
+                with torch.inference_mode():
+                    proximal_logits, _ = _model_forward(proximal_model, observations[index])
+                    proximal_dist = Categorical(
+                        logits=proximal_logits.float().masked_fill(~masks[index], -1e9)
+                    )
+                    proximal_logprob = proximal_dist.log_prob(actions[index])
+                _synchronize_device(device)
+                proximal_forward_seconds += time.perf_counter() - proximal_forward_started
+            policy_loss, policy_stats = _policy_surrogate(
+                new_logprob=new_logprob,
+                behavior_logprob=old_logprobs[index],
+                advantages=advantages[index],
+                clip=args.clip,
+                proximal_logprob=proximal_logprob,
             )
-            policy_loss = -surrogate.mean()
             value_loss = 0.5 * (value.float() - returns[index]).square().mean()
             entropy = dist.entropy().mean()
             weighted_policy_loss = policy_loss
@@ -553,21 +733,82 @@ def update_model(
             optimizer.step()
             if master_weights is not None:
                 master_weights.copy_master_to_model()
+                if proximal_ewma is not None:
+                    proximal_ewma.update(master_weights.parameters)
                 master_weights.copy_model_to_master()
+            elif proximal_ewma is not None:
+                proximal_ewma.update(
+                    [parameter for parameter in raw_model.parameters() if parameter.requires_grad]
+                )
+            clipping_ratio = policy_stats["clipping_ratio"]
+            current_behavior_log_ratio = policy_stats["current_behavior_log_ratio"]
+            current_behavior_ratio = policy_stats["current_behavior_ratio"]
             totals["policy_loss"] += float(policy_loss.item())
             totals["value_loss"] += float(value_loss.item())
             totals["entropy"] += float(entropy.item())
-            totals["clip_frac"] += float((ratio.sub(1.0).abs() > args.clip).float().mean().item())
+            totals["clip_frac"] += float(
+                (clipping_ratio.sub(1.0).abs() > args.clip).float().mean().item()
+            )
             totals["weighted_policy_loss"] += float(weighted_policy_loss.item())
             totals["weighted_value_loss"] += float(weighted_value_loss.item())
             totals["entropy_loss"] += float(entropy_loss.item())
             totals["total_loss"] += float(loss.item())
+            current_behavior_approx_kl_total += float(
+                (current_behavior_ratio - 1.0 - current_behavior_log_ratio).mean().item()
+            )
+            if proximal_logprob is not None and proximal_dist is not None:
+                behavior_proximal_approx_kl_total += float(
+                    (old_logprobs[index] - proximal_logprob).mean().item()
+                )
+                with torch.no_grad():
+                    proximal_current_kl_total += float(
+                        kl_divergence(proximal_dist, dist).mean().item()
+                    )
+                importance_weight = policy_stats["proximal_behavior_ratio"]
+                proximal_behavior_ratio_sum += float(importance_weight.sum().item())
+                proximal_behavior_ratio_square_sum += float(importance_weight.square().sum().item())
+                proximal_behavior_ratio_min = min(
+                    proximal_behavior_ratio_min, float(importance_weight.min().item())
+                )
+                proximal_behavior_ratio_max = max(
+                    proximal_behavior_ratio_max, float(importance_weight.max().item())
+                )
+                proximal_behavior_ratio_count += importance_weight.numel()
             count += 1
-    return {key: value / max(count, 1) for key, value in totals.items()} | {
+    result = {key: value / max(count, 1) for key, value in totals.items()} | {
         "grad_norm": grad_norm,
         "forward_seconds": forward_seconds,
         "backward_seconds": backward_seconds,
+        "proximal_forward_seconds": proximal_forward_seconds,
+        "current_behavior_approx_kl": current_behavior_approx_kl_total / max(count, 1),
     }
+    if proximal_ewma is not None:
+        ratio_count = max(proximal_behavior_ratio_count, 1)
+        ratio_mean = proximal_behavior_ratio_sum / ratio_count
+        ratio_variance = max(
+            proximal_behavior_ratio_square_sum / ratio_count - ratio_mean * ratio_mean,
+            0.0,
+        )
+        result |= {
+            "behavior_proximal_approx_kl": behavior_proximal_approx_kl_total / max(count, 1),
+            "proximal_current_kl": proximal_current_kl_total / max(count, 1),
+            "proximal_behavior_ratio_mean": ratio_mean,
+            "proximal_behavior_ratio_std": math.sqrt(ratio_variance),
+            "proximal_behavior_ratio_min": proximal_behavior_ratio_min,
+            "proximal_behavior_ratio_max": proximal_behavior_ratio_max,
+            "proximal_behavior_ratio_ess_fraction": proximal_behavior_ratio_sum**2
+            / max(
+                ratio_count * proximal_behavior_ratio_square_sum,
+                torch.finfo(torch.float64).tiny,
+            ),
+            "current_proximal_parameter_rms": proximal_ewma.parameter_rms(
+                master_weights.parameters
+                if master_weights is not None
+                else [parameter for parameter in raw_model.parameters() if parameter.requires_grad]
+            ),
+            "proximal_ewma_effective_com": proximal_ewma.effective_center_of_mass,
+        }
+    return result
 
 
 def main() -> None:
@@ -586,6 +827,11 @@ def main() -> None:
         load_initial_model(args.init_checkpoint, model=raw_model, device=device)
     master_weights = FP32MasterWeights(raw_model)
     optimizer = torch.optim.AdamW(master_weights.parameters, lr=args.lr)
+    proximal_ewma = (
+        ProximalPolicyEWMA(raw_model, master_weights.parameters, args.proximal_ewma_com)
+        if args.proximal_ewma
+        else None
+    )
     scaler = RunningRewardScaler() if args.reward_scale else None
     global_step = update = 0
     if args.resume_dir is not None:
@@ -601,6 +847,11 @@ def main() -> None:
         if not isinstance(master_state, list):
             raise ValueError("checkpoint extras missing master_weights")
         master_weights.load_state_dict(master_state)
+        if proximal_ewma is not None:
+            proximal_state = checkpoint.extras.get("proximal_policy_ewma")
+            if not isinstance(proximal_state, dict):
+                raise ValueError("checkpoint extras missing proximal_policy_ewma")
+            proximal_ewma.load_state_dict(proximal_state)
         scaler_state = checkpoint.extras.get("reward_scaler")
         if scaler is not None and scaler_state is not None:
             if not isinstance(scaler_state, dict):
@@ -626,9 +877,20 @@ def main() -> None:
         cwd=ROOT,
     )
     model: nn.Module = cast(nn.Module, torch.compile(raw_model) if args.compile else raw_model)
+    proximal_model: nn.Module | None = None
+    if proximal_ewma is not None:
+        proximal_model = cast(
+            nn.Module,
+            torch.compile(proximal_ewma.model) if args.compile else proximal_ewma.model,
+        )
     obs = env.obs
     started = time.time()
-    timing_totals = {"forward_seconds": 0.0, "backward_seconds": 0.0, "env_step_seconds": 0.0}
+    timing_totals = {
+        "forward_seconds": 0.0,
+        "backward_seconds": 0.0,
+        "proximal_forward_seconds": 0.0,
+        "env_step_seconds": 0.0,
+    }
     wandb_run = None
     try:
         wandb_run = init_wandb(
@@ -652,11 +914,22 @@ def main() -> None:
         )
         while global_step < args.total_steps:
             rollout, obs, rollout_timing = collect_rollout(model, env, obs, args, device, scaler)
-            stats = update_model(model, raw_model, optimizer, rollout, args, device, master_weights)
+            stats = update_model(
+                model,
+                raw_model,
+                optimizer,
+                rollout,
+                args,
+                device,
+                master_weights,
+                proximal_ewma,
+                proximal_model,
+            )
             timing_totals["forward_seconds"] += (
                 rollout_timing["forward_seconds"] + stats["forward_seconds"]
             )
             timing_totals["backward_seconds"] += stats["backward_seconds"]
+            timing_totals["proximal_forward_seconds"] += stats["proximal_forward_seconds"]
             timing_totals["env_step_seconds"] += rollout_timing["env_step_seconds"]
             global_step += args.num_envs * args.rollout_steps
             update += 1
@@ -672,6 +945,9 @@ def main() -> None:
                     extras={
                         "reward_scaler": None if scaler is None else scaler.state_dict(),
                         "master_weights": master_weights.state_dict(),
+                        "proximal_policy_ewma": (
+                            None if proximal_ewma is None else proximal_ewma.state_dict()
+                        ),
                     },
                 )
                 if args.eval_enabled:
@@ -697,7 +973,27 @@ def main() -> None:
             metrics |= {
                 "timing/forward_seconds_total": timing_totals["forward_seconds"],
                 "timing/backward_seconds_total": timing_totals["backward_seconds"],
+                "timing/proximal_forward_seconds_total": timing_totals["proximal_forward_seconds"],
                 "timing/env_step_seconds_total": timing_totals["env_step_seconds"],
+                "train/current_behavior_approx_kl": stats["current_behavior_approx_kl"],
+            }
+            ewma_metric_names = {
+                "behavior_proximal_approx_kl": "train/behavior_proximal_approx_kl",
+                "proximal_current_kl": "train/proximal_current_kl",
+                "proximal_behavior_ratio_mean": "train/proximal_behavior_ratio_mean",
+                "proximal_behavior_ratio_std": "train/proximal_behavior_ratio_std",
+                "proximal_behavior_ratio_min": "train/proximal_behavior_ratio_min",
+                "proximal_behavior_ratio_max": "train/proximal_behavior_ratio_max",
+                "proximal_behavior_ratio_ess_fraction": (
+                    "train/proximal_behavior_ratio_ess_fraction"
+                ),
+                "current_proximal_parameter_rms": "model/current_proximal_parameter_rms",
+                "proximal_ewma_effective_com": "model/proximal_ewma_effective_com",
+            }
+            metrics |= {
+                metric_name: stats[stat_name]
+                for stat_name, metric_name in ewma_metric_names.items()
+                if stat_name in stats
             }
             metrics |= evaluation_metrics
             update_run_state(
@@ -799,6 +1095,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("model_channels must be divisible by four")
     if config["checkpoint_interval_updates"] <= 0:
         raise ValueError("checkpoint_interval_updates must be positive")
+    if not math.isfinite(config["proximal_ewma_com"]) or config["proximal_ewma_com"] <= 0.0:
+        raise ValueError("proximal_ewma_com must be finite and positive")
     if config["eval_temperature"] < 0.0:
         raise ValueError("eval_temperature must be non-negative")
     if config["eval_seed_num"] <= 0:

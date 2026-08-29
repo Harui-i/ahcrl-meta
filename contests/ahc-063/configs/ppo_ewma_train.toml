@@ -1,0 +1,47 @@
+[training]
+num_envs = 1024
+total_steps = 20000000
+rollout_steps = 256
+seed_start = 0
+seed_stride = 1
+device = "cuda"
+compile = true
+artifact_dir = "contests/ahc-063/artifacts/ppo"
+checkpoint_interval_updates = 10
+
+[ppo]
+lr = 0.0003
+gamma = 0.995
+gae_lambda = 0.95
+clip = 0.2
+epochs = 1
+minibatch_size = 256
+entropy_coef = 0.0001
+value_coef = 0.5
+max_grad_norm = 0.5
+proximal_ewma = true
+proximal_ewma_com = 1024.0
+
+[wandb]
+enabled = true
+project = "ahcrl-meta-ahc063"
+name = "ahc063-ppo-ewma-com1024"
+
+[model]
+channels = 256
+blocks = 2
+block_type = "convnext"
+
+[contest]
+max_episode_steps = 256
+reward_scale = true
+obs_norm = true
+obs_norm_epsilon = 1e-8
+
+[evaluation]
+enabled = true
+seed_start = 0
+seed_num = 1024
+seed_stride = 1
+temperature = 0.0
+max_episode_steps = 256

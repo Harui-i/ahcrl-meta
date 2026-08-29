@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -8,11 +9,14 @@ import ahcrl.contests.ahc063.train_ppo as train_ppo
 from ahcrl.contests.ahc063.train_ppo import (
     RUNTIME_KEYS,
     FP32MasterWeights,
+    ProximalPolicyEWMA,
     RunningRewardScaler,
     _observation_normalizer,
+    _policy_surrogate,
     create_model,
     evaluate_policy,
     parse_args,
+    update_model,
 )
 from ahcrl.training import (
     TrainingProgress,
@@ -95,6 +99,15 @@ def test_parse_args_rejects_invalid_evaluation_values() -> None:
         parse_args(["--eval-seed-num", "0"])
 
 
+def test_parse_args_supports_proximal_ewma_and_rejects_invalid_com() -> None:
+    args = parse_args(["--proximal-ewma", "--proximal-ewma-com", "8"])
+
+    assert args.proximal_ewma is True
+    assert args.proximal_ewma_com == 8.0
+    with pytest.raises(ValueError, match="proximal_ewma_com"):
+        parse_args(["--proximal-ewma-com", "0"])
+
+
 def test_evaluate_policy_rolls_out_fixed_seeds_reproducibly_without_updating_obs_norm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -157,6 +170,8 @@ def test_ahc063_checkpoint_round_trips_reward_scaler_and_master_weights(tmp_path
     )
     model = create_model(args, torch.device("cpu"))
     master_weights = FP32MasterWeights(model)
+    proximal = ProximalPolicyEWMA(model, master_weights.parameters, center_of_mass=8.0)
+    proximal.update(master_weights.parameters)
     optimizer = torch.optim.AdamW(master_weights.parameters, lr=args.lr)
     scaler = RunningRewardScaler()
     scaler.scale(torch.tensor([[1.0, 2.0]]))
@@ -171,11 +186,15 @@ def test_ahc063_checkpoint_round_trips_reward_scaler_and_master_weights(tmp_path
         extras={
             "reward_scaler": scaler.state_dict(),
             "master_weights": master_weights.state_dict(),
+            "proximal_policy_ewma": proximal.state_dict(),
         },
     )
 
     reloaded_model = create_model(args, torch.device("cpu"))
     reloaded_master_weights = FP32MasterWeights(reloaded_model)
+    reloaded_proximal = ProximalPolicyEWMA(
+        reloaded_model, reloaded_master_weights.parameters, center_of_mass=8.0
+    )
     reloaded_optimizer = torch.optim.AdamW(reloaded_master_weights.parameters, lr=args.lr)
     loaded = load_latest_training_checkpoint(
         tmp_path,
@@ -184,6 +203,7 @@ def test_ahc063_checkpoint_round_trips_reward_scaler_and_master_weights(tmp_path
         device=torch.device("cpu"),
     )
     reloaded_master_weights.load_state_dict(loaded.extras["master_weights"])
+    reloaded_proximal.load_state_dict(loaded.extras["proximal_policy_ewma"])
     reloaded_scaler = RunningRewardScaler()
     reloaded_scaler.load_state_dict(loaded.extras["reward_scaler"])
 
@@ -193,3 +213,143 @@ def test_ahc063_checkpoint_round_trips_reward_scaler_and_master_weights(tmp_path
         master_weights.parameters, reloaded_master_weights.parameters, strict=True
     ):
         assert torch.equal(left, right)
+    assert reloaded_proximal.total_weight == pytest.approx(proximal.total_weight)
+    for left, right in zip(
+        proximal.master_parameters, reloaded_proximal.master_parameters, strict=True
+    ):
+        assert torch.equal(left, right)
+
+
+def test_proximal_policy_ewma_uses_bias_corrected_fp32_weights_and_round_trips() -> None:
+    args = parse_args(
+        [
+            "--device",
+            "cpu",
+            "--model-channels",
+            "4",
+            "--model-blocks",
+            "1",
+            "--no-obs-norm",
+        ]
+    )
+    model = create_model(args, torch.device("cpu"))
+    source = [nn_parameter for nn_parameter in model.parameters() if nn_parameter.requires_grad]
+    for parameter in source:
+        parameter.data.zero_()
+    ewma = ProximalPolicyEWMA(model, source, center_of_mass=1.0)
+    for parameter in source:
+        parameter.data.fill_(2.0)
+
+    ewma.update(source)
+
+    assert ewma.decay == pytest.approx(0.5)
+    assert ewma.effective_center_of_mass == pytest.approx(1.0 / 3.0)
+    for parameter in ewma.master_parameters:
+        assert torch.allclose(parameter, torch.full_like(parameter, 4.0 / 3.0))
+
+    restored = ProximalPolicyEWMA(model, source, center_of_mass=1.0)
+    restored.load_state_dict(ewma.state_dict())
+    assert restored.total_weight == pytest.approx(ewma.total_weight)
+    assert restored.weighted_age == pytest.approx(ewma.weighted_age)
+    for left, right in zip(restored.master_parameters, ewma.master_parameters, strict=True):
+        assert torch.equal(left, right)
+
+
+def test_decoupled_policy_surrogate_matches_ppo_when_proximal_is_behavior() -> None:
+    new_logprob = torch.tensor([-0.2, -1.4])
+    behavior_logprob = torch.tensor([-0.3, -1.0])
+    advantages = torch.tensor([1.5, -0.5])
+    ordinary_loss, ordinary_stats = _policy_surrogate(
+        new_logprob=new_logprob,
+        behavior_logprob=behavior_logprob,
+        advantages=advantages,
+        clip=0.2,
+        proximal_logprob=None,
+    )
+    decoupled_loss, decoupled_stats = _policy_surrogate(
+        new_logprob=new_logprob,
+        behavior_logprob=behavior_logprob,
+        advantages=advantages,
+        clip=0.2,
+        proximal_logprob=behavior_logprob,
+    )
+
+    assert torch.equal(decoupled_loss, ordinary_loss)
+    assert torch.equal(decoupled_stats["clipping_ratio"], ordinary_stats["clipping_ratio"])
+    assert torch.equal(
+        decoupled_stats["proximal_behavior_ratio"],
+        torch.ones_like(behavior_logprob),
+    )
+
+
+def test_decoupled_policy_surrogate_uses_proximal_clip_and_behavior_weight() -> None:
+    loss, stats = _policy_surrogate(
+        new_logprob=torch.tensor([math.log(0.6)]),
+        behavior_logprob=torch.tensor([math.log(0.25)]),
+        advantages=torch.tensor([2.0]),
+        clip=0.1,
+        proximal_logprob=torch.tensor([math.log(0.5)]),
+    )
+
+    assert float(loss.item()) == pytest.approx(-4.4)
+    assert float(stats["clipping_ratio"].item()) == pytest.approx(1.2)
+    assert float(stats["proximal_behavior_ratio"].item()) == pytest.approx(2.0)
+
+
+def test_update_model_records_proximal_diagnostics_for_identical_policies() -> None:
+    args = parse_args(
+        [
+            "--device",
+            "cpu",
+            "--model-channels",
+            "4",
+            "--model-blocks",
+            "1",
+            "--no-obs-norm",
+            "--epochs",
+            "1",
+            "--minibatch-size",
+            "2",
+            "--lr",
+            "0",
+        ]
+    )
+    model = create_model(args, torch.device("cpu"))
+    master_weights = FP32MasterWeights(model)
+    optimizer = torch.optim.AdamW(master_weights.parameters, lr=0.0)
+    proximal = ProximalPolicyEWMA(model, master_weights.parameters, center_of_mass=2.0)
+    observations = torch.randn(1, 2, model.NUM_PLANES, 8, 8)
+    masks = torch.ones(1, 2, model.ACTION_COUNT, dtype=torch.bool)
+    with torch.inference_mode():
+        logits, values = model(observations.flatten(0, 1))
+        distribution = torch.distributions.Categorical(logits=logits.float())
+        actions = torch.tensor([0, 1])
+        behavior_logprobs = distribution.log_prob(actions)
+    rollout = {
+        "obs": observations,
+        "actions": actions.reshape(1, 2),
+        "logprobs": behavior_logprobs.reshape(1, 2),
+        "advantages": torch.tensor([[1.0, -1.0]]),
+        "returns": values.detach().reshape(1, 2),
+        "masks": masks,
+    }
+
+    stats = update_model(
+        model,
+        model,
+        optimizer,
+        rollout,
+        args,
+        torch.device("cpu"),
+        master_weights,
+        proximal,
+        proximal.model,
+    )
+
+    assert stats["clip_frac"] == pytest.approx(0.0)
+    assert stats["current_behavior_approx_kl"] == pytest.approx(0.0, abs=1e-7)
+    assert stats["behavior_proximal_approx_kl"] == pytest.approx(0.0, abs=1e-7)
+    assert stats["proximal_current_kl"] == pytest.approx(0.0, abs=1e-7)
+    assert stats["proximal_behavior_ratio_mean"] == pytest.approx(1.0)
+    assert stats["proximal_behavior_ratio_std"] == pytest.approx(0.0)
+    assert stats["proximal_behavior_ratio_ess_fraction"] == pytest.approx(1.0)
