@@ -60,6 +60,7 @@ def test_policy_warmup_unfreezes_once_and_round_trips_state() -> None:
     )
     assert low_variance == pytest.approx(0.0)
     assert warmup.policy_updates_enabled is False
+    assert warmup.training_epochs(2, 4) == 8
 
     high_variance = warmup.observe(
         torch.tensor([0.0, 0.9, 2.0]),
@@ -67,6 +68,7 @@ def test_policy_warmup_unfreezes_once_and_round_trips_state() -> None:
     )
     assert high_variance > 0.75
     assert warmup.policy_updates_enabled is True
+    assert warmup.training_epochs(2, 4) == 2
 
     warmup.observe(torch.zeros(3), torch.tensor([0.0, 1.0, 2.0]))
     assert warmup.policy_updates_enabled is True

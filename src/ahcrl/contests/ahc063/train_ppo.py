@@ -63,6 +63,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "value_coef": 0.5,
     "policy_unfreeze_explained_variance": 0.75,
     "policy_freeze_scope": "all_except_value",
+    "policy_warmup_epochs_multiplier": 4,
     "max_grad_norm": 0.5,
     "proximal_ewma": False,
     "proximal_ewma_com": 1024.0,
@@ -108,6 +109,7 @@ RESUME_ALLOWED_OVERRIDE_KEYS = {
     "lr",
     "num_envs",
     "policy_unfreeze_explained_variance",
+    "policy_warmup_epochs_multiplier",
     "wandb_name",
 } | EVALUATION_CONFIG_KEYS
 WANDB_CONFIG_KEYS = {
@@ -626,6 +628,7 @@ def update_model(
     proximal_model: nn.Module | None = None,
     *,
     policy_updates_enabled: bool = True,
+    training_epochs: int | None = None,
 ) -> dict[str, float]:
     if (proximal_ewma is None) != (proximal_model is None):
         raise ValueError("proximal EWMA state and model must be provided together")
@@ -661,7 +664,10 @@ def update_model(
     proximal_behavior_ratio_min = float("inf")
     proximal_behavior_ratio_max = float("-inf")
     proximal_behavior_ratio_count = 0
-    for _ in range(args.epochs):
+    effective_training_epochs = args.epochs if training_epochs is None else training_epochs
+    if effective_training_epochs <= 0:
+        raise ValueError("training_epochs must be positive")
+    for _ in range(effective_training_epochs):
         permutation = torch.randperm(batch_size, device=device)
         for start in range(0, batch_size, minibatch_size):
             index = permutation[start : start + minibatch_size]
@@ -802,6 +808,7 @@ def update_model(
         "proximal_forward_seconds": proximal_forward_seconds,
         "current_behavior_approx_kl": current_behavior_approx_kl_total / max(count, 1),
         "policy_updates_enabled": float(policy_updates_enabled),
+        "training_epochs": float(effective_training_epochs),
     }
     if proximal_ewma is not None:
         ratio_count = max(proximal_behavior_ratio_count, 1)
@@ -950,6 +957,9 @@ def main() -> None:
                 update_observation_normalizer=policy_warmup.policy_updates_enabled,
             )
             policy_warmup.observe(rollout["values"], rollout["returns"])
+            training_epochs = policy_warmup.training_epochs(
+                args.epochs, args.policy_warmup_epochs_multiplier
+            )
             stats = update_model(
                 model,
                 raw_model,
@@ -961,6 +971,7 @@ def main() -> None:
                 proximal_ewma,
                 proximal_model,
                 policy_updates_enabled=policy_warmup.policy_updates_enabled,
+                training_epochs=training_epochs,
             )
             timing_totals["forward_seconds"] += (
                 rollout_timing["forward_seconds"] + stats["forward_seconds"]
@@ -1015,6 +1026,7 @@ def main() -> None:
                 "timing/env_step_seconds_total": timing_totals["env_step_seconds"],
                 "train/current_behavior_approx_kl": stats["current_behavior_approx_kl"],
                 "train/policy_updates_enabled": stats["policy_updates_enabled"],
+                "train/ppo_epochs": stats["training_epochs"],
             }
             ewma_metric_names = {
                 "behavior_proximal_approx_kl": "train/behavior_proximal_approx_kl",
@@ -1046,6 +1058,7 @@ def main() -> None:
                 f"mean_reward={metrics['train/mean_reward']:.5f} "
                 f"explained_variance={metrics['train/explained_variance']:.5f} "
                 f"policy_updates={bool(stats['policy_updates_enabled'])} "
+                f"epochs={int(stats['training_epochs'])} "
                 f"policy_loss={stats['policy_loss']:.5f} value_loss={stats['value_loss']:.5f} "
                 f"entropy={stats['entropy']:.5f} checkpoint={checkpoint}",
                 flush=True,
@@ -1143,6 +1156,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("policy_unfreeze_explained_variance must be finite and < 1")
     if config["policy_freeze_scope"] not in {"all_except_value", "policy_objective"}:
         raise ValueError("policy_freeze_scope must be 'all_except_value' or 'policy_objective'")
+    if config["policy_warmup_epochs_multiplier"] <= 0:
+        raise ValueError("policy_warmup_epochs_multiplier must be positive")
     if config["eval_temperature"] < 0.0:
         raise ValueError("eval_temperature must be non-negative")
     if config["eval_seed_num"] <= 0:

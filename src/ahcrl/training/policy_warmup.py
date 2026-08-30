@@ -39,6 +39,16 @@ class ExplainedVariancePolicyWarmup:
     def policy_updates_enabled(self) -> bool:
         return self.policy_unfrozen
 
+    def training_epochs(self, base_epochs: int, warmup_multiplier: int) -> int:
+        """現在の凍結状態に応じた optimizer epoch 数を返す。"""
+        if base_epochs <= 0:
+            raise ValueError("base epochs must be positive")
+        if warmup_multiplier <= 0:
+            raise ValueError("policy warm-up epochs multiplier must be positive")
+        if self.policy_updates_enabled:
+            return base_epochs
+        return base_epochs * warmup_multiplier
+
     def state_dict(self) -> dict[str, float | bool]:
         return {
             "threshold": self.threshold,

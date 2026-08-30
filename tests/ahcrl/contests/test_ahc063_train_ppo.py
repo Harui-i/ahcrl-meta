@@ -127,15 +127,20 @@ def test_parse_args_supports_policy_warmup_and_rejects_invalid_values() -> None:
             "0.8",
             "--policy-freeze-scope",
             "policy_objective",
+            "--policy-warmup-epochs-multiplier",
+            "3",
         ]
     )
 
     assert args.policy_unfreeze_explained_variance == 0.8
     assert args.policy_freeze_scope == "policy_objective"
+    assert args.policy_warmup_epochs_multiplier == 3
     with pytest.raises(ValueError, match="policy_unfreeze_explained_variance"):
         parse_args(["--policy-unfreeze-explained-variance", "1"])
     with pytest.raises(ValueError, match="policy_freeze_scope"):
         parse_args(["--policy-freeze-scope", "invalid"])
+    with pytest.raises(ValueError, match="policy_warmup_epochs_multiplier"):
+        parse_args(["--policy-warmup-epochs-multiplier", "0"])
 
 
 def test_evaluate_policy_rolls_out_fixed_seeds_reproducibly_without_updating_obs_norm(
@@ -434,6 +439,7 @@ def test_update_model_warmup_updates_only_value_head() -> None:
     )
 
     assert stats["policy_updates_enabled"] == 0.0
+    assert stats["training_epochs"] == 1.0
     assert stats["weighted_policy_loss"] == 0.0
     assert stats["entropy_loss"] == 0.0
     for name, parameter in model.named_parameters():
