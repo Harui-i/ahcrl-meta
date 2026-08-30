@@ -14,6 +14,7 @@ from torch.distributions import Categorical, kl_divergence
 
 from ahcrl.envs import RustVecEnv, cargo_server_command
 from ahcrl.training import (
+    ExplainedVariancePolicyWarmup,
     FixedSeedEvaluation,
     TrainingProgress,
     WandbConfig,
@@ -60,6 +61,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "minibatch_size": 1024,
     "entropy_coef": 0.01,
     "value_coef": 0.5,
+    "policy_unfreeze_explained_variance": 0.75,
+    "policy_freeze_scope": "all_except_value",
     "max_grad_norm": 0.5,
     "proximal_ewma": False,
     "proximal_ewma_com": 1024.0,
@@ -104,6 +107,7 @@ RESUME_ALLOWED_OVERRIDE_KEYS = {
     "epochs",
     "lr",
     "num_envs",
+    "policy_unfreeze_explained_variance",
     "wandb_name",
 } | EVALUATION_CONFIG_KEYS
 WANDB_CONFIG_KEYS = {
@@ -466,6 +470,8 @@ def collect_rollout(
     args: argparse.Namespace,
     device: torch.device,
     reward_scaler: RunningRewardScaler | None,
+    *,
+    update_observation_normalizer: bool = True,
 ) -> tuple[dict[str, torch.Tensor], dict[str, np.ndarray], dict[str, float]]:
     observations: list[torch.Tensor] = []
     actions: list[torch.Tensor] = []
@@ -484,7 +490,11 @@ def collect_rollout(
         encoded = encoded.to(dtype=MODEL_DTYPE if device.type == "cuda" else torch.float32)
         normalizer = _observation_normalizer(model)
         if normalizer is not None:
-            encoded = normalizer.update_and_normalize(encoded)
+            encoded = (
+                normalizer.update_and_normalize(encoded)
+                if update_observation_normalizer
+                else normalizer.normalize(encoded)
+            )
         mask = torch.from_numpy(obs["mask"]).to(device=device)
         if device.type == "cpu":
             mask = mask.clone()
@@ -614,6 +624,8 @@ def update_model(
     master_weights: FP32MasterWeights | None = None,
     proximal_ewma: ProximalPolicyEWMA | None = None,
     proximal_model: nn.Module | None = None,
+    *,
+    policy_updates_enabled: bool = True,
 ) -> dict[str, float]:
     if (proximal_ewma is None) != (proximal_model is None):
         raise ValueError("proximal EWMA state and model must be provided together")
@@ -680,9 +692,9 @@ def update_model(
             )
             value_loss = 0.5 * (value.float() - returns[index]).square().mean()
             entropy = dist.entropy().mean()
-            weighted_policy_loss = policy_loss
+            weighted_policy_loss = policy_loss if policy_updates_enabled else policy_loss * 0.0
             weighted_value_loss = args.value_coef * value_loss
-            entropy_loss = -args.entropy_coef * entropy
+            entropy_loss = -args.entropy_coef * entropy if policy_updates_enabled else entropy * 0.0
             loss = weighted_policy_loss + weighted_value_loss + entropy_loss
             _synchronize_device(device)
             forward_seconds += time.perf_counter() - forward_started
@@ -697,6 +709,14 @@ def update_model(
             _synchronize_device(device)
             backward_started = time.perf_counter()
             loss.backward()
+            if not policy_updates_enabled:
+                for name, parameter in raw_model.named_parameters():
+                    if args.policy_freeze_scope == "all_except_value":
+                        keep_gradient = name.startswith("value.")
+                    else:
+                        keep_gradient = not name.startswith("policy.")
+                    if not keep_gradient:
+                        parameter.grad = None
             _synchronize_device(device)
             backward_seconds += time.perf_counter() - backward_started
             if master_weights is None:
@@ -781,6 +801,7 @@ def update_model(
         "backward_seconds": backward_seconds,
         "proximal_forward_seconds": proximal_forward_seconds,
         "current_behavior_approx_kl": current_behavior_approx_kl_total / max(count, 1),
+        "policy_updates_enabled": float(policy_updates_enabled),
     }
     if proximal_ewma is not None:
         ratio_count = max(proximal_behavior_ratio_count, 1)
@@ -833,6 +854,7 @@ def main() -> None:
         else None
     )
     scaler = RunningRewardScaler() if args.reward_scale else None
+    policy_warmup = ExplainedVariancePolicyWarmup(args.policy_unfreeze_explained_variance)
     global_step = update = 0
     if args.resume_dir is not None:
         checkpoint = load_latest_training_checkpoint(
@@ -852,6 +874,11 @@ def main() -> None:
             if not isinstance(proximal_state, dict):
                 raise ValueError("checkpoint extras missing proximal_policy_ewma")
             proximal_ewma.load_state_dict(proximal_state)
+        policy_warmup_state = checkpoint.extras.get("policy_warmup")
+        if policy_warmup_state is not None:
+            if not isinstance(policy_warmup_state, dict):
+                raise ValueError("checkpoint policy_warmup state must be an object")
+            policy_warmup.load_state_dict(policy_warmup_state)
         scaler_state = checkpoint.extras.get("reward_scaler")
         if scaler is not None and scaler_state is not None:
             if not isinstance(scaler_state, dict):
@@ -913,7 +940,16 @@ def main() -> None:
             wandb_run_id=None if wandb_run is None else wandb_run.id,
         )
         while global_step < args.total_steps:
-            rollout, obs, rollout_timing = collect_rollout(model, env, obs, args, device, scaler)
+            rollout, obs, rollout_timing = collect_rollout(
+                model,
+                env,
+                obs,
+                args,
+                device,
+                scaler,
+                update_observation_normalizer=policy_warmup.policy_updates_enabled,
+            )
+            policy_warmup.observe(rollout["values"], rollout["returns"])
             stats = update_model(
                 model,
                 raw_model,
@@ -924,6 +960,7 @@ def main() -> None:
                 master_weights,
                 proximal_ewma,
                 proximal_model,
+                policy_updates_enabled=policy_warmup.policy_updates_enabled,
             )
             timing_totals["forward_seconds"] += (
                 rollout_timing["forward_seconds"] + stats["forward_seconds"]
@@ -948,6 +985,7 @@ def main() -> None:
                         "proximal_policy_ewma": (
                             None if proximal_ewma is None else proximal_ewma.state_dict()
                         ),
+                        "policy_warmup": policy_warmup.state_dict(),
                     },
                 )
                 if args.eval_enabled:
@@ -976,6 +1014,7 @@ def main() -> None:
                 "timing/proximal_forward_seconds_total": timing_totals["proximal_forward_seconds"],
                 "timing/env_step_seconds_total": timing_totals["env_step_seconds"],
                 "train/current_behavior_approx_kl": stats["current_behavior_approx_kl"],
+                "train/policy_updates_enabled": stats["policy_updates_enabled"],
             }
             ewma_metric_names = {
                 "behavior_proximal_approx_kl": "train/behavior_proximal_approx_kl",
@@ -1005,6 +1044,8 @@ def main() -> None:
             print(
                 f"update={update} step={global_step} fps={metrics['summary/fps']:.1f} "
                 f"mean_reward={metrics['train/mean_reward']:.5f} "
+                f"explained_variance={metrics['train/explained_variance']:.5f} "
+                f"policy_updates={bool(stats['policy_updates_enabled'])} "
                 f"policy_loss={stats['policy_loss']:.5f} value_loss={stats['value_loss']:.5f} "
                 f"entropy={stats['entropy']:.5f} checkpoint={checkpoint}",
                 flush=True,
@@ -1097,6 +1138,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("checkpoint_interval_updates must be positive")
     if not math.isfinite(config["proximal_ewma_com"]) or config["proximal_ewma_com"] <= 0.0:
         raise ValueError("proximal_ewma_com must be finite and positive")
+    threshold = config["policy_unfreeze_explained_variance"]
+    if not math.isfinite(threshold) or threshold >= 1.0:
+        raise ValueError("policy_unfreeze_explained_variance must be finite and < 1")
+    if config["policy_freeze_scope"] not in {"all_except_value", "policy_objective"}:
+        raise ValueError("policy_freeze_scope must be 'all_except_value' or 'policy_objective'")
     if config["eval_temperature"] < 0.0:
         raise ValueError("eval_temperature must be non-negative")
     if config["eval_seed_num"] <= 0:

@@ -120,6 +120,24 @@ def test_parse_args_supports_proximal_ewma_and_rejects_invalid_com() -> None:
         parse_args(["--proximal-ewma-com", "0"])
 
 
+def test_parse_args_supports_policy_warmup_and_rejects_invalid_values() -> None:
+    args = parse_args(
+        [
+            "--policy-unfreeze-explained-variance",
+            "0.8",
+            "--policy-freeze-scope",
+            "policy_objective",
+        ]
+    )
+
+    assert args.policy_unfreeze_explained_variance == 0.8
+    assert args.policy_freeze_scope == "policy_objective"
+    with pytest.raises(ValueError, match="policy_unfreeze_explained_variance"):
+        parse_args(["--policy-unfreeze-explained-variance", "1"])
+    with pytest.raises(ValueError, match="policy_freeze_scope"):
+        parse_args(["--policy-freeze-scope", "invalid"])
+
+
 def test_evaluate_policy_rolls_out_fixed_seeds_reproducibly_without_updating_obs_norm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -365,3 +383,65 @@ def test_update_model_records_proximal_diagnostics_for_identical_policies() -> N
     assert stats["proximal_behavior_ratio_mean"] == pytest.approx(1.0)
     assert stats["proximal_behavior_ratio_std"] == pytest.approx(0.0)
     assert stats["proximal_behavior_ratio_ess_fraction"] == pytest.approx(1.0)
+
+
+def test_update_model_warmup_updates_only_value_head() -> None:
+    args = parse_args(
+        [
+            "--device",
+            "cpu",
+            "--model-channels",
+            "4",
+            "--model-blocks",
+            "1",
+            "--no-obs-norm",
+            "--epochs",
+            "1",
+            "--minibatch-size",
+            "2",
+            "--lr",
+            "0.01",
+        ]
+    )
+    model = create_model(args, torch.device("cpu"))
+    master_weights = FP32MasterWeights(model)
+    optimizer = torch.optim.AdamW(master_weights.parameters, lr=args.lr)
+    observations = torch.randn(1, 2, model.NUM_PLANES, 8, 8)
+    masks = torch.ones(1, 2, model.ACTION_COUNT, dtype=torch.bool)
+    with torch.inference_mode():
+        logits, values = model(observations.flatten(0, 1))
+        distribution = torch.distributions.Categorical(logits=logits.float())
+        actions = torch.tensor([0, 1])
+    rollout = {
+        "obs": observations,
+        "actions": actions.reshape(1, 2),
+        "logprobs": distribution.log_prob(actions).reshape(1, 2),
+        "advantages": torch.tensor([[1.0, -1.0]]),
+        "returns": values.detach().reshape(1, 2) + 1.0,
+        "masks": masks,
+    }
+    before = {name: parameter.detach().clone() for name, parameter in model.named_parameters()}
+
+    stats = update_model(
+        model,
+        model,
+        optimizer,
+        rollout,
+        args,
+        torch.device("cpu"),
+        master_weights,
+        policy_updates_enabled=False,
+    )
+
+    assert stats["policy_updates_enabled"] == 0.0
+    assert stats["weighted_policy_loss"] == 0.0
+    assert stats["entropy_loss"] == 0.0
+    for name, parameter in model.named_parameters():
+        if name.startswith("value."):
+            continue
+        assert torch.equal(parameter, before[name]), name
+    assert any(
+        not torch.equal(parameter, before[name])
+        for name, parameter in model.named_parameters()
+        if name.startswith("value.")
+    )

@@ -18,6 +18,8 @@ epochs = 1
 minibatch_size = 256
 entropy_coef = 0.0001
 value_coef = 0.5
+policy_unfreeze_explained_variance = 0.75
+policy_freeze_scope = "all_except_value"
 max_grad_norm = 0.5
 
 [wandb]

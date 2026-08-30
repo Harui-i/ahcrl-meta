@@ -4,6 +4,8 @@ from collections.abc import Mapping
 
 import torch
 
+from .policy_warmup import calculate_explained_variance
+
 
 def build_completed_episode_score_metrics(
     scores: torch.Tensor,
@@ -45,12 +47,7 @@ def build_standard_ppo_metrics(
     advantages = rollout["advantages"].float()
     returns = rollout["returns"].float()
     masks = rollout.get("masks")
-    return_variance = returns.var(unbiased=False)
-    explained_variance = float("nan")
-    if float(return_variance.item()) > 1e-8:
-        explained_variance = float(
-            (1.0 - (returns - values).var(unbiased=False) / return_variance).item()
-        )
+    explained_variance = calculate_explained_variance(values, returns)
     valid_action_fraction = 1.0 if masks is None else float(masks.float().mean().item())
 
     metrics: dict[str, float | int] = {

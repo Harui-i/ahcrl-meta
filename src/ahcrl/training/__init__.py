@@ -18,12 +18,14 @@ from .evaluation import (
     write_visualizer_artifacts,
 )
 from .metrics import build_completed_episode_score_metrics, build_standard_ppo_metrics
+from .policy_warmup import ExplainedVariancePolicyWarmup, calculate_explained_variance
 from .run import get_wandb_run_id, prepare_run_dir, update_run_state, write_config
 from .wandb import WandbConfig, finish_wandb, init_wandb
 
 __all__ = [
     "FORMAT_VERSION",
     "EVALUATIONS_FILE_NAME",
+    "ExplainedVariancePolicyWarmup",
     "FixedSeedEvaluation",
     "LoadedTrainingCheckpoint",
     "TrainingProgress",
@@ -32,6 +34,7 @@ __all__ = [
     "build_completed_episode_score_metrics",
     "build_evaluation_metrics",
     "build_standard_ppo_metrics",
+    "calculate_explained_variance",
     "config_for_save",
     "evaluate_fixed_seeds",
     "finish_wandb",
