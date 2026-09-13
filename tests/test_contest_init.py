@@ -76,6 +76,10 @@ def test_starter_uses_shared_rust_env_protocol(tmp_path: Path) -> None:
     assert 'tools = { path = "../tools" }' in manifest
     assert "impl EnvFactory for Ahc068Factory" in library
     assert "impl ContestEnv for Ahc068Env" in library
+    assert "StepOutcome" in library
+    assert "fn initial_outcome(&self) -> StepOutcome" in library
+    assert "fn step(&mut self, _action: u32) -> Result<StepOutcome, String>" in library
+    assert "fn reward(&self)" not in library
     assert "pub fn from_seed(seed: u64, _config: &Ahc068EnvConfig)" in library
     assert "TODO: 公式 simulator を1ターン進める" in library
     assert "server_main::<Ahc068Factory>()" in server

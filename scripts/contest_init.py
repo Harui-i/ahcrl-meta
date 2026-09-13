@@ -194,7 +194,7 @@ git diff --no-index /dev/null contests/ahc-063/tools/src/rl_bridge.rs
 AHC061/AHC063 の exporter を参考にする。
 """
     files[f"contests/{directory}/rl-tools/src/lib.rs"] = render(
-        """use ahcrl_env_core::{ContestEnv, EnvFactory, EnvSpec};
+        """use ahcrl_env_core::{ContestEnv, EnvFactory, EnvSpec, StepOutcome};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -245,20 +245,16 @@ impl ContestEnv for __ENV__ {
         Err("TODO: コンテストの action を検証する".to_owned())
     }
 
-    fn step(&mut self, _action: u32) -> Result<(), String> {
+    fn initial_outcome(&self) -> StepOutcome {
+        StepOutcome {
+            reward: 0.0,
+            done: false,
+            score: 0,
+        }
+    }
+
+    fn step(&mut self, _action: u32) -> Result<StepOutcome, String> {
         Err("TODO: 公式 simulator を1ターン進める".to_owned())
-    }
-
-    fn reward(&self) -> f32 {
-        0.0
-    }
-
-    fn done(&self) -> bool {
-        false
-    }
-
-    fn score(&self) -> i64 {
-        0
     }
 
     fn write_observation(&self, _name: &str, _destination: &mut [u8]) -> Result<(), String> {
