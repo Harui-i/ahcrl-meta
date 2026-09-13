@@ -106,12 +106,19 @@ impl EnvSpec {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StepOutcome {
+    pub reward: f32,
+    pub done: bool,
+    pub score: i64,
+}
+
 pub trait ContestEnv {
     fn validate_action(&self, action: u32) -> Result<(), String>;
-    fn step(&mut self, action: u32) -> Result<(), String>;
-    fn reward(&self) -> f32;
-    fn done(&self) -> bool;
-    fn score(&self) -> i64;
+    /// Returns the values reported immediately after constructing or resetting this environment.
+    fn initial_outcome(&self) -> StepOutcome;
+    /// Advances the environment once and returns the values reported for this transition.
+    fn step(&mut self, action: u32) -> Result<StepOutcome, String>;
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String>;
     fn write_metric(&self, name: &str, destination: &mut [u8]) -> Result<(), String>;
 
@@ -139,6 +146,7 @@ pub struct VecEnvServer<F: EnvFactory> {
     spec: EnvSpec,
     num_envs: usize,
     envs: Vec<F::Env>,
+    outcomes: Vec<StepOutcome>,
 }
 
 impl<F: EnvFactory> VecEnvServer<F> {
@@ -154,6 +162,7 @@ impl<F: EnvFactory> VecEnvServer<F> {
             spec,
             num_envs,
             envs: Vec::new(),
+            outcomes: Vec::new(),
         })
     }
 
@@ -164,12 +173,13 @@ impl<F: EnvFactory> VecEnvServer<F> {
     pub fn reset_all(&mut self, seed_start: u64, seed_stride: u64) -> Result<(), String> {
         let mut replacements = Vec::with_capacity(self.num_envs);
         for env_id in 0..self.num_envs {
-            replacements.push(
-                self.factory
-                    .create(seed_for(seed_start, seed_stride, env_id)?)?,
-            );
+            let env = self
+                .factory
+                .create(seed_for(seed_start, seed_stride, env_id)?)?;
+            replacements.push((env.initial_outcome(), env));
         }
-        self.envs = replacements;
+        self.outcomes = replacements.iter().map(|(outcome, _)| *outcome).collect();
+        self.envs = replacements.into_iter().map(|(_, env)| env).collect();
         Ok(())
     }
 
@@ -193,15 +203,15 @@ impl<F: EnvFactory> VecEnvServer<F> {
         let mut replacements = Vec::new();
         for (env_id, &reset) in mask.iter().enumerate() {
             if reset != 0 {
-                replacements.push((
-                    env_id,
-                    self.factory
-                        .create(seed_for(seed_start, seed_stride, env_id)?)?,
-                ));
+                let env = self
+                    .factory
+                    .create(seed_for(seed_start, seed_stride, env_id)?)?;
+                replacements.push((env_id, env.initial_outcome(), env));
             }
         }
-        for (env_id, replacement) in replacements {
+        for (env_id, outcome, replacement) in replacements {
             self.envs[env_id] = replacement;
+            self.outcomes[env_id] = outcome;
         }
         Ok(())
     }
@@ -224,8 +234,15 @@ impl<F: EnvFactory> VecEnvServer<F> {
 
     pub fn step(&mut self, actions: &[u32]) -> Result<(), String> {
         self.validate_actions(actions)?;
-        for (env_id, (env, &action)) in self.envs.iter_mut().zip(actions).enumerate() {
-            env.step(action)
+        for (env_id, ((env, outcome), &action)) in self
+            .envs
+            .iter_mut()
+            .zip(&mut self.outcomes)
+            .zip(actions)
+            .enumerate()
+        {
+            *outcome = env
+                .step(action)
                 .map_err(|error| format!("internal step failure in env {env_id}: {error}"))?;
         }
         Ok(())
@@ -262,11 +279,17 @@ impl<F: EnvFactory> VecEnvServer<F> {
                     .map_err(|error| format!("env {env_id}: {error}"))?;
             }
         }
-        for (env_id, ((env, &selected), &action)) in
-            self.envs.iter_mut().zip(mask).zip(actions).enumerate()
+        for (env_id, (((env, outcome), &selected), &action)) in self
+            .envs
+            .iter_mut()
+            .zip(&mut self.outcomes)
+            .zip(mask)
+            .zip(actions)
+            .enumerate()
         {
             if selected != 0 {
-                env.step(action)
+                *outcome = env
+                    .step(action)
                     .map_err(|error| format!("internal step failure in env {env_id}: {error}"))?;
             }
         }
@@ -292,14 +315,14 @@ impl<F: EnvFactory> VecEnvServer<F> {
         for tensor in &self.spec.observations {
             self.encode_tensor(tensor, false, &mut output)?;
         }
-        for env in &self.envs {
-            output.extend_from_slice(&env.reward().to_le_bytes());
+        for outcome in &self.outcomes {
+            output.extend_from_slice(&outcome.reward.to_le_bytes());
         }
-        for env in &self.envs {
-            output.push(u8::from(env.done()));
+        for outcome in &self.outcomes {
+            output.push(u8::from(outcome.done));
         }
-        for env in &self.envs {
-            output.extend_from_slice(&env.score().to_le_bytes());
+        for outcome in &self.outcomes {
+            output.extend_from_slice(&outcome.score.to_le_bytes());
         }
         for tensor in &self.spec.metrics {
             self.encode_tensor(tensor, true, &mut output)?;
@@ -500,9 +523,11 @@ where
                 reader
                     .read_exact(&mut bytes)
                     .map_err(|error| format!("failed to read actions: {error}"))?;
-                let actions = bytes
-                    .chunks_exact(4)
-                    .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("four-byte chunk")))
+                let (action_bytes, remainder) = bytes.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                let actions = action_bytes
+                    .iter()
+                    .map(|&chunk| u32::from_le_bytes(chunk))
                     .collect::<Vec<_>>();
                 if let Err(error) = server.validate_actions(&actions) {
                     send_error(&mut writer, &error)?;
@@ -528,9 +553,11 @@ where
                 reader
                     .read_exact(&mut bytes)
                     .map_err(|error| format!("failed to read actions: {error}"))?;
-                let actions = bytes
-                    .chunks_exact(4)
-                    .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("four-byte chunk")))
+                let (action_bytes, remainder) = bytes.as_chunks::<4>();
+                debug_assert!(remainder.is_empty());
+                let actions = action_bytes
+                    .iter()
+                    .map(|&chunk| u32::from_le_bytes(chunk))
                     .collect::<Vec<_>>();
                 if let Err(error) = server.step_mask(&mask, &actions) {
                     send_error(&mut writer, &error)?;
@@ -650,7 +677,9 @@ where
             destination.len()
         ));
     }
-    for (&value, chunk) in values.iter().zip(destination.chunks_exact_mut(N)) {
+    let (chunks, remainder) = destination.as_chunks_mut::<N>();
+    debug_assert!(remainder.is_empty());
+    for (&value, chunk) in values.iter().zip(chunks) {
         chunk.copy_from_slice(&to_bytes(value));
     }
     Ok(())
@@ -663,7 +692,6 @@ mod tests {
     #[derive(Clone)]
     struct DummyEnv {
         value: u32,
-        reward: f32,
     }
 
     impl ContestEnv for DummyEnv {
@@ -675,22 +703,21 @@ mod tests {
             }
         }
 
-        fn step(&mut self, action: u32) -> Result<(), String> {
+        fn initial_outcome(&self) -> StepOutcome {
+            StepOutcome {
+                reward: 0.0,
+                done: false,
+                score: self.value as i64,
+            }
+        }
+
+        fn step(&mut self, action: u32) -> Result<StepOutcome, String> {
             self.value += action;
-            self.reward = action as f32;
-            Ok(())
-        }
-
-        fn reward(&self) -> f32 {
-            self.reward
-        }
-
-        fn done(&self) -> bool {
-            false
-        }
-
-        fn score(&self) -> i64 {
-            self.value as i64
+            Ok(StepOutcome {
+                reward: action as f32,
+                done: false,
+                score: self.value as i64,
+            })
         }
 
         fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
@@ -736,10 +763,7 @@ mod tests {
         }
 
         fn create(&self, seed: u64) -> Result<Self::Env, String> {
-            Ok(DummyEnv {
-                value: seed as u32,
-                reward: 0.0,
-            })
+            Ok(DummyEnv { value: seed as u32 })
         }
     }
 
@@ -751,6 +775,26 @@ mod tests {
         assert_eq!(server.envs[0].value, 10);
         assert_eq!(server.envs[1].value, 103);
         assert_eq!(server.envs[2].value, 14);
+        assert_eq!(
+            server.outcomes,
+            vec![
+                StepOutcome {
+                    reward: 0.0,
+                    done: false,
+                    score: 10
+                },
+                StepOutcome {
+                    reward: 0.0,
+                    done: false,
+                    score: 103
+                },
+                StepOutcome {
+                    reward: 0.0,
+                    done: false,
+                    score: 14
+                },
+            ]
+        );
     }
 
     #[test]
@@ -769,6 +813,21 @@ mod tests {
         server.step_mask(&[1, 0], &[2, 99]).unwrap();
         assert_eq!(server.envs[0].value, 7);
         assert_eq!(server.envs[1].value, 6);
+        assert_eq!(
+            server.outcomes,
+            vec![
+                StepOutcome {
+                    reward: 2.0,
+                    done: false,
+                    score: 7
+                },
+                StepOutcome {
+                    reward: 0.0,
+                    done: false,
+                    score: 6
+                },
+            ]
+        );
     }
 
     #[test]

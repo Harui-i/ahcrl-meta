@@ -1,6 +1,6 @@
 use ahcrl_env_core::{
-    write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, TensorSpec, VisualizerData,
-    PROTOCOL_VERSION,
+    write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, StepOutcome, TensorSpec,
+    VisualizerData, PROTOCOL_VERSION,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -144,7 +144,6 @@ pub struct Ahc063Env {
     max_steps: usize,
     previous_action: Option<usize>,
     best_score: i64,
-    reward: f32,
     done: bool,
 }
 
@@ -176,7 +175,6 @@ impl Ahc063Env {
             max_steps,
             previous_action: None,
             best_score,
-            reward: 0.0,
             done: false,
         })
     }
@@ -297,34 +295,35 @@ impl ContestEnv for Ahc063Env {
         Ok(())
     }
 
-    fn step(&mut self, action: u32) -> Result<(), String> {
+    fn initial_outcome(&self) -> StepOutcome {
+        StepOutcome {
+            reward: 0.0,
+            done: self.done,
+            score: self.best_score,
+        }
+    }
+
+    fn step(&mut self, action: u32) -> Result<StepOutcome, String> {
         self.validate_action(action)?;
         let action = action as usize;
         self.state.apply(action)?;
         self.actions.push(action);
         self.previous_action = Some(action);
         let current_score = self.state.score();
-        if current_score < self.best_score {
-            self.reward = (self.best_score - current_score) as f32 / 10_000.0;
+        let reward = if current_score < self.best_score {
+            let reward = (self.best_score - current_score) as f32 / 10_000.0;
             self.best_score = current_score;
+            reward
         } else {
-            self.reward = 0.0;
-        }
+            0.0
+        };
         let view = state_view(&self.state);
         self.done = is_complete(&self.input, &view) || view.turn >= self.max_steps;
-        Ok(())
-    }
-
-    fn reward(&self) -> f32 {
-        self.reward
-    }
-
-    fn done(&self) -> bool {
-        self.done
-    }
-
-    fn score(&self) -> i64 {
-        self.best_score
+        Ok(StepOutcome {
+            reward,
+            done: self.done,
+            score: self.best_score,
+        })
     }
 
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
@@ -398,11 +397,12 @@ mod tests {
         let mut saw_final_score_above_best = false;
         for seed in [0_u64, 1, 3, 99] {
             let mut slot = Ahc063Env::from_seed(seed, &default_config()).unwrap();
-            let initial_score = slot.score();
+            let mut outcome = slot.initial_outcome();
+            let initial_score = outcome.score;
             let mut expected_best_score = initial_score;
             let mut reward_sum = 0.0_f32;
             for turn in 0..512 {
-                if slot.done() {
+                if outcome.done {
                     break;
                 }
                 let candidates = slot
@@ -412,21 +412,21 @@ mod tests {
                     .filter_map(|(action, &legal)| (legal != 0).then_some(action))
                     .collect::<Vec<_>>();
                 let action = candidates[(turn * 17 + seed as usize) % candidates.len()];
-                slot.step(action as u32).unwrap();
-                reward_sum += slot.reward();
-                saw_positive_reward |= slot.reward() > 0.0;
+                outcome = slot.step(action as u32).unwrap();
+                reward_sum += outcome.reward;
+                saw_positive_reward |= outcome.reward > 0.0;
                 let (prefix_score, error, _) = compute_score_details(&slot.input, &slot.actions);
                 assert_eq!(error, "");
                 expected_best_score = expected_best_score.min(prefix_score);
-                assert_eq!(slot.score(), expected_best_score);
-                assert!(slot.reward() >= 0.0);
+                assert_eq!(outcome.score, expected_best_score);
+                assert!(outcome.reward >= 0.0);
             }
             let expected_reward = (initial_score - expected_best_score) as f32 / 10_000.0;
             assert!((reward_sum - expected_reward).abs() < 1e-3);
             assert_eq!(slot.output_text().lines().count(), slot.actions.len());
             let (final_score, error, _) = compute_score_details(&slot.input, &slot.actions);
             assert_eq!(error, "");
-            saw_final_score_above_best |= final_score > slot.score();
+            saw_final_score_above_best |= final_score > outcome.score;
         }
         assert!(saw_positive_reward);
         assert!(saw_final_score_above_best);
@@ -448,9 +448,9 @@ mod tests {
             })
             .unwrap();
 
-        slot.step(action as u32).unwrap();
+        let outcome = slot.step(action as u32).unwrap();
 
-        assert_eq!(slot.reward(), 0.0);
+        assert_eq!(outcome.reward, 0.0);
         let planes = slot.encode_planes();
         assert!((planes[plane_index(39, 0, 0)] - 0.0001).abs() < 1e-7);
     }
@@ -498,16 +498,17 @@ mod tests {
         };
         let mut slot = Ahc063Env::from_seed(0, &config).unwrap();
         let expected_steps = slot.input.N * slot.input.N;
-        while !slot.done() {
+        let mut outcome = slot.initial_outcome();
+        while !outcome.done {
             let action = slot
                 .legal_mask()
                 .iter()
                 .position(|&legal| legal != 0)
                 .unwrap();
-            slot.step(action as u32).unwrap();
+            outcome = slot.step(action as u32).unwrap();
         }
         assert_eq!(slot.actions.len(), expected_steps);
-        assert!(slot.done());
+        assert!(outcome.done);
         assert!(slot.validate_action(0).is_err());
     }
 }

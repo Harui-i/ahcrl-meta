@@ -1,7 +1,8 @@
 //! AHC061 adapter for the shared vector-environment protocol.
 
 use ahcrl_env_core::{
-    write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, TensorSpec, PROTOCOL_VERSION,
+    write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, StepOutcome, TensorSpec,
+    PROTOCOL_VERSION,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -72,7 +73,9 @@ fn fill_plane(plane_bytes: &mut [u8], plane: usize, value: f32) {
     let bits = f32_to_f16_bits(value).to_le_bytes();
     let start = plane * BOARD_SIZE * BOARD_SIZE * std::mem::size_of::<u16>();
     let end = start + BOARD_SIZE * BOARD_SIZE * std::mem::size_of::<u16>();
-    for chunk in plane_bytes[start..end].chunks_exact_mut(2) {
+    let (chunks, remainder) = plane_bytes[start..end].as_chunks_mut::<2>();
+    debug_assert!(remainder.is_empty());
+    for chunk in chunks {
         chunk.copy_from_slice(&bits);
     }
 }
@@ -696,21 +699,22 @@ impl ContestEnv for EnvSlot {
         Ok(())
     }
 
-    fn step(&mut self, action: u32) -> Result<(), String> {
+    fn initial_outcome(&self) -> StepOutcome {
+        StepOutcome {
+            reward: 0.0,
+            done: self.done,
+            score: self.score(),
+        }
+    }
+
+    fn step(&mut self, action: u32) -> Result<StepOutcome, String> {
         self.validate_action(action)?;
-        self.step_action_index(action as usize)
-    }
-
-    fn reward(&self) -> f32 {
-        self.reward as f32
-    }
-
-    fn done(&self) -> bool {
-        self.done
-    }
-
-    fn score(&self) -> i64 {
-        self.score()
+        self.step_action_index(action as usize)?;
+        Ok(StepOutcome {
+            reward: self.reward as f32,
+            done: self.done,
+            score: self.score(),
+        })
     }
 
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
@@ -740,9 +744,11 @@ impl ContestEnv for EnvSlot {
 }
 
 fn decode_f16(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(2)
-        .map(|chunk| f16_to_f32(u16::from_le_bytes([chunk[0], chunk[1]])))
+    let (chunks, remainder) = bytes.as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    chunks
+        .iter()
+        .map(|&chunk| f16_to_f32(u16::from_le_bytes(chunk)))
         .collect()
 }
 
