@@ -4,9 +4,15 @@ import pytest
 import torch
 from torch import nn
 
-from ahcrl.nn.modula import ModularLinear, ModularSequential
+from ahcrl.nn.modula import (
+    BoundedDiagonalGeometry,
+    BoundedRMSVectorGeometry,
+    ModularLinear,
+    ModularSequential,
+)
 from ahcrl.training.checkpoint import (
     TrainingProgress,
+    load_initial_model,
     load_training_checkpoint,
     save_training_checkpoint,
 )
@@ -60,7 +66,7 @@ def test_master_weights_retain_fp32_updates_after_model_sync() -> None:
     assert not torch.equal(master.parameters[0], model_weight.float())
 
 
-def test_hybrid_optimizer_updates_modular_and_adaptive_parameters() -> None:
+def test_hybrid_optimizer_updates_modular_and_bounded_parameters() -> None:
     model = _model()
     master = FP32MasterWeights(model)
     optimizer = build_optimizer(model=model, master_weights=master, config=_config())
@@ -70,16 +76,16 @@ def test_hybrid_optimizer_updates_modular_and_adaptive_parameters() -> None:
     _take_step(model, master, optimizer)
 
     assert optimizer.momentum_buffers
-    assert optimizer.adaptive_first_moments
-    assert optimizer.adaptive_second_moments
+    assert optimizer.bounded_first_moments
+    assert optimizer.bounded_second_moments
     assert "optimizer/linear/update_spectral_norm" in optimizer.last_metrics
-    assert "optimizer/adaptive_rms/update_natural_norm" in optimizer.last_metrics
+    assert "optimizer/bounded_rms_vector/update_natural_norm" in optimizer.last_metrics
     assert any(
         not torch.equal(before[name], parameter) for name, parameter in model.named_parameters()
     )
 
 
-def test_adaptive_parameter_uses_global_lr_and_allocated_rms_budget() -> None:
+def test_bounded_parameter_uses_global_lr_and_allocated_rms_budget() -> None:
     model = ModularSequential(ModularLinear(3, 2))
     master = FP32MasterWeights(model)
     config = _config()
@@ -96,7 +102,32 @@ def test_adaptive_parameter_uses_global_lr_and_allocated_rms_budget() -> None:
     optimizer.step()
 
     update_rms = float((bias - before).square().mean().sqrt().item())
-    assert update_rms == pytest.approx(0.2 * bias_spec.target_norm)
+    assert update_rms == pytest.approx(0.2 * bias_spec.target_norm, rel=1e-5)
+
+
+def test_bounded_parameters_remain_within_constraints_under_repeated_gradients() -> None:
+    model = _model()
+    master = FP32MasterWeights(model)
+    config = _config()
+    config["lr"] = 0.5
+    optimizer = build_optimizer(model=model, master_weights=master, config=config)
+    assert isinstance(optimizer, HybridModularOptimizer)
+    specs = {spec.name: spec for spec in optimizer.specs}
+
+    for _ in range(2000):
+        for name, parameter in master.named_parameters():
+            parameter.grad = torch.ones_like(parameter) if specs[name].role == "bounded" else None
+        optimizer.step()
+
+    parameters = dict(master.named_parameters())
+    for name, parameter in parameters.items():
+        geometry = specs[name].geometry
+        assert geometry is not None
+        if isinstance(geometry, BoundedRMSVectorGeometry):
+            assert float(parameter.square().mean().sqrt().item()) <= geometry.radius + 1e-6
+        elif isinstance(geometry, BoundedDiagonalGeometry):
+            assert float(parameter.min().item()) >= geometry.center - geometry.radius
+            assert float(parameter.max().item()) <= geometry.center + geometry.radius
 
 
 def test_modular_optimizer_checkpoint_resume_reproduces_next_step(tmp_path: Path) -> None:
@@ -160,6 +191,39 @@ def test_checkpoint_rejects_optimizer_type_mismatch(tmp_path: Path) -> None:
         assert "optimizer mismatch" in str(error)
     else:
         raise AssertionError("optimizer mismatch must be rejected")
+
+
+def test_modular_optimizer_rejects_v3_full_resume_but_allows_model_only(
+    tmp_path: Path,
+) -> None:
+    model = _model()
+    master = FP32MasterWeights(model)
+    optimizer = build_optimizer(model=model, master_weights=master, config=_config())
+    assert isinstance(optimizer, HybridModularOptimizer)
+    path = save_training_checkpoint(
+        tmp_path,
+        model=model,
+        optimizer=optimizer,
+        config={"optimizer": "modula"},
+        progress=TrainingProgress(global_step=0, update=0),
+        extras={"master_weights": master.state_dict()},
+    )
+    payload = torch.load(path, weights_only=False)
+    payload["optimizer"]["format_version"] = 3
+    torch.save(payload, path)
+
+    initialized_model = _model()
+    load_initial_model(path, model=initialized_model, device=torch.device("cpu"))
+    for expected, actual in zip(model.parameters(), initialized_model.parameters(), strict=True):
+        assert torch.equal(expected, actual)
+
+    with pytest.raises(ValueError, match="unsupported Modula optimizer state format"):
+        load_training_checkpoint(
+            path,
+            model=initialized_model,
+            optimizer=optimizer,
+            device=torch.device("cpu"),
+        )
 
 
 def test_modular_optimizer_rejects_nonfinite_gradient() -> None:

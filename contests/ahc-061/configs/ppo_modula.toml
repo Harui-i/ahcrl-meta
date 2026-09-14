@@ -6,6 +6,7 @@ modula_nesterov = true
 modula_diagnostics_interval = 100
 modula_initialize = true
 modula_project = true
+modula_target_kl = 0.03
 num_envs = 1024
 env_workers = 0
 total_steps = 20000000

@@ -12,7 +12,6 @@ from ahcrl.contests.ahc063.train_ppo import (
     ProximalPolicyEWMA,
     RunningRewardScaler,
     _observation_normalizer,
-    _policy_surrogate,
     create_model,
     evaluate_policy,
     parse_args,
@@ -24,6 +23,7 @@ from ahcrl.training import (
     load_latest_training_checkpoint,
     save_training_checkpoint,
 )
+from ahcrl.training.ppo import policy_surrogate
 
 
 def test_parse_args_loads_wandb_settings_and_aliases(tmp_path: Path) -> None:
@@ -296,14 +296,14 @@ def test_decoupled_policy_surrogate_matches_ppo_when_proximal_is_behavior() -> N
     new_logprob = torch.tensor([-0.2, -1.4])
     behavior_logprob = torch.tensor([-0.3, -1.0])
     advantages = torch.tensor([1.5, -0.5])
-    ordinary_loss, ordinary_stats = _policy_surrogate(
+    ordinary = policy_surrogate(
         new_logprob=new_logprob,
         behavior_logprob=behavior_logprob,
         advantages=advantages,
         clip=0.2,
         proximal_logprob=None,
     )
-    decoupled_loss, decoupled_stats = _policy_surrogate(
+    decoupled = policy_surrogate(
         new_logprob=new_logprob,
         behavior_logprob=behavior_logprob,
         advantages=advantages,
@@ -311,16 +311,19 @@ def test_decoupled_policy_surrogate_matches_ppo_when_proximal_is_behavior() -> N
         proximal_logprob=behavior_logprob,
     )
 
-    assert torch.equal(decoupled_loss, ordinary_loss)
-    assert torch.equal(decoupled_stats["clipping_ratio"], ordinary_stats["clipping_ratio"])
+    assert decoupled.loss is not None and ordinary.loss is not None
+    assert decoupled.clipping_ratio is not None and ordinary.clipping_ratio is not None
+    assert decoupled.proximal_behavior_ratio is not None
+    assert torch.equal(decoupled.loss, ordinary.loss)
+    assert torch.equal(decoupled.clipping_ratio, ordinary.clipping_ratio)
     assert torch.equal(
-        decoupled_stats["proximal_behavior_ratio"],
+        decoupled.proximal_behavior_ratio,
         torch.ones_like(behavior_logprob),
     )
 
 
 def test_decoupled_policy_surrogate_uses_proximal_clip_and_behavior_weight() -> None:
-    loss, stats = _policy_surrogate(
+    result = policy_surrogate(
         new_logprob=torch.tensor([math.log(0.6)]),
         behavior_logprob=torch.tensor([math.log(0.25)]),
         advantages=torch.tensor([2.0]),
@@ -328,9 +331,12 @@ def test_decoupled_policy_surrogate_uses_proximal_clip_and_behavior_weight() -> 
         proximal_logprob=torch.tensor([math.log(0.5)]),
     )
 
-    assert float(loss.item()) == pytest.approx(-4.4)
-    assert float(stats["clipping_ratio"].item()) == pytest.approx(1.2)
-    assert float(stats["proximal_behavior_ratio"].item()) == pytest.approx(2.0)
+    assert result.loss is not None
+    assert result.clipping_ratio is not None
+    assert result.proximal_behavior_ratio is not None
+    assert float(result.loss.item()) == pytest.approx(-4.4)
+    assert float(result.clipping_ratio.item()) == pytest.approx(1.2)
+    assert float(result.proximal_behavior_ratio.item()) == pytest.approx(2.0)
 
 
 def test_update_model_records_proximal_diagnostics_for_identical_policies() -> None:

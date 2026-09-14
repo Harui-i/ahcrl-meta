@@ -9,13 +9,18 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 __all__ = [
-    "AdaptiveRMSGeometry",
+    "BoundedDiagonalGeometry",
+    "BoundedRMSVectorGeometry",
+    "ModularReadoutConv2d",
+    "ModularReadoutLinear",
+    "DEFAULT_LAYER_SCALE_RADIUS",
     "ModulaGraphNode",
     "ModulaParameterSpec",
     "ModularConv2d",
@@ -26,10 +31,20 @@ __all__ = [
     "ModularResidual",
     "ModularSequential",
     "build_modula_parameter_specs",
-    "mark_adaptive_parameter",
+    "mark_bounded_diagonal_parameter",
+    "mark_bounded_rms_parameter",
+    "modula_parameter_node",
     "module_to_modula_graph",
     "validate_modula_graph",
 ]
+
+DEFAULT_AFFINE_MASS = 1.0
+DEFAULT_BOUND_RADIUS = 1.0
+DEFAULT_VECTOR_RADIUS = 8.0
+DEFAULT_NORM_GAIN_RADIUS = 1.0
+DEFAULT_LAYER_SCALE_RADIUS = 1.0
+DEFAULT_READOUT_GAIN_MIN = 0.125
+DEFAULT_READOUT_GAIN_MAX = 8.0
 
 
 def _validate_positive_finite(value: float, *, name: str) -> float:
@@ -103,6 +118,8 @@ class WeightGeometry(Protocol):
 
     def orthogonality_residual(self, tensor: torch.Tensor) -> torch.Tensor: ...
 
+    def boundary_saturation_fraction(self, tensor: torch.Tensor) -> torch.Tensor: ...
+
 
 @dataclass(frozen=True)
 class MatrixGeometry:
@@ -129,6 +146,23 @@ class MatrixGeometry:
         gram = q @ q.mT if q.shape[-2] <= q.shape[-1] else q.mT @ q
         identity = torch.eye(gram.shape[-1], device=gram.device, dtype=gram.dtype)
         return (gram - identity).norm(dim=(-2, -1)) / math.sqrt(gram.shape[-1])
+
+    def boundary_saturation_fraction(self, tensor: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((), device=tensor.device, dtype=tensor.dtype)
+
+
+@dataclass(frozen=True)
+class ReadoutMatrixGeometry(MatrixGeometry):
+    """Unit-spectral-norm geometry for a semantic scalar/vector readout."""
+
+    name: str = "readout_linear"
+
+    @staticmethod
+    def _scale(matrix: torch.Tensor) -> float:
+        # The output gain is a separate semantic parameter.  Keeping the
+        # direction at unit norm avoids the sqrt(out/in) shrinkage of a
+        # regular hidden linear layer when out=1.
+        return 1.0
 
 
 @dataclass(frozen=True)
@@ -158,17 +192,19 @@ class EmbeddingGeometry:
             return torch.zeros((), device=tensor.device, dtype=tensor.dtype)
         return (tensor[active].norm(dim=1) / self.scale - 1.0).abs().mean()
 
+    def boundary_saturation_fraction(self, tensor: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((), device=tensor.device, dtype=tensor.dtype)
+
 
 @dataclass(frozen=True)
-class AdaptiveRMSGeometry:
-    """RMS geometry for bias, normalization affine, and residual gates.
+class BoundedRMSVectorGeometry:
+    """RMS geometry for bias and normalization shifts, bounded in an RMS ball."""
 
-    Adam moments determine the direction while this geometry gives that
-    direction a parameterization-independent RMS update budget.  These
-    parameters keep their module-defined initialization and are not projected.
-    """
+    radius: float = DEFAULT_BOUND_RADIUS
+    name: str = "bounded_rms_vector"
 
-    name: str = "adaptive_rms"
+    def __post_init__(self) -> None:
+        _validate_positive_finite(self.radius, name="radius")
 
     def dualize(self, gradient: torch.Tensor, *, target_norm: float) -> torch.Tensor:
         rms = gradient.square().mean().sqrt()
@@ -176,16 +212,55 @@ class AdaptiveRMSGeometry:
         return torch.where(rms > 0, normalized * target_norm, torch.zeros_like(gradient))
 
     def project(self, weight: torch.Tensor) -> torch.Tensor:
-        return weight
+        rms = weight.square().mean().sqrt()
+        scale = self.radius / rms.clamp_min(torch.finfo(weight.dtype).tiny)
+        return weight * scale.clamp(max=1.0)
 
     def initialize(self, weight: torch.Tensor) -> torch.Tensor:
-        return weight
+        return self.project(weight)
 
     def spectral_norm(self, tensor: torch.Tensor) -> torch.Tensor:
         return tensor.square().mean().sqrt()
 
     def orthogonality_residual(self, tensor: torch.Tensor) -> torch.Tensor:
         return torch.zeros((), device=tensor.device, dtype=tensor.dtype)
+
+    def boundary_saturation_fraction(self, tensor: torch.Tensor) -> torch.Tensor:
+        rms = tensor.square().mean().sqrt()
+        return (rms >= self.radius * (1.0 - 1e-6)).to(tensor.dtype)
+
+
+@dataclass(frozen=True)
+class BoundedDiagonalGeometry:
+    """L-infinity geometry for gains and elementwise residual gates."""
+
+    radius: float = DEFAULT_BOUND_RADIUS
+    center: float = 0.0
+    name: str = "bounded_diagonal"
+
+    def __post_init__(self) -> None:
+        _validate_positive_finite(self.radius, name="radius")
+        if not math.isfinite(self.center):
+            raise ValueError(f"center must be finite, got {self.center}")
+
+    def dualize(self, gradient: torch.Tensor, *, target_norm: float) -> torch.Tensor:
+        return gradient.sign() * min(target_norm, self.radius)
+
+    def project(self, weight: torch.Tensor) -> torch.Tensor:
+        return weight.clamp(min=self.center - self.radius, max=self.center + self.radius)
+
+    def initialize(self, weight: torch.Tensor) -> torch.Tensor:
+        return self.project(weight)
+
+    def spectral_norm(self, tensor: torch.Tensor) -> torch.Tensor:
+        return tensor.abs().max()
+
+    def orthogonality_residual(self, tensor: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((), device=tensor.device, dtype=tensor.dtype)
+
+    def boundary_saturation_fraction(self, tensor: torch.Tensor) -> torch.Tensor:
+        distance = (tensor - self.center).abs()
+        return (distance >= self.radius * (1.0 - 1e-6)).to(tensor.dtype).mean()
 
 
 @dataclass(frozen=True)
@@ -233,6 +308,24 @@ class ConvKernelGeometry:
         residual = (gram - identity).norm(dim=(-2, -1)) / math.sqrt(gram.shape[-1])
         return residual.mean()
 
+    def boundary_saturation_fraction(self, tensor: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((), device=tensor.device, dtype=tensor.dtype)
+
+
+@dataclass(frozen=True)
+class ReadoutConvGeometry(ConvKernelGeometry):
+    """Unit row/spectral geometry for a semantic convolutional readout."""
+
+    name: str = "readout_conv"
+
+    def dualize(self, gradient: torch.Tensor, *, target_norm: float) -> torch.Tensor:
+        matrices = self._matrices(gradient)
+        dualized = _polar_newton_schulz(matrices) * target_norm
+        return self._restore(dualized, gradient)
+
+    def project(self, weight: torch.Tensor) -> torch.Tensor:
+        return self._restore(_polar_newton_schulz(self._matrices(weight)), weight)
+
 
 class _ModularAtom:
     weight: nn.Parameter
@@ -259,6 +352,35 @@ class ModularLinear(_ModularAtom, nn.Linear):
     ) -> None:
         nn.Linear.__init__(self, *args, **kwargs)  # type: ignore[arg-type]
         self._init_modula_atom(geometry=MatrixGeometry(), mass=mass, sensitivity=sensitivity)
+
+
+class ModularReadoutLinear(_ModularAtom, nn.Linear):
+    """Semantic readout with unit-norm direction and an explicit output gain."""
+
+    def __init__(
+        self,
+        *args: object,
+        mass: float = 1.0,
+        sensitivity: float = 1.0,
+        gain_init: float = 1.0,
+        **kwargs: object,
+    ) -> None:
+        nn.Linear.__init__(self, *args, **kwargs)  # type: ignore[arg-type]
+        self._init_modula_atom(geometry=ReadoutMatrixGeometry(), mass=mass, sensitivity=sensitivity)
+        self.output_gain = nn.Parameter(torch.tensor(float(gain_init)))
+        _mark_bounded_parameter(
+            self,
+            "output_gain",
+            geometry=BoundedDiagonalGeometry(
+                radius=(DEFAULT_READOUT_GAIN_MAX - DEFAULT_READOUT_GAIN_MIN) / 2.0,
+                center=(DEFAULT_READOUT_GAIN_MAX + DEFAULT_READOUT_GAIN_MIN) / 2.0,
+            ),
+            mass=DEFAULT_AFFINE_MASS,
+            sensitivity=DEFAULT_READOUT_GAIN_MAX,
+        )
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return F.linear(input, self.weight, self.bias) * self.output_gain
 
 
 class ModularEmbedding(_ModularAtom, nn.Embedding):
@@ -301,6 +423,50 @@ class ModularConv2d(_ModularAtom, nn.Conv2d):
             geometry=ConvKernelGeometry(self.groups, self.out_channels),
             mass=mass,
             sensitivity=sensitivity,
+        )
+
+
+class ModularReadoutConv2d(_ModularAtom, nn.Conv2d):
+    """Semantic convolutional readout with an explicit positive output gain."""
+
+    def __init__(
+        self,
+        *args: object,
+        mass: float = 1.0,
+        sensitivity: float = 1.0,
+        gain_init: float = 1.0,
+        **kwargs: object,
+    ) -> None:
+        nn.Conv2d.__init__(self, *args, **kwargs)  # type: ignore[arg-type]
+        self._init_modula_atom(
+            geometry=ReadoutConvGeometry(self.groups, self.out_channels),
+            mass=mass,
+            sensitivity=sensitivity,
+        )
+        self.output_gain = nn.Parameter(torch.tensor(float(gain_init)))
+        _mark_bounded_parameter(
+            self,
+            "output_gain",
+            geometry=BoundedDiagonalGeometry(
+                radius=(DEFAULT_READOUT_GAIN_MAX - DEFAULT_READOUT_GAIN_MIN) / 2.0,
+                center=(DEFAULT_READOUT_GAIN_MAX + DEFAULT_READOUT_GAIN_MIN) / 2.0,
+            ),
+            mass=DEFAULT_AFFINE_MASS,
+            sensitivity=DEFAULT_READOUT_GAIN_MAX,
+        )
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return (
+            F.conv2d(
+                input,
+                self.weight,
+                self.bias,
+                self.stride,
+                self.padding,
+                self.dilation,
+                self.groups,
+            )
+            * self.output_gain
         )
 
 
@@ -459,29 +625,32 @@ def module_to_modula_graph(module: nn.Module, prefix: str = "") -> ModulaGraphNo
             own_mass=module.mass,
             own_sensitivity=module.sensitivity,
         )
-        if module.bias is None or not module.bias.requires_grad:
+        parameters: list[ModulaGraphNode] = [weight]
+        declarations = _bounded_parameter_declarations(module)
+        for name, parameter in module.named_parameters(recurse=False):
+            if name == "weight" or not parameter.requires_grad:
+                continue
+            if name not in declarations:
+                raise ValueError(f"parameter {name} has no bounded Modula declaration")
+            parameters.append(modula_parameter_node(module, name, prefix))
+        if len(parameters) == 1:
             return weight
-        bias = ModulaGraphNode(
-            "atom",
-            parameter_name=_join_name(prefix, "bias"),
-            own_mass=module.mass,
+        group_sensitivity = max(
+            module.sensitivity,
+            *(declarations[name].sensitivity for name in declarations if name != "weight"),
         )
         return ModulaGraphNode(
-            "parameter_group", (weight, bias), own_sensitivity=module.sensitivity
+            "parameter_group", tuple(parameters), own_sensitivity=group_sensitivity
         )
     if isinstance(module, (nn.GroupNorm, nn.LayerNorm)):
-        parameters = tuple(
-            ModulaGraphNode(
-                "atom",
-                parameter_name=_join_name(prefix, name),
-                own_mass=1.0,
-            )
+        norm_parameters: tuple[ModulaGraphNode, ...] = tuple(
+            modula_parameter_node(module, name, prefix)
             for name, parameter in module.named_parameters(recurse=False)
             if parameter.requires_grad
         )
-        if not parameters:
+        if not norm_parameters:
             return ModulaGraphNode("bond", own_sensitivity=1.0)
-        return ModulaGraphNode("parameter_group", parameters, own_sensitivity=1.0)
+        return ModulaGraphNode("parameter_group", norm_parameters, own_sensitivity=1.0)
     node_factory = getattr(module, "modula_node", None)
     if callable(node_factory):
         node = node_factory(prefix)
@@ -492,6 +661,13 @@ def module_to_modula_graph(module: nn.Module, prefix: str = "") -> ModulaGraphNo
         module_to_modula_graph(child, _join_name(prefix, name))
         for name, child in module.named_children()
     )
+    declarations = _bounded_parameter_declarations(module)
+    declared = tuple(
+        modula_parameter_node(module, name, prefix)
+        for name, parameter in module.named_parameters(recurse=False)
+        if name in declarations and parameter.requires_grad
+    )
+    children = declared + children
     if children:
         return ModulaGraphNode("sequence", children)
     return ModulaGraphNode("bond", own_sensitivity=1.0)
@@ -525,13 +701,122 @@ def validate_modula_graph(graph: ModulaGraphNode) -> float:
     return visit(graph)
 
 
-def mark_adaptive_parameter(module: nn.Module, parameter_name: str) -> None:
+@dataclass(frozen=True)
+class _DeclaredParameterGeometry:
+    geometry: WeightGeometry
+    mass: float
+    sensitivity: float
+
+
+def _mark_bounded_parameter(
+    module: nn.Module,
+    parameter_name: str,
+    *,
+    geometry: WeightGeometry,
+    mass: float,
+    sensitivity: float,
+) -> None:
     parameter = module._parameters.get(parameter_name)
     if parameter is None:
         raise ValueError(f"module has no direct parameter named {parameter_name}")
-    names = set(getattr(module, "_modula_adaptive_parameters", set()))
-    names.add(parameter_name)
-    object.__setattr__(module, "_modula_adaptive_parameters", names)
+    declarations = dict(getattr(module, "_modula_parameter_geometries", {}))
+    declarations[parameter_name] = _DeclaredParameterGeometry(
+        geometry=geometry,
+        mass=_validate_nonnegative_finite(mass, name="mass"),
+        sensitivity=_validate_positive_finite(sensitivity, name="sensitivity"),
+    )
+    object.__setattr__(module, "_modula_parameter_geometries", declarations)
+
+
+def mark_bounded_rms_parameter(
+    module: nn.Module,
+    parameter_name: str,
+    *,
+    mass: float = DEFAULT_AFFINE_MASS,
+    radius: float = DEFAULT_BOUND_RADIUS,
+    sensitivity: float = 1.0,
+) -> None:
+    """Classify a direct parameter as a bounded RMS vector."""
+
+    _mark_bounded_parameter(
+        module,
+        parameter_name,
+        geometry=BoundedRMSVectorGeometry(radius=radius),
+        mass=mass,
+        sensitivity=sensitivity,
+    )
+
+
+def mark_bounded_diagonal_parameter(
+    module: nn.Module,
+    parameter_name: str,
+    *,
+    mass: float = DEFAULT_AFFINE_MASS,
+    radius: float = DEFAULT_BOUND_RADIUS,
+    center: float = 0.0,
+    sensitivity: float = 1.0,
+) -> None:
+    """Classify a direct parameter as a bounded diagonal operator."""
+
+    _mark_bounded_parameter(
+        module,
+        parameter_name,
+        geometry=BoundedDiagonalGeometry(radius=radius, center=center),
+        mass=mass,
+        sensitivity=sensitivity,
+    )
+
+
+def _bounded_parameter_declarations(
+    module: nn.Module,
+) -> dict[str, _DeclaredParameterGeometry]:
+    declarations: dict[str, _DeclaredParameterGeometry] = dict(
+        getattr(module, "_modula_parameter_geometries", {})
+    )
+    bias = module._parameters.get("bias") if isinstance(module, _ModularAtom) else None
+    if bias is not None and bias.requires_grad:
+        declarations.setdefault(
+            "bias",
+            _DeclaredParameterGeometry(
+                BoundedRMSVectorGeometry(radius=DEFAULT_VECTOR_RADIUS),
+                DEFAULT_AFFINE_MASS,
+                1.0,
+            ),
+        )
+    if isinstance(module, (nn.GroupNorm, nn.LayerNorm)):
+        if module.weight is not None and module.weight.requires_grad:
+            declarations.setdefault(
+                "weight",
+                _DeclaredParameterGeometry(
+                    BoundedDiagonalGeometry(radius=DEFAULT_NORM_GAIN_RADIUS, center=1.0),
+                    DEFAULT_AFFINE_MASS,
+                    1.0,
+                ),
+            )
+        if module.bias is not None and module.bias.requires_grad:
+            declarations.setdefault(
+                "bias",
+                _DeclaredParameterGeometry(
+                    BoundedRMSVectorGeometry(radius=DEFAULT_VECTOR_RADIUS),
+                    DEFAULT_AFFINE_MASS,
+                    1.0,
+                ),
+            )
+    return declarations
+
+
+def modula_parameter_node(
+    module: nn.Module, parameter_name: str, prefix: str = ""
+) -> ModulaGraphNode:
+    declaration = _bounded_parameter_declarations(module).get(parameter_name)
+    if declaration is None:
+        raise ValueError(f"parameter {parameter_name} has no bounded Modula declaration")
+    return ModulaGraphNode(
+        "atom",
+        parameter_name=_join_name(prefix, parameter_name),
+        own_mass=declaration.mass,
+        own_sensitivity=declaration.sensitivity,
+    )
 
 
 @dataclass(frozen=True)
@@ -547,35 +832,35 @@ def build_modula_parameter_specs(
     model: nn.Module, graph: ModulaGraphNode | None = None
 ) -> tuple[ModulaParameterSpec, ...]:
     modular: dict[str, tuple[nn.Parameter, WeightGeometry]] = {}
-    adaptive: dict[str, nn.Parameter] = {}
+    bounded: dict[str, tuple[nn.Parameter, WeightGeometry]] = {}
     for module_name, module in model.named_modules():
         direct = dict(module.named_parameters(recurse=False))
         if isinstance(module, _ModularAtom):
             modular[_join_name(module_name, "weight")] = (module.weight, module.geometry)
-            bias = direct.get("bias")
-            if bias is not None and bias.requires_grad:
-                adaptive[_join_name(module_name, "bias")] = bias
             direct.pop("weight", None)
-            direct.pop("bias", None)
-        declared_adaptive = getattr(module, "_modula_adaptive_parameters", set())
-        if isinstance(module, (nn.GroupNorm, nn.LayerNorm)):
-            declared_adaptive = declared_adaptive | set(direct)
-        for name in declared_adaptive:
-            if name in direct:
-                adaptive[_join_name(module_name, name)] = direct.pop(name)
+        declarations = _bounded_parameter_declarations(cast(nn.Module, module))
+        for name, declaration in declarations.items():
+            parameter = direct.pop(name, None)
+            if parameter is None:
+                raise ValueError(
+                    f"declared Modula parameter is not a direct parameter: "
+                    f"{_join_name(module_name, name)}"
+                )
+            if parameter.requires_grad:
+                bounded[_join_name(module_name, name)] = (parameter, declaration.geometry)
         remaining = [name for name, parameter in direct.items() if parameter.requires_grad]
         if remaining:
             qualified = [_join_name(module_name, name) for name in remaining]
             raise ValueError("unclassified trainable parameters: " + ", ".join(qualified))
 
     actual = {name for name, parameter in model.named_parameters() if parameter.requires_grad}
-    classified = set(modular) | set(adaptive)
+    classified = set(modular) | set(bounded)
     if actual != classified:
         missing = sorted(actual - classified)
         extra = sorted(classified - actual)
         raise ValueError(f"parameter classification mismatch: missing={missing}, extra={extra}")
-    if set(modular) & set(adaptive):
-        raise ValueError("parameters cannot have both matrix and adaptive RMS geometry")
+    if set(modular) & set(bounded):
+        raise ValueError("parameters cannot have both matrix and bounded geometry")
 
     if graph is None:
         graph_factory = getattr(model, "modula_graph", None)
@@ -585,7 +870,7 @@ def build_modula_parameter_specs(
         graph = candidate
     validate_modula_graph(graph)
     allocations = graph.allocate()
-    classified_geometries = set(modular) | set(adaptive)
+    classified_geometries = set(modular) | set(bounded)
     if set(allocations) != classified_geometries:
         raise ValueError(
             "Modula graph mismatch: "
@@ -598,7 +883,7 @@ def build_modula_parameter_specs(
         for name, (parameter, geometry) in modular.items()
     ]
     specs.extend(
-        ModulaParameterSpec(name, parameter, "adaptive", AdaptiveRMSGeometry(), allocations[name])
-        for name, parameter in adaptive.items()
+        ModulaParameterSpec(name, parameter, "bounded", geometry, allocations[name])
+        for name, (parameter, geometry) in bounded.items()
     )
     return tuple(sorted(specs, key=lambda spec: spec.name))

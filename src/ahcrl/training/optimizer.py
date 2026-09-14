@@ -12,10 +12,10 @@ from torch import nn
 
 from ahcrl.nn.modula import ModulaParameterSpec, build_modula_parameter_specs
 
-MODULA_OPTIMIZER_FORMAT_VERSION = 2
-_ADAPTIVE_BETA1 = 0.9
-_ADAPTIVE_BETA2 = 0.999
-_ADAPTIVE_EPSILON = 1e-8
+MODULA_OPTIMIZER_FORMAT_VERSION = 4
+_BOUNDED_BETA1 = 0.9
+_BOUNDED_BETA2 = 0.999
+_BOUNDED_EPSILON = 1e-8
 
 
 @runtime_checkable
@@ -103,7 +103,7 @@ class FP32MasterWeights:
 
 
 class HybridModularOptimizer:
-    """Modular updates with Adam-preconditioned RMS directions for affine vectors."""
+    """Polar matrix updates plus Adam-preconditioned bounded affine updates."""
 
     def __init__(
         self,
@@ -138,9 +138,9 @@ class HybridModularOptimizer:
         self.diagnostics_interval = diagnostics_interval
         self.step_count = 0
         self.momentum_buffers: dict[str, torch.Tensor] = {}
-        self.adaptive_first_moments: dict[str, torch.Tensor] = {}
-        self.adaptive_second_moments: dict[str, torch.Tensor] = {}
-        self.adaptive_steps: dict[str, int] = {}
+        self.bounded_first_moments: dict[str, torch.Tensor] = {}
+        self.bounded_second_moments: dict[str, torch.Tensor] = {}
+        self.bounded_steps: dict[str, int] = {}
         self.last_metrics: dict[str, float] = {}
         self._gradients_validated = False
 
@@ -176,7 +176,7 @@ class HybridModularOptimizer:
     @torch.no_grad()
     def initialize_modular_parameters(self) -> None:
         for spec in self.specs:
-            if spec.role != "modular" or spec.geometry is None:
+            if spec.geometry is None:
                 continue
             parameter = self.parameters_by_name[spec.name]
             parameter.copy_(spec.geometry.initialize(parameter))
@@ -231,12 +231,17 @@ class HybridModularOptimizer:
                 "update_rms": update_rms,
                 "update_spectral_norm": float(spec.geometry.spectral_norm(update).item()),
                 "parameter_rms": parameter_rms,
+                "parameter_natural_norm": float(spec.geometry.spectral_norm(parameter).item()),
+                "parameter_max_abs": float(parameter.abs().max().item()),
                 "update_parameter_ratio": update_rms
                 / max(parameter_rms, torch.finfo(parameter.dtype).tiny),
                 "orthogonality_residual": float(
                     spec.geometry.orthogonality_residual(parameter).item()
                 ),
                 "projection_displacement_rms": projection_displacement_rms,
+                "boundary_saturation_fraction": float(
+                    spec.geometry.boundary_saturation_fraction(parameter).item()
+                ),
             }
             for key, value in values.items():
                 metric = f"optimizer/{geometry}/{key}"
@@ -244,31 +249,43 @@ class HybridModularOptimizer:
             counts[geometry] = counts.get(geometry, 0) + 1
 
         for spec in self.specs:
-            if spec.role != "adaptive" or spec.geometry is None:
+            if spec.role != "bounded" or spec.geometry is None:
                 continue
             parameter = self.parameters_by_name[spec.name]
             gradient = parameter.grad
             if gradient is None:
                 continue
-            first = self.adaptive_first_moments.get(spec.name)
-            second = self.adaptive_second_moments.get(spec.name)
+            first = self.bounded_first_moments.get(spec.name)
+            second = self.bounded_second_moments.get(spec.name)
             if first is None or second is None:
                 first = torch.zeros_like(parameter)
                 second = torch.zeros_like(parameter)
-                self.adaptive_first_moments[spec.name] = first
-                self.adaptive_second_moments[spec.name] = second
-            first.lerp_(gradient, 1.0 - _ADAPTIVE_BETA1)
-            second.mul_(_ADAPTIVE_BETA2).addcmul_(gradient, gradient, value=1.0 - _ADAPTIVE_BETA2)
-            adaptive_step = self.adaptive_steps.get(spec.name, 0) + 1
-            self.adaptive_steps[spec.name] = adaptive_step
-            first_hat = first / (1.0 - _ADAPTIVE_BETA1**adaptive_step)
-            second_hat = second / (1.0 - _ADAPTIVE_BETA2**adaptive_step)
-            direction = first_hat / (second_hat.sqrt() + _ADAPTIVE_EPSILON)
+                self.bounded_first_moments[spec.name] = first
+                self.bounded_second_moments[spec.name] = second
+            first.lerp_(gradient, 1.0 - _BOUNDED_BETA1)
+            second.mul_(_BOUNDED_BETA2).addcmul_(gradient, gradient, value=1.0 - _BOUNDED_BETA2)
+            bounded_step = self.bounded_steps.get(spec.name, 0) + 1
+            self.bounded_steps[spec.name] = bounded_step
+            first_hat = first / (1.0 - _BOUNDED_BETA1**bounded_step)
+            second_hat = second / (1.0 - _BOUNDED_BETA2**bounded_step)
+            direction = first_hat / (second_hat.sqrt() + _BOUNDED_EPSILON)
             dualize_started = time.perf_counter() if collect_diagnostics else 0.0
             dualized = spec.geometry.dualize(direction, target_norm=spec.target_norm)
             if collect_diagnostics:
                 dualize_seconds += time.perf_counter() - dualize_started
             parameter.add_(dualized, alpha=-self.lr)
+            before_projection = parameter.clone() if collect_diagnostics else None
+            projection_started = time.perf_counter() if collect_diagnostics else 0.0
+            parameter.copy_(spec.geometry.project(parameter))
+            projection_displacement_rms = 0.0
+            if collect_diagnostics:
+                project_seconds += time.perf_counter() - projection_started
+                assert before_projection is not None
+                projection_displacement_rms = float(
+                    (parameter - before_projection).square().mean().sqrt().item()
+                )
+            if not bool(torch.isfinite(parameter).all().item()):
+                raise FloatingPointError(f"non-finite parameter after bounded update: {spec.name}")
             if not collect_diagnostics:
                 continue
             geometry = spec.geometry.name
@@ -280,8 +297,14 @@ class HybridModularOptimizer:
                 "update_rms": update_rms,
                 "update_natural_norm": float(spec.geometry.spectral_norm(update).item()),
                 "parameter_rms": parameter_rms,
+                "parameter_natural_norm": float(spec.geometry.spectral_norm(parameter).item()),
+                "parameter_max_abs": float(parameter.abs().max().item()),
                 "update_parameter_ratio": update_rms
                 / max(parameter_rms, torch.finfo(parameter.dtype).tiny),
+                "projection_displacement_rms": projection_displacement_rms,
+                "boundary_saturation_fraction": float(
+                    spec.geometry.boundary_saturation_fraction(parameter).item()
+                ),
             }
             for key, value in values.items():
                 metric = f"optimizer/{geometry}/{key}"
@@ -315,15 +338,15 @@ class HybridModularOptimizer:
                 name: buffer.detach().cpu().clone()
                 for name, buffer in self.momentum_buffers.items()
             },
-            "adaptive_first_moments": {
+            "bounded_first_moments": {
                 name: moment.detach().cpu().clone()
-                for name, moment in self.adaptive_first_moments.items()
+                for name, moment in self.bounded_first_moments.items()
             },
-            "adaptive_second_moments": {
+            "bounded_second_moments": {
                 name: moment.detach().cpu().clone()
-                for name, moment in self.adaptive_second_moments.items()
+                for name, moment in self.bounded_second_moments.items()
             },
-            "adaptive_steps": dict(self.adaptive_steps),
+            "bounded_steps": dict(self.bounded_steps),
         }
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
@@ -350,29 +373,29 @@ class HybridModularOptimizer:
             name: saved.to(device=self.parameters_by_name[name].device, dtype=torch.float32)
             for name, saved in buffers.items()
         }
-        adaptive_names = {spec.name for spec in self.specs if spec.role == "adaptive"}
-        self.adaptive_first_moments = self._load_adaptive_moments(
-            state_dict, key="adaptive_first_moments", expected_names=adaptive_names
+        bounded_names = {spec.name for spec in self.specs if spec.role == "bounded"}
+        self.bounded_first_moments = self._load_bounded_moments(
+            state_dict, key="bounded_first_moments", expected_names=bounded_names
         )
-        self.adaptive_second_moments = self._load_adaptive_moments(
-            state_dict, key="adaptive_second_moments", expected_names=adaptive_names
+        self.bounded_second_moments = self._load_bounded_moments(
+            state_dict, key="bounded_second_moments", expected_names=bounded_names
         )
-        saved_steps = state_dict.get("adaptive_steps")
-        if not isinstance(saved_steps, dict) or not set(saved_steps) <= adaptive_names:
-            raise ValueError("invalid adaptive RMS step state")
-        self.adaptive_steps = {}
+        saved_steps = state_dict.get("bounded_steps")
+        if not isinstance(saved_steps, dict) or not set(saved_steps) <= bounded_names:
+            raise ValueError("invalid bounded geometry step state")
+        self.bounded_steps = {}
         for name, step in saved_steps.items():
             if not isinstance(name, str) or not isinstance(step, int) or step <= 0:
-                raise ValueError("invalid adaptive RMS step entry")
-            self.adaptive_steps[name] = step
-        state_names = set(self.adaptive_steps)
+                raise ValueError("invalid bounded geometry step entry")
+            self.bounded_steps[name] = step
+        state_names = set(self.bounded_steps)
         if (
-            set(self.adaptive_first_moments) != state_names
-            or set(self.adaptive_second_moments) != state_names
+            set(self.bounded_first_moments) != state_names
+            or set(self.bounded_second_moments) != state_names
         ):
-            raise ValueError("inconsistent adaptive RMS optimizer state")
+            raise ValueError("inconsistent bounded geometry optimizer state")
 
-    def _load_adaptive_moments(
+    def _load_bounded_moments(
         self, state_dict: Mapping[str, Any], *, key: str, expected_names: set[str]
     ) -> dict[str, torch.Tensor]:
         saved_moments = state_dict.get(key)

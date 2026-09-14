@@ -12,6 +12,8 @@ from ahcrl.nn.modula import (
     ModulaGraphNode,
     ModularConv2d,
     ModularLinear,
+    ModularReadoutConv2d,
+    ModularReadoutLinear,
     ModularSequential,
     module_to_modula_graph,
     validate_modula_graph,
@@ -98,7 +100,7 @@ class ActorCritic(nn.Module):
             ModularConv2d(channels, channels, kernel_size=1, bias=False),
             make_group_norm(channels),
             nn.ReLU(inplace=True),
-            ModularConv2d(channels, 1, kernel_size=1),
+            ModularReadoutConv2d(channels, 1, kernel_size=1, bias=False),
             nn.Flatten(),
         )
         self.value = RichValueHead(
@@ -177,7 +179,7 @@ class RichValueHead(nn.Module):
             nn.ReLU(inplace=True),
             ModularLinear(hidden_channels, hidden_channels),
             nn.ReLU(inplace=True),
-            ModularLinear(hidden_channels, 1),
+            ModularReadoutLinear(hidden_channels, 1, bias=False),
         )
 
     def forward(

@@ -40,6 +40,7 @@ from ahcrl.training import (
     update_run_state,
     write_config,
 )
+from ahcrl.training.ppo import policy_surrogate, tensor_range
 
 from .encoder import NUM_PLANES
 from .model import ActorCritic, RunningObservationNormalizer
@@ -68,6 +69,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "modula_diagnostics_interval": 100,
     "modula_initialize": True,
     "modula_project": True,
+    "modula_target_kl": 0.03,
     "gamma": 0.995,
     "gae_lambda": 0.95,
     "clip": 0.2,
@@ -538,44 +540,6 @@ def collect_rollout(
     )
 
 
-def _policy_surrogate(
-    *,
-    new_logprob: torch.Tensor,
-    behavior_logprob: torch.Tensor,
-    advantages: torch.Tensor,
-    clip: float,
-    proximal_logprob: torch.Tensor | None,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """通常PPOまたはbehavior/proximalを分離したPPO-EWMA objectiveを返す。"""
-    current_behavior_log_ratio = new_logprob - behavior_logprob
-    current_behavior_ratio = current_behavior_log_ratio.exp()
-    if not bool(torch.isfinite(current_behavior_ratio).all().item()):
-        raise FloatingPointError("non-finite current/behavior policy ratio")
-
-    if proximal_logprob is None:
-        clipping_ratio = current_behavior_ratio
-        importance_weight = torch.ones_like(clipping_ratio)
-    else:
-        current_proximal_log_ratio = new_logprob - proximal_logprob
-        clipping_ratio = current_proximal_log_ratio.exp()
-        importance_weight = (proximal_logprob - behavior_logprob).exp()
-        if not bool(torch.isfinite(clipping_ratio).all().item()):
-            raise FloatingPointError("non-finite current/proximal policy ratio")
-        if not bool(torch.isfinite(importance_weight).all().item()):
-            raise FloatingPointError("non-finite proximal/behavior importance ratio")
-
-    surrogate = importance_weight * torch.min(
-        clipping_ratio * advantages,
-        clipping_ratio.clamp(1.0 - clip, 1.0 + clip) * advantages,
-    )
-    return -surrogate.mean(), {
-        "clipping_ratio": clipping_ratio.detach(),
-        "current_behavior_log_ratio": current_behavior_log_ratio.detach(),
-        "current_behavior_ratio": current_behavior_ratio.detach(),
-        "proximal_behavior_ratio": importance_weight.detach(),
-    }
-
-
 def update_model(
     model: nn.Module,
     raw_model: ActorCritic,
@@ -617,6 +581,7 @@ def update_model(
     backward_seconds = 0.0
     proximal_forward_seconds = 0.0
     current_behavior_approx_kl_total = 0.0
+    current_behavior_approx_kl_count = 0
     behavior_proximal_approx_kl_total = 0.0
     proximal_current_kl_total = 0.0
     proximal_behavior_ratio_sum = 0.0
@@ -624,6 +589,12 @@ def update_model(
     proximal_behavior_ratio_min = float("inf")
     proximal_behavior_ratio_max = float("-inf")
     proximal_behavior_ratio_count = 0
+    max_abs_log_ratio = 0.0
+    logits_max_abs = 0.0
+    value_max_abs = 0.0
+    trust_region_stop_count = 0
+    trust_region_stopped = False
+    modula_trust_region = isinstance(optimizer, HybridModularOptimizer)
     effective_training_epochs = args.epochs if training_epochs is None else training_epochs
     if effective_training_epochs <= 0:
         raise ValueError("training_epochs must be positive")
@@ -634,6 +605,15 @@ def update_model(
             _synchronize_device(device)
             forward_started = time.perf_counter()
             logits, value = _model_forward(model, observations[index])
+            logits_max_abs = max(logits_max_abs, float(logits.float().abs().max().item()))
+            value_max_abs = max(value_max_abs, float(value.float().abs().max().item()))
+            if not bool(torch.isfinite(logits).all().item()) or not bool(
+                torch.isfinite(value).all().item()
+            ):
+                raise FloatingPointError(
+                    "non-finite PPO model output before distribution: "
+                    f"logits=({tensor_range(logits)}) value=({tensor_range(value)})"
+                )
             dist = Categorical(logits=logits.float().masked_fill(~masks[index], -1e9))
             new_logprob = dist.log_prob(actions[index])
             proximal_logprob = None
@@ -643,19 +623,38 @@ def update_model(
                 proximal_forward_started = time.perf_counter()
                 with torch.inference_mode():
                     proximal_logits, _ = _model_forward(proximal_model, observations[index])
+                    if not bool(torch.isfinite(proximal_logits).all().item()):
+                        raise FloatingPointError("non-finite proximal policy logits")
                     proximal_dist = Categorical(
                         logits=proximal_logits.float().masked_fill(~masks[index], -1e9)
                     )
                     proximal_logprob = proximal_dist.log_prob(actions[index])
                 _synchronize_device(device)
                 proximal_forward_seconds += time.perf_counter() - proximal_forward_started
-            policy_loss, policy_stats = _policy_surrogate(
+            policy = policy_surrogate(
                 new_logprob=new_logprob,
                 behavior_logprob=old_logprobs[index],
                 advantages=advantages[index],
                 clip=args.clip,
                 proximal_logprob=proximal_logprob,
+                max_abs_log_ratio=20.0 if modula_trust_region else None,
+                target_kl=args.modula_target_kl if modula_trust_region else None,
             )
+            max_abs_log_ratio = max(max_abs_log_ratio, float(policy.max_abs_log_ratio.item()))
+            if policy.stop_reason is not None:
+                if policy.current_behavior_approx_kl is not None:
+                    current_behavior_approx_kl_total += float(
+                        policy.current_behavior_approx_kl.item()
+                    )
+                    current_behavior_approx_kl_count += 1
+                trust_region_stop_count += 1
+                trust_region_stopped = True
+                break
+            assert policy.loss is not None
+            assert policy.clipping_ratio is not None
+            assert policy.current_behavior_ratio is not None
+            assert policy.proximal_behavior_ratio is not None
+            policy_loss = policy.loss
             value_loss = 0.5 * (value.float() - returns[index]).square().mean()
             entropy = dist.entropy().mean()
             weighted_policy_loss = policy_loss if policy_updates_enabled else policy_loss * 0.0
@@ -668,7 +667,10 @@ def update_model(
                 raise FloatingPointError(
                     "non-finite PPO loss before backward: "
                     f"policy_loss={policy_loss.item()} value_loss={value_loss.item()} "
-                    f"entropy={entropy.item()}"
+                    f"entropy={entropy.item()} "
+                    f"log_ratio_min={policy.current_behavior_log_ratio.min().item()} "
+                    f"log_ratio_max={policy.current_behavior_log_ratio.max().item()} "
+                    f"logits=({tensor_range(logits)}) value=({tensor_range(value)})"
                 )
             raw_model.zero_grad(set_to_none=True)
             optimizer.zero_grad(set_to_none=True)
@@ -730,9 +732,7 @@ def update_model(
                 proximal_ewma.update(
                     [parameter for parameter in raw_model.parameters() if parameter.requires_grad]
                 )
-            clipping_ratio = policy_stats["clipping_ratio"]
-            current_behavior_log_ratio = policy_stats["current_behavior_log_ratio"]
-            current_behavior_ratio = policy_stats["current_behavior_ratio"]
+            clipping_ratio = policy.clipping_ratio
             totals["policy_loss"] += float(policy_loss.item())
             totals["value_loss"] += float(value_loss.item())
             totals["entropy"] += float(entropy.item())
@@ -743,9 +743,9 @@ def update_model(
             totals["weighted_value_loss"] += float(weighted_value_loss.item())
             totals["entropy_loss"] += float(entropy_loss.item())
             totals["total_loss"] += float(loss.item())
-            current_behavior_approx_kl_total += float(
-                (current_behavior_ratio - 1.0 - current_behavior_log_ratio).mean().item()
-            )
+            assert policy.current_behavior_approx_kl is not None
+            current_behavior_approx_kl_total += float(policy.current_behavior_approx_kl.item())
+            current_behavior_approx_kl_count += 1
             if proximal_logprob is not None and proximal_dist is not None:
                 behavior_proximal_approx_kl_total += float(
                     (old_logprobs[index] - proximal_logprob).mean().item()
@@ -754,7 +754,7 @@ def update_model(
                     proximal_current_kl_total += float(
                         kl_divergence(proximal_dist, dist).mean().item()
                     )
-                importance_weight = policy_stats["proximal_behavior_ratio"]
+                importance_weight = policy.proximal_behavior_ratio
                 proximal_behavior_ratio_sum += float(importance_weight.sum().item())
                 proximal_behavior_ratio_square_sum += float(importance_weight.square().sum().item())
                 proximal_behavior_ratio_min = min(
@@ -765,6 +765,8 @@ def update_model(
                 )
                 proximal_behavior_ratio_count += importance_weight.numel()
             count += 1
+        if trust_region_stopped:
+            break
     result = (
         {key: value / max(count, 1) for key, value in totals.items()}
         | {
@@ -772,7 +774,12 @@ def update_model(
             "forward_seconds": forward_seconds,
             "backward_seconds": backward_seconds,
             "proximal_forward_seconds": proximal_forward_seconds,
-            "current_behavior_approx_kl": current_behavior_approx_kl_total / max(count, 1),
+            "current_behavior_approx_kl": current_behavior_approx_kl_total
+            / max(current_behavior_approx_kl_count, 1),
+            "max_abs_log_ratio": max_abs_log_ratio,
+            "trust_region_stop_count": float(trust_region_stop_count),
+            "logits_max_abs": logits_max_abs,
+            "value_max_abs": value_max_abs,
             "policy_updates_enabled": float(policy_updates_enabled),
             "training_epochs": float(effective_training_epochs),
         }

@@ -5,11 +5,13 @@ from jaxtyping import Float
 from torch import nn
 
 from ahcrl.nn.modula import (
+    DEFAULT_LAYER_SCALE_RADIUS,
     ModulaGraphNode,
     ModularDepthwiseConv2d,
     ModularLinear,
     ModularSequential,
-    mark_adaptive_parameter,
+    mark_bounded_diagonal_parameter,
+    modula_parameter_node,
     module_to_modula_graph,
 )
 
@@ -56,7 +58,12 @@ class ConvNeXtBlock(nn.Module):
         )
         self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
         self.residual_branch_scale = residual_branch_scale
-        mark_adaptive_parameter(self, "layer_scale")
+        mark_bounded_diagonal_parameter(
+            self,
+            "layer_scale",
+            radius=DEFAULT_LAYER_SCALE_RADIUS,
+            center=0.0,
+        )
 
     def modula_node(self, prefix: str = "") -> ModulaGraphNode:
         def child(name: str, module: nn.Module) -> ModulaGraphNode:
@@ -67,12 +74,7 @@ class ConvNeXtBlock(nn.Module):
             child("depthwise", self.depthwise),
             child("norm", self.norm),
             child("pointwise", self.pointwise),
-            ModulaGraphNode(
-                "atom",
-                parameter_name=(f"{prefix}.layer_scale" if prefix else "layer_scale"),
-                own_mass=1.0,
-                own_sensitivity=1.0,
-            ),
+            modula_parameter_node(self, "layer_scale", prefix),
         )
         if self.residual_branch_scale != 1.0:
             branch_children += (

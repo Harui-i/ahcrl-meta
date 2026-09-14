@@ -78,6 +78,18 @@ def build_standard_ppo_metrics(
     scores = rollout.get("scores")
     if scores is not None:
         metrics |= build_completed_episode_score_metrics(scores, dones)
+    optional_stats = {
+        "current_behavior_approx_kl": "train/current_behavior_approx_kl",
+        "max_abs_log_ratio": "train/max_abs_log_ratio",
+        "trust_region_stop_count": "train/trust_region_stop_count",
+        "logits_max_abs": "model/logits_max_abs",
+        "value_max_abs": "model/value_max_abs",
+    }
+    metrics |= {
+        metric_name: update_stats[stat_name]
+        for stat_name, metric_name in optional_stats.items()
+        if stat_name in update_stats
+    }
     metrics |= {
         key: value
         for key, value in update_stats.items()

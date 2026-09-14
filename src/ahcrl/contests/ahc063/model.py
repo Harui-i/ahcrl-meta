@@ -7,6 +7,7 @@ from torch import nn
 from ahcrl.nn.modula import (
     ModulaGraphNode,
     ModularLinear,
+    ModularReadoutLinear,
     ModularSequential,
     module_to_modula_graph,
     validate_modula_graph,
@@ -44,12 +45,12 @@ class ActorCritic(nn.Module):
         self.policy = ModularSequential(
             ModularLinear(channels * 2, channels),
             nn.ReLU(inplace=True),
-            ModularLinear(channels, ACTION_COUNT),
+            ModularReadoutLinear(channels, ACTION_COUNT, bias=False),
         )
         self.value = ModularSequential(
             ModularLinear(channels * 2, channels),
             nn.ReLU(inplace=True),
-            ModularLinear(channels, 1),
+            ModularReadoutLinear(channels, 1, bias=False),
         )
         validate_modula_graph(self.modula_graph())
 

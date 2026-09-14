@@ -7,7 +7,8 @@ from torch import nn
 from ahcrl.contests.ahc061.model import ActorCritic as AHC061ActorCritic
 from ahcrl.contests.ahc063.model import ActorCritic as AHC063ActorCritic
 from ahcrl.nn.modula import (
-    AdaptiveRMSGeometry,
+    BoundedDiagonalGeometry,
+    BoundedRMSVectorGeometry,
     ModulaGraphNode,
     ModularConv2d,
     ModularDepthwiseConv2d,
@@ -50,14 +51,37 @@ def test_linear_geometry_maps_zero_gradient_to_zero() -> None:
     assert update.count_nonzero() == 0
 
 
-def test_adaptive_rms_geometry_assigns_requested_natural_norm() -> None:
-    geometry = AdaptiveRMSGeometry()
+def test_bounded_rms_geometry_assigns_requested_natural_norm_and_projects() -> None:
+    geometry = BoundedRMSVectorGeometry()
     direction = torch.tensor([1.0, -2.0, 3.0, -4.0])
 
     update = geometry.dualize(direction, target_norm=0.25)
 
     assert update.square().mean().sqrt() == pytest.approx(torch.tensor(0.25))
     assert geometry.dualize(torch.zeros(3), target_norm=1.0).count_nonzero() == 0
+    assert geometry.project(torch.tensor([3.0, 4.0])).square().mean().sqrt() == pytest.approx(
+        torch.tensor(1.0)
+    )
+
+
+def test_bounded_diagonal_geometry_uses_linf_norm_and_projects() -> None:
+    geometry = BoundedDiagonalGeometry()
+
+    update = geometry.dualize(torch.tensor([-3.0, 0.0, 2.0]), target_norm=0.25)
+    projected = geometry.project(torch.tensor([-4.0, 0.5, 3.0]))
+
+    assert update.abs().max() == pytest.approx(torch.tensor(0.25))
+    assert geometry.dualize(torch.ones(3), target_norm=2.0).abs().max() == 1.0
+    assert torch.equal(projected, torch.tensor([-1.0, 0.5, 1.0]))
+
+
+def test_centered_bounded_diagonal_projects_around_identity() -> None:
+    geometry = BoundedDiagonalGeometry(radius=2.0, center=1.0)
+
+    projected = geometry.project(torch.tensor([-3.0, 1.0, 5.0]))
+
+    assert torch.equal(projected, torch.tensor([-1.0, 1.0, 3.0]))
+    assert geometry.boundary_saturation_fraction(projected) == pytest.approx(torch.tensor(2 / 3))
 
 
 def test_one_hot_embedding_is_not_classified_as_linear() -> None:
@@ -161,8 +185,28 @@ def test_contest_models_classify_every_trainable_parameter(
     assert {spec.name for spec in specs} == {
         name for name, parameter in model.named_parameters() if parameter.requires_grad
     }
-    assert {spec.role for spec in specs} == {"modular", "adaptive"}
+    assert {spec.role for spec in specs} == {"modular", "bounded"}
     assert all(spec.geometry is not None and spec.target_norm > 0 for spec in specs)
+    for spec in specs:
+        if spec.name.endswith("layer_scale") or spec.name.endswith("norm.weight"):
+            assert spec.geometry is not None and spec.geometry.name == "bounded_diagonal"
+        elif spec.name.endswith("bias"):
+            assert spec.geometry is not None and spec.geometry.name == "bounded_rms_vector"
+
+    def atom_masses(node: ModulaGraphNode) -> dict[str, float]:
+        masses = {}
+        if node.kind == "atom" and node.parameter_name is not None:
+            masses[node.parameter_name] = node.own_mass
+        for child in node.children:
+            masses.update(atom_masses(child))
+        return masses
+
+    masses = atom_masses(model.modula_graph())  # type: ignore[attr-defined]
+    assert all(
+        mass == pytest.approx(1.0)
+        for name, mass in masses.items()
+        if name.endswith("bias") or name.endswith("norm.weight") or name.endswith("layer_scale")
+    )
 
 
 def test_modular_sequential_keeps_standard_state_dict_names() -> None:

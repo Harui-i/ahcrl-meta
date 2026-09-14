@@ -33,6 +33,7 @@ from ahcrl.training import (
     update_run_state,
     write_config,
 )
+from ahcrl.training.ppo import policy_surrogate, tensor_range
 
 from .encoder import NUM_PLANES
 from .model import ActorCritic, RunningObservationNormalizer
@@ -60,6 +61,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "modula_diagnostics_interval": 100,
     "modula_initialize": True,
     "modula_project": True,
+    "modula_target_kl": 0.03,
     "gamma": 0.995,
     "gae_lambda": 0.95,
     "clip": 0.2,
@@ -307,6 +309,14 @@ def update_model(
     grad_norm = 0.0
     forward_seconds = 0.0
     backward_seconds = 0.0
+    current_behavior_approx_kl_total = 0.0
+    current_behavior_approx_kl_count = 0
+    max_abs_log_ratio = 0.0
+    logits_max_abs = 0.0
+    value_max_abs = 0.0
+    trust_region_stop_count = 0
+    trust_region_stopped = False
+    modula_trust_region = isinstance(optimizer, HybridModularOptimizer)
     for _ in range(args.epochs):
         permutation = torch.randperm(batch_size, device=device)
         for start in range(0, batch_size, minibatch_size):
@@ -314,14 +324,37 @@ def update_model(
             _synchronize_device(device)
             started = time.perf_counter()
             logits, value = _model_forward(model, observations[index], critic_features[index])
+            logits_max_abs = max(logits_max_abs, float(logits.float().abs().max().item()))
+            value_max_abs = max(value_max_abs, float(value.float().abs().max().item()))
+            if not bool(torch.isfinite(logits).all().item()) or not bool(
+                torch.isfinite(value).all().item()
+            ):
+                raise FloatingPointError(
+                    "non-finite PPO model output before distribution: "
+                    f"logits=({tensor_range(logits)}) value=({tensor_range(value)})"
+                )
             dist = Categorical(logits=logits.float().masked_fill(~masks[index], -1e9))
             new_logprob = dist.log_prob(actions[index])
-            ratio = (new_logprob - old_logprobs[index]).exp()
-            surrogate = torch.min(
-                ratio * advantages[index],
-                ratio.clamp(1.0 - args.clip, 1.0 + args.clip) * advantages[index],
+            policy = policy_surrogate(
+                new_logprob=new_logprob,
+                behavior_logprob=old_logprobs[index],
+                advantages=advantages[index],
+                clip=args.clip,
+                max_abs_log_ratio=20.0 if modula_trust_region else None,
+                target_kl=args.modula_target_kl if modula_trust_region else None,
             )
-            policy_loss = -surrogate.mean()
+            max_abs_log_ratio = max(max_abs_log_ratio, float(policy.max_abs_log_ratio.item()))
+            if policy.current_behavior_approx_kl is not None:
+                current_behavior_approx_kl_total += float(policy.current_behavior_approx_kl.item())
+                current_behavior_approx_kl_count += 1
+            if policy.stop_reason is not None:
+                trust_region_stop_count += 1
+                trust_region_stopped = True
+                break
+            assert policy.loss is not None
+            assert policy.clipping_ratio is not None
+            policy_loss = policy.loss
+            ratio = policy.clipping_ratio
             value_loss = 0.5 * (value.float() - returns[index]).square().mean()
             entropy = dist.entropy().mean()
             weighted_policy_loss = policy_loss
@@ -331,7 +364,14 @@ def update_model(
             _synchronize_device(device)
             forward_seconds += time.perf_counter() - started
             if not bool(torch.isfinite(loss).item()):
-                raise FloatingPointError("non-finite PPO loss")
+                log_ratio = policy.current_behavior_log_ratio
+                raise FloatingPointError(
+                    "non-finite PPO loss before backward: "
+                    f"policy_loss={policy_loss.item()} value_loss={value_loss.item()} "
+                    f"entropy={entropy.item()} log_ratio_min={log_ratio.min().item()} "
+                    f"log_ratio_max={log_ratio.max().item()} "
+                    f"logits=({tensor_range(logits)}) value=({tensor_range(value)})"
+                )
             raw_model.zero_grad(set_to_none=True)
             optimizer.zero_grad(set_to_none=True)
             _synchronize_device(device)
@@ -368,12 +408,20 @@ def update_model(
             }.items():
                 totals[key] += float(value_.item())
             count += 1
+        if trust_region_stopped:
+            break
     return (
         {key: value / max(count, 1) for key, value in totals.items()}
         | {
             "grad_norm": grad_norm,
             "forward_seconds": forward_seconds,
             "backward_seconds": backward_seconds,
+            "current_behavior_approx_kl": current_behavior_approx_kl_total
+            / max(current_behavior_approx_kl_count, 1),
+            "max_abs_log_ratio": max_abs_log_ratio,
+            "trust_region_stop_count": float(trust_region_stop_count),
+            "logits_max_abs": logits_max_abs,
+            "value_max_abs": value_max_abs,
         }
         | optimizer_metrics(optimizer)
     )
