@@ -1,0 +1,30 @@
+<div id="ahc061-exp002-final-score">
+  <style>
+    #ahc061-exp002-final-score { color: var(--foreground); font: 14px system-ui, sans-serif; max-width: 720px; }
+    #ahc061-exp002-final-score .title { font-size: 17px; font-weight: 500; margin: 0 0 8px; }
+    #ahc061-exp002-final-score svg { display: block; width: 100%; height: auto; }
+    #ahc061-exp002-final-score .axis { stroke: var(--border); stroke-width: 1; }
+    #ahc061-exp002-final-score .label { fill: var(--foreground); font-size: 12px; }
+    #ahc061-exp002-final-score .muted { fill: var(--muted-foreground); font-size: 12px; }
+    #ahc061-exp002-final-score .fixed { fill: var(--viz-series-1); }
+    #ahc061-exp002-final-score .adaptive { fill: var(--viz-series-2); }
+  </style>
+  <div class="title">AHC061 exp002: final mean score</div>
+  <svg viewBox="0 0 720 270" role="img" aria-label="固定 PPO と adaptive clipping 2条件の最終 mean score 比較。固定 PPO が最高。">
+    <line class="axis" x1="190" y1="38" x2="190" y2="226" />
+    <line class="axis" x1="190" y1="226" x2="686" y2="226" />
+    <text class="muted" x="190" y="248">0</text>
+    <text class="muted" x="429" y="248">80k</text>
+    <text class="muted" x="665" y="248">160k</text>
+    <text class="muted" x="190" y="22">final mean score</text>
+    <text class="label" x="10" y="77">fixed PPO</text>
+    <rect class="fixed" x="190" y="53" width="484" height="30" />
+    <text class="label" x="680" y="77" text-anchor="end">164,060.19</text>
+    <text class="label" x="10" y="137">adaptive κ=0.15</text>
+    <rect class="adaptive" x="190" y="113" width="468" height="30" />
+    <text class="label" x="664" y="137" text-anchor="end">158,565.69 · −3.35%</text>
+    <text class="label" x="10" y="197">adaptive κ=0.20</text>
+    <rect class="adaptive" x="190" y="173" width="471" height="30" />
+    <text class="label" x="667" y="197" text-anchor="end">159,401.37 · −2.84%</text>
+  </svg>
+</div>

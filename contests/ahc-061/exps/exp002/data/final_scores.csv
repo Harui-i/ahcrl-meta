@@ -1,0 +1,4 @@
+condition,kappa,task_id,wandb_run_id,total_steps_requested,total_env_steps,final_mean_score,delta_from_fixed,delta_percent,elapsed_sec
+fixed_ppo,,306,ok5n1134,10000000,10035200,164060.191406,0.000000,0.0000,2181.999670
+adaptive_clipping,0.15,308,z8i96ybh,10000000,10035200,158565.687500,-5494.503906,-3.3491,908.049821
+adaptive_clipping,0.20,309,255qpitp,10000000,10035200,159401.370117,-4658.821289,-2.8397,908.110571

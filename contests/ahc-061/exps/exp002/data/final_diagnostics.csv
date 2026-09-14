@@ -1,0 +1,3 @@
+kappa,adaptive_clip_eps_mean,adaptive_clip_eps_min,adaptive_clip_eps_max,adaptive_clip_at_min_frac,adaptive_clip_at_max_frac,clip_fraction
+0.15,0.1116680503,0.0500000007,0.4000000060,0.3636035025,0.0230957028,0.1899121094
+0.20,0.1388473511,0.0500000007,0.4000000060,0.2799316347,0.0508300774,0.1780175781

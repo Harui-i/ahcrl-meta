@@ -7,8 +7,6 @@ from ahcrl.contests.ahc061.train_ppo import (
     RUNTIME_KEYS,
     FP32MasterWeights,
     RunningRewardScaler,
-    _clip_epsilons,
-    _surrogate_clip_mask,
     create_model,
     parse_args,
 )
@@ -41,60 +39,6 @@ def test_parse_args_accepts_and_rejects_env_workers() -> None:
     assert parse_args(["--env-workers", "3"]).env_workers == 3
     with pytest.raises(ValueError, match="env_workers"):
         parse_args(["--env-workers", "-1"])
-
-
-def test_adaptive_clip_configuration_and_validation() -> None:
-    args = parse_args(
-        [
-            "--adaptive-clip",
-            "--adaptive-clip-kappa",
-            "0.15",
-            "--adaptive-clip-min",
-            "0.05",
-            "--adaptive-clip-max",
-            "0.4",
-        ]
-    )
-    assert args.adaptive_clip
-    assert args.adaptive_clip_kappa == 0.15
-    with pytest.raises(ValueError, match="adaptive_clip_kappa"):
-        parse_args(["--adaptive-clip-kappa", "-0.1"])
-    with pytest.raises(ValueError, match="adaptive_clip_min"):
-        parse_args(["--adaptive-clip-min", "-0.1"])
-    with pytest.raises(ValueError, match="adaptive_clip_max"):
-        parse_args(["--adaptive-clip-min", "0.2", "--adaptive-clip-max", "0.1"])
-
-
-def test_clip_epsilons_use_fixed_or_adaptive_bounds() -> None:
-    fixed_args = parse_args(["--clip", "0.2"])
-    advantages = torch.tensor([-3.0, -1.0, 0.0, 1.0, 3.0])
-    assert torch.equal(_clip_epsilons(advantages, fixed_args), torch.full_like(advantages, 0.2))
-
-    adaptive_args = parse_args(
-        [
-            "--adaptive-clip",
-            "--adaptive-clip-kappa",
-            "0.15",
-            "--adaptive-clip-min",
-            "0.05",
-            "--adaptive-clip-max",
-            "0.4",
-        ]
-    )
-    assert torch.equal(
-        _clip_epsilons(advantages, adaptive_args),
-        torch.tensor([0.4, 0.15, 0.05, 0.15, 0.4]),
-    )
-
-
-def test_surrogate_clip_mask_respects_advantage_sign() -> None:
-    ratio = torch.tensor([1.3, 0.7, 1.3, 0.7, 1.0])
-    advantages = torch.tensor([1.0, 1.0, -1.0, -1.0, 0.0])
-    clip_epsilons = torch.full_like(ratio, 0.2)
-    assert torch.equal(
-        _surrogate_clip_mask(ratio, advantages, clip_epsilons),
-        torch.tensor([True, False, False, True, False]),
-    )
 
 
 def test_checkpoint_round_trips_master_weights_and_reward_scaler(tmp_path: Path) -> None:

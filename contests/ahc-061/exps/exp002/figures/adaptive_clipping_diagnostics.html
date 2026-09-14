@@ -1,0 +1,25 @@
+<div id="ahc061-exp002-adaptive-diagnostics">
+  <style>
+    #ahc061-exp002-adaptive-diagnostics { color: var(--foreground); font: 14px system-ui, sans-serif; max-width: 720px; }
+    #ahc061-exp002-adaptive-diagnostics .title { font-size: 17px; font-weight: 500; margin: 0 0 8px; }
+    #ahc061-exp002-adaptive-diagnostics svg { display: block; width: 100%; height: auto; }
+    #ahc061-exp002-adaptive-diagnostics .axis { stroke: var(--border); stroke-width: 1; }
+    #ahc061-exp002-adaptive-diagnostics .label { fill: var(--foreground); font-size: 12px; }
+    #ahc061-exp002-adaptive-diagnostics .muted { fill: var(--muted-foreground); font-size: 12px; }
+    #ahc061-exp002-adaptive-diagnostics .k015 { fill: var(--viz-series-1); }
+    #ahc061-exp002-adaptive-diagnostics .k020 { fill: var(--viz-series-2); }
+  </style>
+  <div class="title">AHC061 exp002: final adaptive clipping diagnostics</div>
+  <svg viewBox="0 0 720 310" role="img" aria-label="κ=0.15 と κ=0.20 の最終 adaptive clipping 幅と実際の clipping 割合。">
+    <text class="label" x="12" y="22">mean ε</text>
+    <line class="axis" x1="170" y1="46" x2="680" y2="46" />
+    <rect class="k015" x="170" y="62" width="284" height="26" /><text class="label" x="464" y="81">κ=0.15 · 0.1117</text>
+    <rect class="k020" x="170" y="102" width="354" height="26" /><text class="label" x="534" y="121">κ=0.20 · 0.1388</text>
+    <text class="muted" x="170" y="143">0.00</text><text class="muted" x="419" y="143">0.10</text><text class="muted" x="668" y="143">0.20</text>
+    <text class="label" x="12" y="182">actual clip fraction</text>
+    <line class="axis" x1="170" y1="206" x2="680" y2="206" />
+    <rect class="k015" x="170" y="222" width="484" height="26" /><text class="label" x="664" y="241">κ=0.15 · 19.0%</text>
+    <rect class="k020" x="170" y="262" width="454" height="26" /><text class="label" x="634" y="281">κ=0.20 · 17.8%</text>
+    <text class="muted" x="170" y="303">0%</text><text class="muted" x="419" y="303">10%</text><text class="muted" x="668" y="303">20%</text>
+  </svg>
+</div>
