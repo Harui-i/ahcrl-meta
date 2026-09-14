@@ -1,10 +1,12 @@
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
 
+use rayon::prelude::*;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -113,7 +115,7 @@ pub struct StepOutcome {
     pub score: i64,
 }
 
-pub trait ContestEnv {
+pub trait ContestEnv: Send {
     fn validate_action(&self, action: u32) -> Result<(), String>;
     /// Returns the values reported immediately after constructing or resetting this environment.
     fn initial_outcome(&self) -> StepOutcome;
@@ -133,7 +135,7 @@ pub struct VisualizerData {
     pub output: String,
 }
 
-pub trait EnvFactory: Sized {
+pub trait EnvFactory: Send + Sync + Sized {
     type Env: ContestEnv;
 
     fn from_config(config: Value) -> Result<Self, String>;
@@ -147,22 +149,33 @@ pub struct VecEnvServer<F: EnvFactory> {
     num_envs: usize,
     envs: Vec<F::Env>,
     outcomes: Vec<StepOutcome>,
+    pool: ThreadPool,
 }
 
 impl<F: EnvFactory> VecEnvServer<F> {
     pub fn new(factory: F, num_envs: usize) -> Result<Self, String> {
+        Self::new_with_workers(factory, num_envs, 0)
+    }
+
+    pub fn new_with_workers(factory: F, num_envs: usize, workers: usize) -> Result<Self, String> {
         if num_envs == 0 {
             return Err("num_envs must be positive".to_owned());
         }
         let spec = factory.spec();
         spec.validate()?;
         spec.batch_bytes(num_envs)?;
+        let workers = worker_count(workers, num_envs);
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .map_err(|error| format!("failed to create environment worker pool: {error}"))?;
         Ok(Self {
             factory,
             spec,
             num_envs,
             envs: Vec::new(),
             outcomes: Vec::new(),
+            pool,
         })
     }
 
@@ -171,13 +184,22 @@ impl<F: EnvFactory> VecEnvServer<F> {
     }
 
     pub fn reset_all(&mut self, seed_start: u64, seed_stride: u64) -> Result<(), String> {
-        let mut replacements = Vec::with_capacity(self.num_envs);
-        for env_id in 0..self.num_envs {
-            let env = self
-                .factory
-                .create(seed_for(seed_start, seed_stride, env_id)?)?;
-            replacements.push((env.initial_outcome(), env));
-        }
+        let seeds = (0..self.num_envs)
+            .map(|env_id| seed_for(seed_start, seed_stride, env_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let replacements = self.pool.install(|| {
+            seeds
+                .par_iter()
+                .enumerate()
+                .map(|(env_id, &seed)| {
+                    self.factory
+                        .create(seed)
+                        .map(|env| (env.initial_outcome(), env))
+                        .map_err(|error| format!("env {env_id}: {error}"))
+                })
+                .collect::<Vec<_>>()
+        });
+        let replacements = collect_ordered(replacements)?;
         self.outcomes = replacements.iter().map(|(outcome, _)| *outcome).collect();
         self.envs = replacements.into_iter().map(|(_, env)| env).collect();
         Ok(())
@@ -200,15 +222,28 @@ impl<F: EnvFactory> VecEnvServer<F> {
         if let Some(value) = mask.iter().find(|&&value| value > 1) {
             return Err(format!("reset mask contains invalid byte {value}"));
         }
-        let mut replacements = Vec::new();
-        for (env_id, &reset) in mask.iter().enumerate() {
-            if reset != 0 {
-                let env = self
-                    .factory
-                    .create(seed_for(seed_start, seed_stride, env_id)?)?;
-                replacements.push((env_id, env.initial_outcome(), env));
-            }
-        }
+        let reset_ids = mask
+            .iter()
+            .enumerate()
+            .filter_map(|(env_id, &reset)| (reset != 0).then_some(env_id))
+            .collect::<Vec<_>>();
+        let seeds = reset_ids
+            .iter()
+            .map(|&env_id| seed_for(seed_start, seed_stride, env_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let replacements = self.pool.install(|| {
+            reset_ids
+                .par_iter()
+                .zip(seeds.par_iter())
+                .map(|(&env_id, &seed)| {
+                    self.factory
+                        .create(seed)
+                        .map(|env| (env_id, env.initial_outcome(), env))
+                        .map_err(|error| format!("env {env_id}: {error}"))
+                })
+                .collect::<Vec<_>>()
+        });
+        let replacements = collect_ordered(replacements)?;
         for (env_id, outcome, replacement) in replacements {
             self.envs[env_id] = replacement;
             self.outcomes[env_id] = outcome;
@@ -216,7 +251,7 @@ impl<F: EnvFactory> VecEnvServer<F> {
         Ok(())
     }
 
-    pub fn validate_actions(&self, actions: &[u32]) -> Result<(), String> {
+    pub fn validate_actions(&mut self, actions: &[u32]) -> Result<(), String> {
         self.require_initialized()?;
         if actions.len() != self.num_envs {
             return Err(format!(
@@ -225,27 +260,36 @@ impl<F: EnvFactory> VecEnvServer<F> {
                 actions.len()
             ));
         }
-        for (env_id, (env, &action)) in self.envs.iter().zip(actions).enumerate() {
-            env.validate_action(action)
-                .map_err(|error| format!("env {env_id}: {error}"))?;
-        }
-        Ok(())
+        let results = self.pool.install(|| {
+            self.envs
+                .par_iter_mut()
+                .zip(actions.par_iter())
+                .enumerate()
+                .map(|(env_id, (env, &action))| {
+                    env.validate_action(action)
+                        .map_err(|error| format!("env {env_id}: {error}"))
+                })
+                .collect::<Vec<_>>()
+        });
+        collect_ordered(results).map(|_| ())
     }
 
     pub fn step(&mut self, actions: &[u32]) -> Result<(), String> {
         self.validate_actions(actions)?;
-        for (env_id, ((env, outcome), &action)) in self
-            .envs
-            .iter_mut()
-            .zip(&mut self.outcomes)
-            .zip(actions)
-            .enumerate()
-        {
-            *outcome = env
-                .step(action)
-                .map_err(|error| format!("internal step failure in env {env_id}: {error}"))?;
-        }
-        Ok(())
+        let results = self.pool.install(|| {
+            self.envs
+                .par_iter_mut()
+                .zip(self.outcomes.par_iter_mut())
+                .zip(actions.par_iter())
+                .enumerate()
+                .map(|(env_id, ((env, outcome), &action))| {
+                    env.step(action)
+                        .map(|next_outcome| *outcome = next_outcome)
+                        .map_err(|error| format!("internal step failure in env {env_id}: {error}"))
+                })
+                .collect::<Vec<_>>()
+        });
+        collect_ordered(results).map(|_| ())
     }
 
     /// Advance only the environments selected by `mask`.
@@ -271,29 +315,45 @@ impl<F: EnvFactory> VecEnvServer<F> {
         if let Some(value) = mask.iter().find(|&&value| value > 1) {
             return Err(format!("step mask contains invalid byte {value}"));
         }
-        for (env_id, ((env, &selected), &action)) in
-            self.envs.iter().zip(mask).zip(actions).enumerate()
-        {
-            if selected != 0 {
-                env.validate_action(action)
-                    .map_err(|error| format!("env {env_id}: {error}"))?;
-            }
-        }
-        for (env_id, (((env, outcome), &selected), &action)) in self
-            .envs
-            .iter_mut()
-            .zip(&mut self.outcomes)
-            .zip(mask)
-            .zip(actions)
-            .enumerate()
-        {
-            if selected != 0 {
-                *outcome = env
-                    .step(action)
-                    .map_err(|error| format!("internal step failure in env {env_id}: {error}"))?;
-            }
-        }
-        Ok(())
+        let validation = self.pool.install(|| {
+            self.envs
+                .par_iter_mut()
+                .zip(mask.par_iter())
+                .zip(actions.par_iter())
+                .enumerate()
+                .map(|(env_id, ((env, &selected), &action))| {
+                    (selected == 0).then_some(()).map_or_else(
+                        || {
+                            env.validate_action(action)
+                                .map_err(|error| format!("env {env_id}: {error}"))
+                        },
+                        Ok,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        collect_ordered(validation)?;
+        let results = self.pool.install(|| {
+            self.envs
+                .par_iter_mut()
+                .zip(self.outcomes.par_iter_mut())
+                .zip(mask.par_iter())
+                .zip(actions.par_iter())
+                .enumerate()
+                .map(|(env_id, (((env, outcome), &selected), &action))| {
+                    if selected != 0 {
+                        env.step(action)
+                            .map(|next_outcome| *outcome = next_outcome)
+                            .map_err(|error| {
+                                format!("internal step failure in env {env_id}: {error}")
+                            })
+                    } else {
+                        Ok(())
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        collect_ordered(results).map(|_| ())
     }
 
     pub fn visualizer_data(&self) -> Result<Vec<VisualizerData>, String> {
@@ -308,31 +368,23 @@ impl<F: EnvFactory> VecEnvServer<F> {
             .collect()
     }
 
-    pub fn encode_batch(&self) -> Result<Vec<u8>, String> {
+    pub fn encode_batch(&mut self) -> Result<Vec<u8>, String> {
         self.require_initialized()?;
         let capacity = self.spec.batch_bytes(self.num_envs)?;
         let mut output = Vec::with_capacity(capacity);
-        for tensor in &self.spec.observations {
-            self.encode_tensor(tensor, false, &mut output)?;
+        for tensor in self.spec.observations.clone() {
+            self.encode_tensor(&tensor, false, &mut output)?;
         }
-        for outcome in &self.outcomes {
-            output.extend_from_slice(&outcome.reward.to_le_bytes());
-        }
-        for outcome in &self.outcomes {
-            output.push(u8::from(outcome.done));
-        }
-        for outcome in &self.outcomes {
-            output.extend_from_slice(&outcome.score.to_le_bytes());
-        }
-        for tensor in &self.spec.metrics {
-            self.encode_tensor(tensor, true, &mut output)?;
+        self.encode_outcomes(&mut output);
+        for tensor in self.spec.metrics.clone() {
+            self.encode_tensor(&tensor, true, &mut output)?;
         }
         debug_assert_eq!(output.len(), capacity);
         Ok(output)
     }
 
     fn encode_tensor(
-        &self,
+        &mut self,
         tensor: &TensorSpec,
         metric: bool,
         output: &mut Vec<u8>,
@@ -340,17 +392,56 @@ impl<F: EnvFactory> VecEnvServer<F> {
         let bytes_per_env = tensor.bytes_per_env()?;
         let start = output.len();
         output.resize(start + bytes_per_env * self.num_envs, 0);
-        for (env_id, env) in self.envs.iter().enumerate() {
-            let offset = start + env_id * bytes_per_env;
-            let destination = &mut output[offset..offset + bytes_per_env];
-            let result = if metric {
-                env.write_metric(&tensor.name, destination)
-            } else {
-                env.write_observation(&tensor.name, destination)
-            };
-            result.map_err(|error| format!("failed to encode {}: {error}", tensor.name))?;
-        }
-        Ok(())
+        let results = self.pool.install(|| {
+            self.envs
+                .par_iter_mut()
+                .zip(output[start..].par_chunks_mut(bytes_per_env))
+                .enumerate()
+                .map(|(env_id, (env, destination))| {
+                    let result = if metric {
+                        env.write_metric(&tensor.name, destination)
+                    } else {
+                        env.write_observation(&tensor.name, destination)
+                    };
+                    result.map_err(|error| {
+                        format!("failed to encode {} for env {env_id}: {error}", tensor.name)
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
+        collect_ordered(results).map(|_| ())
+    }
+
+    fn encode_outcomes(&self, output: &mut Vec<u8>) {
+        let reward_start = output.len();
+        output.resize(reward_start + self.num_envs * std::mem::size_of::<f32>(), 0);
+        let outcomes = &self.outcomes;
+        self.pool.install(|| {
+            output[reward_start..]
+                .par_chunks_mut(std::mem::size_of::<f32>())
+                .zip(outcomes.par_iter())
+                .for_each(|(destination, outcome)| {
+                    destination.copy_from_slice(&outcome.reward.to_le_bytes())
+                });
+        });
+        let done_start = output.len();
+        output.resize(done_start + self.num_envs, 0);
+        self.pool.install(|| {
+            output[done_start..]
+                .par_iter_mut()
+                .zip(outcomes.par_iter())
+                .for_each(|(destination, outcome)| *destination = u8::from(outcome.done));
+        });
+        let score_start = output.len();
+        output.resize(score_start + self.num_envs * std::mem::size_of::<i64>(), 0);
+        self.pool.install(|| {
+            output[score_start..]
+                .par_chunks_mut(std::mem::size_of::<i64>())
+                .zip(outcomes.par_iter())
+                .for_each(|(destination, outcome)| {
+                    destination.copy_from_slice(&outcome.score.to_le_bytes())
+                });
+        });
     }
 
     fn require_initialized(&self) -> Result<(), String> {
@@ -360,6 +451,22 @@ impl<F: EnvFactory> VecEnvServer<F> {
             Ok(())
         }
     }
+}
+
+fn worker_count(requested_workers: usize, num_envs: usize) -> usize {
+    let available = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let desired = if requested_workers == 0 {
+        available
+    } else {
+        requested_workers
+    };
+    desired.min(num_envs).max(1)
+}
+
+fn collect_ordered<T>(results: Vec<Result<T, String>>) -> Result<Vec<T>, String> {
+    results.into_iter().collect()
 }
 
 fn seed_for(seed_start: u64, seed_stride: u64, env_id: usize) -> Result<u64, String> {
@@ -375,6 +482,7 @@ fn seed_for(seed_start: u64, seed_stride: u64, env_id: usize) -> Result<u64, Str
 struct InitRequest {
     protocol_version: u32,
     num_envs: usize,
+    env_workers: usize,
     config: Value,
 }
 
@@ -451,7 +559,11 @@ where
                         continue;
                     }
                 };
-                let new_server = match VecEnvServer::new(factory, request.num_envs) {
+                let new_server = match VecEnvServer::new_with_workers(
+                    factory,
+                    request.num_envs,
+                    request.env_workers,
+                ) {
                     Ok(server) => server,
                     Err(error) => {
                         send_error(&mut writer, &error)?;
@@ -636,7 +748,7 @@ fn send_error(writer: &mut impl Write, error: &str) -> Result<(), String> {
 }
 
 fn write_batch<F: EnvFactory>(
-    server: &VecEnvServer<F>,
+    server: &mut VecEnvServer<F>,
     writer: &mut impl Write,
 ) -> Result<(), String> {
     let batch = server.encode_batch()?;
@@ -767,6 +879,78 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct ProbeEnv {
+        inner: DummyEnv,
+        in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        max_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl ContestEnv for ProbeEnv {
+        fn validate_action(&self, action: u32) -> Result<(), String> {
+            self.inner.validate_action(action)
+        }
+
+        fn initial_outcome(&self) -> StepOutcome {
+            self.inner.initial_outcome()
+        }
+
+        fn step(&mut self, action: u32) -> Result<StepOutcome, String> {
+            let in_flight = self
+                .in_flight
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            self.max_in_flight
+                .fetch_max(in_flight, std::sync::atomic::Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            self.in_flight
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.step(action)
+        }
+
+        fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
+            self.inner.write_observation(name, destination)
+        }
+
+        fn write_metric(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
+            self.inner.write_metric(name, destination)
+        }
+    }
+
+    struct ProbeFactory {
+        in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        max_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl ProbeFactory {
+        fn new() -> Self {
+            Self {
+                in_flight: Default::default(),
+                max_in_flight: Default::default(),
+            }
+        }
+    }
+
+    impl EnvFactory for ProbeFactory {
+        type Env = ProbeEnv;
+
+        fn from_config(_config: Value) -> Result<Self, String> {
+            Ok(Self::new())
+        }
+
+        fn spec(&self) -> EnvSpec {
+            DummyFactory.spec()
+        }
+
+        fn create(&self, seed: u64) -> Result<Self::Env, String> {
+            Ok(ProbeEnv {
+                inner: DummyEnv { value: seed as u32 },
+                in_flight: self.in_flight.clone(),
+                max_in_flight: self.max_in_flight.clone(),
+            })
+        }
+    }
+
     #[test]
     fn reset_mask_preserves_unselected_slots() {
         let mut server = VecEnvServer::new(DummyFactory, 3).unwrap();
@@ -878,10 +1062,45 @@ mod tests {
     }
 
     #[test]
+    fn parallel_workers_preserve_slot_order_and_batch_bytes() {
+        let mut serial = VecEnvServer::new_with_workers(DummyFactory, 4, 1).unwrap();
+        let mut parallel = VecEnvServer::new_with_workers(DummyFactory, 4, 4).unwrap();
+        serial.reset_all(10, 3).unwrap();
+        parallel.reset_all(10, 3).unwrap();
+        let actions = [1, 2, 1, 2];
+        serial.step(&actions).unwrap();
+        parallel.step(&actions).unwrap();
+
+        assert_eq!(serial.outcomes, parallel.outcomes);
+        assert_eq!(
+            serial.encode_batch().unwrap(),
+            parallel.encode_batch().unwrap()
+        );
+    }
+
+    #[test]
+    fn worker_count_controls_step_concurrency() {
+        let serial_factory = ProbeFactory::new();
+        let serial_max = serial_factory.max_in_flight.clone();
+        let mut serial = VecEnvServer::new_with_workers(serial_factory, 4, 1).unwrap();
+        serial.reset_all(0, 1).unwrap();
+        serial.step(&[1, 1, 1, 1]).unwrap();
+        assert_eq!(serial_max.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let parallel_factory = ProbeFactory::new();
+        let parallel_max = parallel_factory.max_in_flight.clone();
+        let mut parallel = VecEnvServer::new_with_workers(parallel_factory, 4, 4).unwrap();
+        parallel.reset_all(0, 1).unwrap();
+        parallel.step(&[1, 1, 1, 1]).unwrap();
+        assert!(parallel_max.load(std::sync::atomic::Ordering::SeqCst) > 1);
+    }
+
+    #[test]
     fn protocol_handles_init_reset_step_and_quit() {
         let init = serde_json::json!({
             "protocol_version": PROTOCOL_VERSION,
             "num_envs": 2,
+            "env_workers": 1,
             "config": {},
         });
         let init = serde_json::to_vec(&init).unwrap();
@@ -904,6 +1123,7 @@ mod tests {
         let init = serde_json::json!({
             "protocol_version": PROTOCOL_VERSION,
             "num_envs": 2,
+            "env_workers": 1,
             "config": {},
         });
         let init = serde_json::to_vec(&init).unwrap();

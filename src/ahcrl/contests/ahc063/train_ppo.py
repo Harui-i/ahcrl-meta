@@ -43,6 +43,7 @@ RL_TOOLS_MANIFEST = ROOT / "contests" / "ahc-063" / "rl-tools" / "Cargo.toml"
 MODEL_DTYPE = torch.bfloat16
 DEFAULT_CONFIG: dict[str, Any] = {
     "num_envs": 64,
+    "env_workers": 0,
     "total_steps": 2_000_000,
     "rollout_steps": 128,
     "seed_start": 0,
@@ -107,6 +108,7 @@ RESUME_ALLOWED_OVERRIDE_KEYS = {
     "epochs",
     "lr",
     "num_envs",
+    "env_workers",
     "policy_unfreeze_explained_variance",
     "policy_warmup_epochs_multiplier",
     "wandb_name",
@@ -407,6 +409,7 @@ def evaluate_policy(
                 "fixed_c": args.eval_fixed_c,
                 "max_steps_per_cell": args.eval_max_steps_per_cell,
             },
+            workers=args.env_workers,
             seed_start=seed_start,
             seed_stride=seed_stride,
             cwd=ROOT,
@@ -904,6 +907,7 @@ def main() -> None:
             "fixed_c": args.fixed_c,
             "max_steps_per_cell": args.max_steps_per_cell,
         },
+        workers=args.env_workers,
         seed_start=args.seed_start,
         seed_stride=args.seed_stride,
         cwd=ROOT,
@@ -1143,6 +1147,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     config["resume_dir"] = resume_dir
     config["init_checkpoint"] = init_checkpoint
+    if not isinstance(config["env_workers"], int) or config["env_workers"] < 0:
+        raise ValueError("env_workers must be a non-negative integer")
     if config["model_channels"] % 4:
         raise ValueError("model_channels must be divisible by four")
     if config["checkpoint_interval_updates"] <= 0:

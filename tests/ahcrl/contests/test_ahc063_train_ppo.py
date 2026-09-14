@@ -101,6 +101,8 @@ def test_parse_args_rejects_invalid_evaluation_values() -> None:
         parse_args(["--max-steps-per-cell", "0"])
     with pytest.raises(ValueError, match="eval_max_steps_per_cell"):
         parse_args(["--eval-max-steps-per-cell", "0"])
+    with pytest.raises(ValueError, match="env_workers"):
+        parse_args(["--env-workers", "-1"])
 
 
 def test_parse_args_rejects_removed_fixed_step_options(tmp_path: Path) -> None:

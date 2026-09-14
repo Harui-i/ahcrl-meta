@@ -124,3 +124,8 @@ def test_client_validation_and_process_failure() -> None:
         env.step(np.asarray([1], dtype=np.uint32))
     env.close()
     env.close()
+
+
+def test_client_rejects_negative_worker_count_before_starting_process() -> None:
+    with pytest.raises(ValueError, match="workers"):
+        RustVecEnv(["does-not-run"], 1, workers=-1)

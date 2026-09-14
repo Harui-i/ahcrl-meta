@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import numpy as np
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 _DTYPES: dict[str, np.dtype] = {
     "f32": np.dtype("<f4"),
     "i64": np.dtype("<i8"),
@@ -68,12 +68,15 @@ class RustVecEnv:
         num_envs: int,
         *,
         config: dict[str, Any] | None = None,
+        workers: int = 0,
         seed_start: int = 0,
         seed_stride: int = 1,
         cwd: Path | None = None,
     ) -> None:
         if num_envs <= 0:
             raise ValueError("num_envs must be positive")
+        if isinstance(workers, bool) or not isinstance(workers, int) or workers < 0:
+            raise ValueError("workers must be a non-negative integer")
         if not command:
             raise ValueError("command must not be empty")
         self.num_envs = num_envs
@@ -89,7 +92,7 @@ class RustVecEnv:
             bufsize=0,
         )
         try:
-            self.observation_specs, self.metric_specs = self._initialize(config or {})
+            self.observation_specs, self.metric_specs = self._initialize(config or {}, workers)
             self._batch_size = self._expected_batch_size()
             self._buffer = bytearray(self._batch_size)
             self.obs = self.reset(seed_start, seed_stride)
@@ -221,11 +224,14 @@ class RustVecEnv:
     def __exit__(self, *_args: object) -> None:
         self.close()
 
-    def _initialize(self, config: dict[str, Any]) -> tuple[list[TensorSpec], list[TensorSpec]]:
+    def _initialize(
+        self, config: dict[str, Any], workers: int
+    ) -> tuple[list[TensorSpec], list[TensorSpec]]:
         request = json.dumps(
             {
                 "protocol_version": PROTOCOL_VERSION,
                 "num_envs": self.num_envs,
+                "env_workers": workers,
                 "config": config,
             },
             separators=(",", ":"),

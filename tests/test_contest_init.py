@@ -8,6 +8,7 @@ from ahcrl.training.config import load_toml_config
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DEFAULTS = {
     "num_envs": 1,
+    "env_workers": 0,
     "total_steps": 1,
     "rollout_steps": 1,
     "seed_start": 0,

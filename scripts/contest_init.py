@@ -269,6 +269,9 @@ impl ContestEnv for __ENV__ {
         slug=slug,
         directory=directory,
     )
+    for config_name in ("ppo_smoke.toml", "ppo_train.toml"):
+        path = f"contests/{directory}/configs/{config_name}"
+        files[path] = files[path].replace("\n", "\nenv_workers = 0\n", 1)
     return files
 
 

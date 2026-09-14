@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import torch
 
 from ahcrl.contests.ahc061.train_ppo import (
@@ -26,11 +27,18 @@ def test_parse_args_uses_shared_toml_sections(tmp_path: Path) -> None:
     )
     args = parse_args(["--config", str(config_path), "--fixed-m", "4", "--fixed-u", "3"])
     assert args.num_envs == 4
+    assert args.env_workers == 0
     assert args.model_channels == 8
     assert args.model_blocks == 1
     assert args.pf_particles == 2
     assert args.fixed_m == 4
     assert args.fixed_u == 3
+
+
+def test_parse_args_accepts_and_rejects_env_workers() -> None:
+    assert parse_args(["--env-workers", "3"]).env_workers == 3
+    with pytest.raises(ValueError, match="env_workers"):
+        parse_args(["--env-workers", "-1"])
 
 
 def test_checkpoint_round_trips_master_weights_and_reward_scaler(tmp_path: Path) -> None:
