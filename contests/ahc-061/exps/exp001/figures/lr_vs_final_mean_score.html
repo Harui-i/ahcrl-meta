@@ -1,0 +1,69 @@
+<div id="ahc061-lr-final-mean-score-all">
+  <style>
+    #ahc061-lr-final-mean-score-all { position: relative; color: var(--foreground); font-family: ui-sans-serif, system-ui, sans-serif; }
+    #ahc061-lr-final-mean-score-all .title { font-size: 17px; font-weight: 500; margin: 0 0 8px; }
+    #ahc061-lr-final-mean-score-all .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 8px 72px; }
+    #ahc061-lr-final-mean-score-all .legend button { appearance: none; border: 0; background: transparent; color: var(--foreground); cursor: pointer; font: inherit; font-size: 13px; padding: 2px 0; }
+    #ahc061-lr-final-mean-score-all .legend button[aria-pressed="false"] { opacity: .38; text-decoration: line-through; }
+    #ahc061-lr-final-mean-score-all .swatch { display: inline-block; width: 18px; height: 3px; margin: 0 5px 3px 0; vertical-align: middle; }
+    #ahc061-lr-final-mean-score-all svg { display: block; width: 100%; overflow: visible; }
+    #ahc061-lr-final-mean-score-all .axis-title { font-size: 12px; font-weight: 500; }
+    #ahc061-lr-final-mean-score-all .tick text { fill: var(--foreground); font-size: 12px; }
+    #ahc061-lr-final-mean-score-all .tick line, #ahc061-lr-final-mean-score-all .domain { stroke: var(--border); }
+    #ahc061-lr-final-mean-score-all .grid line { stroke: var(--border); opacity: .45; }
+    #ahc061-lr-final-mean-score-all .tooltip { position: absolute; z-index: 2; pointer-events: none; display: none; padding: 7px 9px; background: var(--popover); color: var(--popover-foreground); border: 1px solid var(--border); font-size: 12px; line-height: 1.45; white-space: nowrap; }
+    #ahc061-lr-final-mean-score-all .tooltip-row { display: flex; gap: 7px; align-items: center; }
+    #ahc061-lr-final-mean-score-all .tooltip-dot { width: 8px; height: 8px; border-radius: 50%; }
+    @media (max-width: 420px) { #ahc061-lr-final-mean-score-all .legend { margin-left: 0; } }
+  </style>
+  <div class="title">AHC061 PPO: learning rate vs. final mean_score</div>
+  <div class="legend" aria-label="channels"></div>
+  <div class="plot"></div>
+  <div class="tooltip" role="tooltip"></div>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <script>
+    (() => {
+      const root = document.getElementById('ahc061-lr-final-mean-score-all');
+      const points = [{"task":287,"ch":64,"lr":"9.4868e-5","x":0.000094868,"y":115230.48},{"task":288,"ch":64,"lr":"1.6870e-4","x":0.0001687,"y":131348.12},{"task":289,"ch":64,"lr":"3e-4","x":0.0003,"y":144705.2},{"task":302,"ch":64,"lr":"4.0006e-4","x":0.00040006,"y":150573.26},{"task":290,"ch":64,"lr":"5.3348e-4","x":0.00053348,"y":158069.21},{"task":303,"ch":64,"lr":"7.1149e-4","x":0.00071149,"y":159214.51},{"task":291,"ch":64,"lr":"9.4868e-4","x":0.00094868,"y":155164.31},{"task":292,"ch":128,"lr":"9.4868e-5","x":0.000094868,"y":126919.88},{"task":293,"ch":128,"lr":"1.6870e-4","x":0.0001687,"y":144280.03},{"task":294,"ch":128,"lr":"3e-4","x":0.0003,"y":154733.23},{"task":304,"ch":128,"lr":"4.0006e-4","x":0.00040006,"y":158538.88},{"task":295,"ch":128,"lr":"5.3348e-4","x":0.00053348,"y":163300.91},{"task":305,"ch":128,"lr":"7.1149e-4","x":0.00071149,"y":159398.91},{"task":296,"ch":128,"lr":"9.4868e-4","x":0.00094868,"y":157570.85},{"task":297,"ch":256,"lr":"9.4868e-5","x":0.000094868,"y":143310.78},{"task":298,"ch":256,"lr":"1.6870e-4","x":0.0001687,"y":152634.12},{"task":299,"ch":256,"lr":"3e-4","x":0.0003,"y":163321.35},{"task":306,"ch":256,"lr":"4.0006e-4","x":0.00040006,"y":164060.19},{"task":300,"ch":256,"lr":"5.3348e-4","x":0.00053348,"y":164003.62},{"task":307,"ch":256,"lr":"7.1149e-4","x":0.00071149,"y":161997.54},{"task":301,"ch":256,"lr":"9.4868e-4","x":0.00094868,"y":162128.42}];
+      const colors = {64:'var(--viz-series-1)',128:'var(--viz-series-2)',256:'var(--viz-series-3)'};
+      const series = [64,128,256].map(ch => ({name:'channels ' + ch, color:colors[ch], values:points.filter(p => p.ch === ch).sort((a,b) => a.x-b.x)}));
+      const visible = new Set(series.map(s => s.name));
+      const score = d3.format(',.0f');
+      const lrText = x => x.toExponential(2).replace('e-0','e-');
+      const legend = d3.select(root.querySelector('.legend'));
+      const tooltip = d3.select(root.querySelector('.tooltip'));
+      series.forEach(s => {
+        const button = legend.append('button').attr('type','button').attr('aria-pressed','true');
+        button.html('<span class="swatch" style="background:' + s.color + '"></span>' + s.name);
+        button.on('click', () => { visible.has(s.name) ? visible.delete(s.name) : visible.add(s.name); button.attr('aria-pressed',visible.has(s.name)); draw(); });
+      });
+      function draw() {
+        const host = root.querySelector('.plot');
+        const width = Math.max(320,host.clientWidth || 736);
+        const height = width < 440 ? 345 : 315;
+        const margin = {top:12,right:24,bottom:60,left:82};
+        const all = series.flatMap(s => s.values);
+        const xExtent = d3.extent(all,d => d.x);
+        const yExtent = d3.extent(all,d => d.y);
+        const x = d3.scaleLog().domain([xExtent[0]/1.12,xExtent[1]*1.12]).range([margin.left+7,width-margin.right-7]);
+        const y = d3.scaleLinear().domain([yExtent[0]-(yExtent[1]-yExtent[0])*.12,yExtent[1]+(yExtent[1]-yExtent[0])*.12]).nice().range([height-margin.bottom-6,margin.top+6]);
+        d3.select(host).selectAll('svg').remove();
+        const svg=d3.select(host).append('svg').attr('viewBox','0 0 '+width+' '+height).attr('role','img').attr('aria-label','Final mean score by learning rate and channel width');
+        svg.append('rect').attr('data-chart-frame','').attr('x',margin.left).attr('y',margin.top).attr('width',width-margin.left-margin.right).attr('height',height-margin.top-margin.bottom).attr('fill','none').attr('stroke','var(--border)');
+        svg.append('g').attr('class','grid').attr('transform','translate('+margin.left+',0)').call(d3.axisLeft(y).ticks(5).tickSize(-(width-margin.left-margin.right)).tickFormat(''));
+        svg.append('g').attr('transform','translate(0,'+(height-margin.bottom)+')').call(d3.axisBottom(x).ticks(width<440?4:6,'.0e').tickFormat(lrText));
+        svg.append('g').attr('transform','translate('+margin.left+',0)').call(d3.axisLeft(y).ticks(5).tickFormat(d3.format('~s')));
+        const line=d3.line().x(d=>x(d.x)).y(d=>y(d.y));
+        series.forEach(s => { const active=visible.has(s.name); const g=svg.append('g').attr('opacity',active?1:0).attr('aria-hidden',active?null:'true'); g.append('path').datum(s.values).attr('fill','none').attr('stroke',s.color).attr('stroke-width',2.5).attr('d',line); g.selectAll('circle').data(s.values).join('circle').attr('cx',d=>x(d.x)).attr('cy',d=>y(d.y)).attr('r',4.5).attr('fill',s.color).attr('stroke','var(--popover)').attr('stroke-width',1.5); });
+        svg.append('text').attr('class','axis-title').attr('data-axis','x').attr('x',(margin.left+width-margin.right)/2).attr('y',height-15).attr('text-anchor','middle').attr('fill','var(--foreground)').text('Learning rate (log scale)');
+        svg.append('text').attr('class','axis-title').attr('data-axis','y').attr('transform','translate(18 '+((margin.top+height-margin.bottom)/2)+') rotate(-90)').attr('text-anchor','middle').attr('fill','var(--foreground)').text('Final mean_score (episode/score_mean)');
+        const guide=svg.append('line').attr('data-chart-hover-guide','').attr('y1',margin.top).attr('y2',height-margin.bottom).attr('stroke','var(--foreground)').attr('stroke-dasharray','3,3').attr('opacity',0);
+        const marks=svg.append('g');
+        const overlay=svg.append('rect').attr('data-chart-hit','').attr('data-chart-hover-overlay','cross-series').attr('x',margin.left).attr('y',margin.top).attr('width',width-margin.left-margin.right).attr('height',height-margin.top-margin.bottom).attr('fill','transparent');
+        function show(event) { const [px]=d3.pointer(event,svg.node()); const xv=x.invert(Math.max(margin.left,Math.min(width-margin.right,px))); const i=d3.bisector(d=>d.x).center(series[0].values,xv); const point0=series[0].values[i]; guide.attr('x1',x(point0.x)).attr('x2',x(point0.x)).attr('opacity',.6); marks.selectAll('*').remove(); const rows=series.filter(s=>visible.has(s.name)).map(s=>{const p=s.values[i]; marks.append('circle').attr('data-chart-hover-marker','').attr('cx',x(p.x)).attr('cy',y(p.y)).attr('r',7).attr('fill','none').attr('stroke',s.color).attr('stroke-width',2); return '<div class="tooltip-row"><span class="tooltip-dot" style="background:'+s.color+'"></span>'+s.name+': '+score(p.y)+'</div>';}).join(''); tooltip.style('display','block').html('<strong>LR '+lrText(point0.x)+'</strong>'+rows).style('left',Math.min(root.clientWidth-165,Math.max(6,px+12))+'px').style('top',Math.max(35,d3.pointer(event,root)[1]-10)+'px'); }
+        overlay.on('pointermove',show).on('pointerleave',()=>{guide.attr('opacity',0);marks.selectAll('*').remove();tooltip.style('display','none');}).on('click',show);
+      }
+      new ResizeObserver(draw).observe(root.querySelector('.plot')); draw();
+    })();
+  </script>
+</div>

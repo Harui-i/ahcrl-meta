@@ -1,0 +1,8549 @@
+[
+  {
+    "task_id": 287,
+    "wandb_name": "ahc061-ppo-10m-ch64-lr9p4868e-5",
+    "wandb_run_id": "m8gdadbv",
+    "channels": 64,
+    "lr": 0.00009486832981,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 115230.478516,
+    "elapsed_sec": 1762.3112392425537,
+    "pueue_started_at": "2026-09-14T01:38:27.440646108+09:00",
+    "pueue_finished_at": "2026-09-14T02:07:56.230117663+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 84753.179688
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82262.280273
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 86848.55957
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 84685.317383
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 86785.853516
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 87671.023438
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 87074.640625
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 89640.34375
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 89333.607422
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 91378.585938
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 93327.773438
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 92176.648438
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 94378.233398
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 92796.765625
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 94584.99707
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 94793.801758
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 95306.720703
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 94809.068359
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 96459.707031
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 96170.126953
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 97279.510742
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 98745.373047
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 98658.652344
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 98333.589844
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 101801.37207
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 100162.337891
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 98670.279297
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 100376.570312
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 99967.664062
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 100151.709961
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 102788.524414
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 102527.700195
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 102090.829102
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 101364.460938
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 101634.816406
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 104351.567383
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 104915.513672
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 104511.155273
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 104444.819336
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 105222.375977
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 104736.81543
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 105967.137695
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 104975.924805
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 105402.90332
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 105974.316406
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 108347.891602
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 107811.788086
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 106854.180664
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 107782.370117
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 108857.632812
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 108365.631836
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 111497.390625
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 108408.663086
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 107604.654297
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 106535.322266
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 111273.65918
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 107251.548828
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 111168.827148
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 110320.791016
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 107231.986328
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 111841.157227
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 111271.273438
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 110005.97168
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 110339.448242
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 109996.837891
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 112542.227539
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 111344.765625
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 109827.438477
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 112481.350586
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 114072.726562
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 112613.545898
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 113710.018555
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 112441.941406
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 111932.579102
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 110094.539062
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 112517.446289
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 113726.02832
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 112911.329102
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 114298.143555
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 113961.706055
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 116079.541992
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 113523.515625
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 114122.450195
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 113765.181641
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 116817.206055
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 112898.28125
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 114352.480469
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 113446.314453
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 113240.212891
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 114427.213867
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 117407.402344
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 118559.182617
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 114728.575195
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 117943.521484
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 115614.776367
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 116838.883789
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 117172.87793
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 115230.478516
+      }
+    ]
+  },
+  {
+    "task_id": 288,
+    "wandb_name": "ahc061-ppo-10m-ch64-lr1p6870e-4",
+    "wandb_run_id": "hgf3bzdr",
+    "channels": 64,
+    "lr": 0.0001687023976,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 131348.125,
+    "elapsed_sec": 1692.7227413654327,
+    "pueue_started_at": "2026-09-14T02:07:56.243387586+09:00",
+    "pueue_finished_at": "2026-09-14T02:36:14.857485880+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 84753.179688
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82942.612305
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 87708.05957
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 86230.99707
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 88101.615234
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 89218.807617
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 89826.024414
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 94334.448242
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 95452.745117
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 96449.607422
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 100705.598633
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 98107.21875
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 101833.992188
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 101411.454102
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 101289.353516
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 103684.594727
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 103254.609375
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 104234.53125
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 104637.749023
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 105376.339844
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 107892.535156
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 106814.152344
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 108657.873047
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 108882.941406
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 114072.952148
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 110227.395508
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 111584.446289
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 112276.217773
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 113012.09668
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 111727.856445
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 114066.22168
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 114751.373047
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 114557.844727
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 113647.049805
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 115149.046875
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 117253.731445
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 120016.095703
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 115885.754883
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 117948.360352
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 119841.188477
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 118873.804688
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 118952.50293
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 118489.416016
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 119211.183594
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 120265.563477
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 123917.549805
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 123534.730469
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 122791.03125
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 124357.207031
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 126339.429688
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 125068.77832
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 126682.668945
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 124191.614258
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 122104.652344
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 121485.279297
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 125779.931641
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 121970.354492
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 127377.90918
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 124937.452148
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 126576.207031
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 126696.639648
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 127270.618164
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 126788.794922
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 126618.735352
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 126805.333008
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 130869.977539
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 128777.889648
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 128026.959961
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 127851.357422
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 131941.02832
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 129570.208984
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 129014.5
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 128396.28125
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 126873.783203
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 126198.579102
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 128200.764648
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 128149.974609
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 132930.337891
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 128691.856445
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 132037.783203
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 132299.442383
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 133597.390625
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 131766.969727
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 131653.865234
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 131980.663086
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 130712.456055
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 132259.588867
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 130638.235352
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 131077.03418
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 132233.556641
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 133265.950195
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 137081.324219
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 131507.398438
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 136778.485352
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 133123.462891
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 132730.961914
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 133275.501953
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 131348.125
+      }
+    ]
+  },
+  {
+    "task_id": 289,
+    "wandb_name": "ahc061-ppo-10m-ch64-lr3e-4",
+    "wandb_run_id": "8i5n3asu",
+    "channels": 64,
+    "lr": 0.0003,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 144705.202148,
+    "elapsed_sec": 1698.470618724823,
+    "pueue_started_at": "2026-09-14T02:36:14.870631753+09:00",
+    "pueue_finished_at": "2026-09-14T03:04:39.193536314+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 84753.179688
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 83394.339844
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 87597.330078
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 88374.266602
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 89911.916992
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 91964.657227
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 93697.350586
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 97550.743164
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 99036.705078
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 102715.375
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 103875.310547
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 104260.626953
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 107965.651367
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 109874.774414
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 109937.637695
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 111874.584961
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 113512.943359
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 113093.270508
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 115445.87207
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 115969.026367
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 119246.668945
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 118780.897461
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 122999.279297
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 120970.966797
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 125355.237305
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 123241.541016
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 125397.219727
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 125648.311523
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 126807.416992
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 127468.889648
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 129919.273438
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 131363.270508
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 131783.260742
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 130589.754883
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 130069.779297
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 133475.469727
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 136212.556641
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 133387.949219
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 134975.663086
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 137760.033203
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 137997.522461
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 135073.131836
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 136437.260742
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 137413.594727
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 138945.248047
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 143970.793945
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 142111.235352
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 138552.641602
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 142637.798828
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 143473.160156
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 140741.279297
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 146016.25293
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 140396.788086
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 138602.46875
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 139075.575195
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 142173.556641
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 139876.591797
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 146138.966797
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 143570.348633
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 143103.773438
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 143032.082031
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 145465.817383
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 144913.285156
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 141912.548828
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 143842.546875
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 149364.425781
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 145424.134766
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 142348.428711
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 145944.647461
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 151472.15332
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 148789.401367
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 145627.545898
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 143229.677734
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 141586.848633
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 143399.092773
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 145787.413086
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 143067.168945
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 146391.753906
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 147150.783203
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 147878.392578
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 151269.75293
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 147351.246094
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 150023.69043
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 146532.302734
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 150214.645508
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 145757.333984
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 146976.907227
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 144186.088867
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 144393.8125
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 146330.744141
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 148971.919922
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 152445.479492
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 146993.558594
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 152127.132812
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 148568.795898
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 148443.383789
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 148938.418945
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 144705.202148
+      }
+    ]
+  },
+  {
+    "task_id": 290,
+    "wandb_name": "ahc061-ppo-10m-ch64-lr5p3348e-4",
+    "wandb_run_id": "hhdys2ix",
+    "channels": 64,
+    "lr": 0.000533483823,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 158069.205078,
+    "elapsed_sec": 1692.2274475097656,
+    "pueue_started_at": "2026-09-14T03:04:39.198701369+09:00",
+    "pueue_finished_at": "2026-09-14T03:32:57.239481274+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 84753.179688
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82283.345703
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 87202.455078
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 88573.305664
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 91170.298828
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 93399.1875
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 94976.672852
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 101077.930664
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 101414.985352
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 104780.055664
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 108898.43457
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 106880.942383
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 111076.759766
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 111797.893555
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 112910.50293
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 115481.319336
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 117055.856445
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 118273.78418
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 117795.239258
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 120786.935547
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 123638.200195
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 125585.103516
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 129053.943359
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 126456.537109
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 132256.751953
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 130693.804688
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 133304.044922
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 130756.432617
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 135164.885742
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 134103.584961
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 137067.802734
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 138331.602539
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 137704.904297
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 137035.704102
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 137100.53125
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 140844.483398
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 144299.511719
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 141242.960938
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 144970.443359
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 146665.957031
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 145155.15332
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 144047.65625
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 145462.607422
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 144815.666992
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 146973.619141
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 152575.65918
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 149466.154297
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 150528.34082
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 150848.777344
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 154377.47168
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 153491.779297
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 154995.880859
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 151806.891602
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 148473.331055
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 148801.96875
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 153693.374023
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 150778.020508
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 155334.539062
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 152149.787109
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 154593.197266
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 151862.90625
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 153473.853516
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 154662.760742
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 152168.385742
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 151619.746094
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 160192.740234
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 156291.178711
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 149851.836914
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 154858.586914
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 161341.668945
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 156050.707031
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 155239.34082
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 154346.636719
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 155464.743164
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 155265.999023
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 156291.313477
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 153912.050781
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 158971.352539
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 158606.571289
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 160140.264648
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 161362.825195
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 158449.570312
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 159948.320312
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 157699.350586
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 161418.560547
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 159701.431641
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 159054.460938
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 157591.084961
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 157690.645508
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 158460.388672
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 161018.573242
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 164289.736328
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 160470.823242
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 164275.180664
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 161714.838867
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 158354.767578
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 159746.011719
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 158069.205078
+      }
+    ]
+  },
+  {
+    "task_id": 291,
+    "wandb_name": "ahc061-ppo-10m-ch64-lr9p4868e-4",
+    "wandb_run_id": "tk5rpoq0",
+    "channels": 64,
+    "lr": 0.0009486832981,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 155164.305664,
+    "elapsed_sec": 1691.4626009464264,
+    "pueue_started_at": "2026-09-14T03:32:57.252575062+09:00",
+    "pueue_finished_at": "2026-09-14T04:01:14.694283638+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 84753.179688
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82334.043945
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 86896.944336
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 89304.698242
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 90926.580078
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 93825.512695
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 95795.824219
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 99010.636719
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 102377.035156
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 104573.816406
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 107573.775391
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 107022.535156
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 111735.404297
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 112741.339844
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 114569.475586
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 115450.782227
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 118428.148438
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 117196.349609
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 119359.459961
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 122399.116211
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 126129.760742
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 126876.69043
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 129318.374023
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 127452.473633
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 133530.759766
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 130182.206055
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 133140.132812
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 131969.262695
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 133749.932617
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 133990.837891
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 137025.333984
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 139707.680664
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 140173.925781
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 136695.336914
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 140648.081055
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 142014.811523
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 146319.177734
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 140973.141602
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 145235.717773
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 145675.824219
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 148448.416992
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 145637.969727
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 148060.551758
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 148062.133789
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 149527.75293
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 155259.852539
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 150566.859375
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 152375.132812
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 153974.545898
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 155492.770508
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 159292.920898
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 159498.425781
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 151700.40918
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 150200.235352
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 149949.238281
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 151507.334961
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 149825.134766
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 158791.373047
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 153127.957031
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 154717.827148
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 153263.448242
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 157359.546875
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 157160.06543
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 155428.203125
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 156487.423828
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 160222.041992
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 158471.766602
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 151450.330078
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 157896.496094
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 161417.236328
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 156107.786133
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 155921.269531
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 156144.00293
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 157161.708008
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 156327.12793
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 157956.097656
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 155453.341797
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 159992.637695
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 159245.730469
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 160093.944336
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 160406.699219
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 157550.036133
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 160764.487305
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 156391.893555
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 161188.323242
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 161081.295898
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 158011.157227
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 155892.141602
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 153889.588867
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 156976.017578
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 156824.870117
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 162076.790039
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 158590.348633
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 163204.089844
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 161022.585938
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 158556.665039
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 158906.300781
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 155164.305664
+      }
+    ]
+  },
+  {
+    "task_id": 292,
+    "wandb_name": "ahc061-ppo-10m-ch128-lr9p4868e-5",
+    "wandb_run_id": "io565a7h",
+    "channels": 128,
+    "lr": 0.00009486832981,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 126919.884766,
+    "elapsed_sec": 1767.3503925800323,
+    "pueue_started_at": "2026-09-14T04:01:14.707413560+09:00",
+    "pueue_finished_at": "2026-09-14T04:30:48.037088593+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83694.474609
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82943.360352
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 87810.911133
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 86688.947266
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 88381.426758
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 88385.676758
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 91054.695312
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 92598.445312
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 94665.688477
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 96743.083984
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 99456.515625
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 96265.838867
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 98585.740234
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 99825.616211
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 100711.62207
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 101233.581055
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 101800.125
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 102877.77832
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 102010.366211
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 103991.022461
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 104735.594727
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 105745.878906
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 108821.5
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 105805.473633
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 111702.367188
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 109591.298828
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 109261.057617
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 109722.09082
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 110525.979492
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 108322.230469
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 110710.354492
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 111717.594727
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 111341.683594
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 111697.633789
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 111286.505859
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 112686.341797
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 116209.635742
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 111873.46875
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 114979.388672
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 116275.561523
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 116733.458008
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 116764.236328
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 115232.274414
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 117109.974609
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 118335.079102
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 121275.966797
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 118827.53418
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 117984.618164
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 118438.283203
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 120571.654297
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 120171.413086
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 122386.431641
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 118003.853516
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 115760.999023
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 116653.488281
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 120603.145508
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 118672.418945
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 122736.818359
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 122670.445312
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 120420.500977
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 121537.557617
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 122842.271484
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 125452.958984
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 121552.671875
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 122327.519531
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 123917.333984
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 125330.154297
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 121934.015625
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 124166.081055
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 127344.664062
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 124469.59375
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 125083.816406
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 123163.62793
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 125115.080078
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 122501.407227
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 123747.798828
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 124013.183594
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 127002.84668
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 124798.706055
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 127958.78418
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 127277.608398
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 125978.420898
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 126840.961914
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 126420.223633
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 129702.856445
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 127181.529297
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 127593.056641
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 126866.038086
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 126723.268555
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 128212.069336
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 129545.203125
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 131919.671875
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 127261.775391
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 131990.638672
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 128967.936523
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 128411.058594
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 131013.006836
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 126919.884766
+      }
+    ]
+  },
+  {
+    "task_id": 293,
+    "wandb_name": "ahc061-ppo-10m-ch128-lr1p6870e-4",
+    "wandb_run_id": "71ckucau",
+    "channels": 128,
+    "lr": 0.0001687023976,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 144280.02832,
+    "elapsed_sec": 1760.4379243850708,
+    "pueue_started_at": "2026-09-14T04:30:48.050132044+09:00",
+    "pueue_finished_at": "2026-09-14T05:00:14.387911033+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83694.474609
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 83028.987305
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 88254.647461
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 87847.819336
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 90446.15332
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 93262.879883
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 94482.892578
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 97758.949219
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 99876.669922
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 101439.890625
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 105211.610352
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 104856.310547
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 106018.15625
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 106959.611328
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 109225.588867
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 111710.288086
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 109736.368164
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 110079.728516
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 112932.02832
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 114609.248047
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 118553.28418
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 118887.423828
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 121511.882812
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 120035.375977
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 125366.060547
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 124364.754883
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 125084.554688
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 122763.097656
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 124494.285156
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 125245.080078
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 127500.8125
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 128588.161133
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 129325.240234
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 128815.03418
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 130558.9375
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 130605.519531
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 134230.628906
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 130011.768555
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 133621.167969
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 136697.512695
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 134442.462891
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 135812.666016
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 134568.040039
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 134718.805664
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 136840.390625
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 141306.871094
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 138885.606445
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 136193.779297
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 140415.716797
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 142433.443359
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 139723.173828
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 141979.538086
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 138912.689453
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 136199.550781
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 137611.776367
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 139998.294922
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 137250.78125
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 141675.818359
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 140421.360352
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 140538.703125
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 139909.050781
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 142466.166016
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 143473.744141
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 138565.073242
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 142144.09375
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 145320.37207
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 143723.851562
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 141311.710938
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 143064.305664
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 148078.359375
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 144198.305664
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 144570.913086
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 143589.4375
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 141085.836914
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 141349.199219
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 144311.201172
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 142305.811523
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 146414.663086
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 144339.353516
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 146240.441406
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 147637.816406
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 144723.478516
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 146717.455078
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 144406.704102
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 149496.554688
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 145235.990234
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 144858.974609
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 143219.810547
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 140897.963867
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 145895.652344
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 146980.94043
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 151547.053711
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 144412.076172
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 148995.432617
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 144986.645508
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 142817.739258
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 147129.125
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 144280.02832
+      }
+    ]
+  },
+  {
+    "task_id": 294,
+    "wandb_name": "ahc061-ppo-10m-ch128-lr3e-4",
+    "wandb_run_id": "9iybj91r",
+    "channels": 128,
+    "lr": 0.0003,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 154733.225586,
+    "elapsed_sec": 1760.4272994995117,
+    "pueue_started_at": "2026-09-14T05:00:14.393097665+09:00",
+    "pueue_finished_at": "2026-09-14T05:29:41.023357765+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83694.474609
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 83741.946289
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 88085.070312
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 90099.748047
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 92669.665039
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 94207.180664
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 96515.390625
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 100721.43457
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 104047.654297
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 107185.188477
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 107754.569336
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 108796.899414
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 112260.689453
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 113854.737305
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 115987.686523
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 118994.918945
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 118364.81543
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 119090.289062
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 120845.106445
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 123696.370117
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 126684.454102
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 126250.902344
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 129298.570312
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 127720.392578
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 134197.606445
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 132395.205078
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 135555.023438
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 134601.185547
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 136047.415039
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 134635.78418
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 137694.094727
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 139600.157227
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 139027.400391
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 139978.782227
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 140301.96582
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 141320.313477
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 145912.492188
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 141700.068359
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 145864.944336
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 148202.582031
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 147549.729492
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 147504.751953
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 145622.436523
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 148287.473633
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 147358.595703
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 153054.541016
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 149959.276367
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 150018.15332
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 150765.757812
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 153549.654297
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 154246.373047
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 155500.84082
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 152652.669922
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 148619.547852
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 148452.415039
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 151765.167969
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 147767.807617
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 157582.647461
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 150376.751953
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 153515.782227
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 150824.365234
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 156633.038086
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 156107.885742
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 152819.978516
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 151486.310547
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 159966.852539
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 156544.137695
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 150798.089844
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 155681.953125
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 160295.662109
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 156982.785156
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 156383.832031
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 153474.848633
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 154533.094727
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 154002.915039
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 158515.133789
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 152104.462891
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 157807.830078
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 157333.805664
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 158146.647461
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 160231.097656
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 158947.663086
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 157327.061523
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 156727.386719
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 159209.953125
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 159483.119141
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 156299.447266
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 156470.21875
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 156070.042969
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 154576.053711
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 157651.90625
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 163779.155273
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 155462.286133
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 161556.327148
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 158154.959961
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 156655.59082
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 159320.243164
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 154733.225586
+      }
+    ]
+  },
+  {
+    "task_id": 295,
+    "wandb_name": "ahc061-ppo-10m-ch128-lr5p3348e-4",
+    "wandb_run_id": "8i5hsbys",
+    "channels": 128,
+    "lr": 0.000533483823,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 163300.905273,
+    "elapsed_sec": 1758.9100284576416,
+    "pueue_started_at": "2026-09-14T05:29:41.030744407+09:00",
+    "pueue_finished_at": "2026-09-14T05:59:05.904436931+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83694.474609
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 84064.165039
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 89682.991211
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 89652.477539
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 92471.394531
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 95265.762695
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 97506.102539
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 101792.696289
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 104250.611328
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 108226.701172
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 110450.143555
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 109834.704102
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 112199.008789
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 113657.171875
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 115988.819336
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 117189.795898
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 120842.691406
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 120532.014648
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 121330.479492
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 122755.404297
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 127467.026367
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 127734.603516
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 129343.123047
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 130729.411133
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 136743.830078
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 134750.339844
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 135808.944336
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 135224.267578
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 138057.50293
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 137298.618164
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 140855.24707
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 143448.496094
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 142077.371094
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 143395.822266
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 145022.050781
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 147062.770508
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 152830.327148
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 146648.823242
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 152750.530273
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 151071.345703
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 150814.146484
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 151583.830078
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 152085.907227
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 154310.018555
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 154241.245117
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 159613.794922
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 155937.195312
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 157685.569336
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 157938.868164
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 159849.348633
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 160184.00293
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 161379.77832
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 156325.370117
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 155889.216797
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 156277.49707
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 157926.412109
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 158987.722656
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 166225.501953
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 159372.50293
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 160165.06543
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 160734.325195
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 162561.512695
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 161036.552734
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 157604.075195
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 159554.973633
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 167282.774414
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 164544.448242
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 157229.384766
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 162451.435547
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 170583.74707
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 164164.836914
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 163837.141602
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 160141.749023
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 161453.766602
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 162731.999023
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 165417.401367
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 161144.568359
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 165891.757812
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 165023.161133
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 167274.15625
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 169100.673828
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 165599.088867
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 167126.75
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 161171.007812
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 166427.724609
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 166570.953125
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 163971.744141
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 162272.128906
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 161268.080078
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 167150.824219
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 165131.560547
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 171346.463867
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 165443.103516
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 170485.436523
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 166480.111328
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 164135.158203
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 167836.272461
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 163300.905273
+      }
+    ]
+  },
+  {
+    "task_id": 296,
+    "wandb_name": "ahc061-ppo-10m-ch128-lr9p4868e-4",
+    "wandb_run_id": "lo39fmot",
+    "channels": 128,
+    "lr": 0.0009486832981,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 157570.853516,
+    "elapsed_sec": 1756.113864660263,
+    "pueue_started_at": "2026-09-14T05:59:05.909923158+09:00",
+    "pueue_finished_at": "2026-09-14T06:28:27.764249761+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83694.474609
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 83875.439453
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 88520.140625
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 92052.290039
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 96295.808594
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 95626.229492
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 94394.416016
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 99253.588867
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 102396.212891
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 104416.946289
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 107547.300781
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 106408.723633
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 112275.136719
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 113213.37793
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 114890.191406
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 116594.342773
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 119604.579102
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 119540.382812
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 121365.68457
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 123112.689453
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 126112.782227
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 129397.492188
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 131391.545898
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 130446.710938
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 138597.749023
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 134598.594727
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 137494.492188
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 137572.700195
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 138886.280273
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 137885.199219
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 140957.499023
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 146362.431641
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 145249.507812
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 143433.810547
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 142901.75
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 145985.211914
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 150459.620117
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 146806.601562
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 152493.353516
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 152009.639648
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 153117.206055
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 149993.935547
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 150328.119141
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 152773.477539
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 152213.253906
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 157554.645508
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 154928.641602
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 156707.981445
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 157024.735352
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 159216.186523
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 160857.006836
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 160675.333008
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 155113.819336
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 156276.511719
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 155715.915039
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 156305.720703
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 155712.103516
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 163191.121094
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 155887.225586
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 159040.618164
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 158417.642578
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 159683.47168
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 162022.992188
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 157774.226562
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 160165.057617
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 164061.236328
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 164830.523438
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 156574.892578
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 160649.899414
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 165518.974609
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 161871.21582
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 160313.477539
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 157245.173828
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 157726.005859
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 158067.03418
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 160371.671875
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 157371.560547
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 160083.056641
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 160735.376953
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 160484.488281
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 161276.02832
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 161327.734375
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 159262.208008
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 157863.597656
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 162333.37207
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 158519.192383
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 155926.248047
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 157008.983398
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 157860.970703
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 157848.238281
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 160748.582031
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 165796.697266
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 160787.280273
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 165311.449219
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 162256.689453
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 159735.166992
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 162694.025391
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 157570.853516
+      }
+    ]
+  },
+  {
+    "task_id": 297,
+    "wandb_name": "ahc061-ppo-10m-ch256-lr9p4868e-5",
+    "wandb_run_id": "r5kqhbgo",
+    "channels": 256,
+    "lr": 0.00009486832981,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 143310.776367,
+    "elapsed_sec": 2024.1597471237183,
+    "pueue_started_at": "2026-09-14T06:28:27.777821151+09:00",
+    "pueue_finished_at": "2026-09-14T07:02:17.697560792+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83827.149414
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82893.935547
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 88128.211914
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 87718.290039
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 90437.085938
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 91437.089844
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 94746.542969
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 97917.15625
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 100409.600586
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 99729.447266
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 104733.795898
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 104332.448242
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 107469.150391
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 107725.538086
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 109835.438477
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 111351.708008
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 111939.500977
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 112312.088867
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 114258.710938
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 115444.179688
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 118221.011719
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 117613.693359
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 118906.678711
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 119836.774414
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 124073.255859
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 122299.700195
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 122785.711914
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 121045.323242
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 121020.916992
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 122028.685547
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 124584.171875
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 124393.863281
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 125396.841797
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 124649.198242
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 127275.71875
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 127520.075195
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 129707.733398
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 128147.62793
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 130136.375977
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 133630.205078
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 132535.112305
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 133380.952148
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 131149.951172
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 130081.587891
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 134202.821289
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 138229.496094
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 135486.75
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 135000.917969
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 136456.444336
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 137488.87793
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 138254.316406
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 139419.941406
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 135104.900391
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 133951.241211
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 134659.449219
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 140608.354492
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 135460.751953
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 140273.140625
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 138318.391602
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 137208.665039
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 138123.491211
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 139411.949219
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 141419.801758
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 137745.053711
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 140296.616211
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 142107.362305
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 141337.93457
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 136976.125977
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 140662.510742
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 146393.297852
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 140357.597656
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 142707.092773
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 139788.389648
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 139247.00293
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 138871.454102
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 140831.711914
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 140738.319336
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 143484.066406
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 142328.521484
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 143635.436523
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 146234.130859
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 142825.933594
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 145501.128906
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 143968.112305
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 147992.022461
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 143361.419922
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 144058.104492
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 142082.046875
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 142444.953125
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 142979.229492
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 145492.420898
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 149389.30957
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 144042.595703
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 148045.400391
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 145736.795898
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 144587.716797
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 145487.974609
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 143310.776367
+      }
+    ]
+  },
+  {
+    "task_id": 298,
+    "wandb_name": "ahc061-ppo-10m-ch256-lr1p6870e-4",
+    "wandb_run_id": "tnj7zu47",
+    "channels": 256,
+    "lr": 0.0001687023976,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 152634.121094,
+    "elapsed_sec": 2023.5080826282501,
+    "pueue_started_at": "2026-09-14T07:02:17.702591056+09:00",
+    "pueue_finished_at": "2026-09-14T07:36:06.748750923+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83827.149414
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82911.853516
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 87579.486328
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 89737.432617
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 92680.347656
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 95119.864258
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 96071.580078
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 99466.073242
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 102028.771484
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 107391.762695
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 110402.726562
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 110343.757812
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 115181.635742
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 115467.141602
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 118752.726562
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 119785.904297
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 122021.152344
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 121124.481445
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 122850.388672
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 127326.296875
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 127883.782227
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 130670.254883
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 131315.152344
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 130342.556641
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 136377.082031
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 134270.729492
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 136146.183594
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 134999.56543
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 135938.519531
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 135770.37793
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 138457.592773
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 140106.161133
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 140749.532227
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 140334.662109
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 140911.90625
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 141923.594727
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 145862.693359
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 141795.383789
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 144585.600586
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 146285.22168
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 146413.916016
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 145504.351562
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 144763.036133
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 144751.279297
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 145594.199219
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 151665.736328
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 148131.208984
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 146868.609375
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 150225.133789
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 154150.207031
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 150464.93457
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 152349.494141
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 147913.638672
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 146634.328125
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 147182.427734
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 150071.962891
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 148438.887695
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 153764.640625
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 150281.585938
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 150882.547852
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 150385.720703
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 152638.194336
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 155275.602539
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 150311.583984
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 151150.381836
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 155672.361328
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 154671.964844
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 150375.213867
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 153892.735352
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 159044.75293
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 155727.249023
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 154493.564453
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 153905.930664
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 151917.234375
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 152303.575195
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 155862.212891
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 151120.248047
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 155898.50293
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 153026.902344
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 156470.025391
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 157642.46582
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 155091.452148
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 158157.660156
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 152169.618164
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 158800.439453
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 155223.887695
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 155544.567383
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 152561.138672
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 152604.063477
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 155102.152344
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 158631.699219
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 160341.751953
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 155850.310547
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 158781.0625
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 155670.385742
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 154967.557617
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 155455.000977
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 152634.121094
+      }
+    ]
+  },
+  {
+    "task_id": 299,
+    "wandb_name": "ahc061-ppo-10m-ch256-lr3e-4",
+    "wandb_run_id": "5aeo2po8",
+    "channels": 256,
+    "lr": 0.0003,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 163321.345703,
+    "elapsed_sec": 2026.1531670093536,
+    "pueue_started_at": "2026-09-14T07:36:06.761615476+09:00",
+    "pueue_finished_at": "2026-09-14T08:09:58.438080327+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83827.149414
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82791.414062
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 88290.320312
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 88757.550781
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 92525.359375
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 95318.814453
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 97526.873047
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 101081.682617
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 105068.827148
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 108414.982422
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 112268.479492
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 111785.699219
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 115267.898438
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 117553.336914
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 119520.331055
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 119558.90918
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 122899.798828
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 123749.705078
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 124603.34375
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 128190.803711
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 131266.733398
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 131585.344727
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 136071.044922
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 134634.451172
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 140336.451172
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 139715.791016
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 140941.233398
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 141201.483398
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 141540.470703
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 140420.401367
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 143892.558594
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 148212.224609
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 146588.90918
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 146021.084961
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 146024.481445
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 147925.587891
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 152850.665039
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 148247.709961
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 153045.535156
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 152538.520508
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 151643.978516
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 151142.397461
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 152395.268555
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 153562.161133
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 154541.162109
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 161159.216797
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 155579.225586
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 157681.262695
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 157922.19043
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 161638.219727
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 162779.883789
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 163049.835938
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 159961.717773
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 158621.1875
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 156437.054688
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 156906.46875
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 156296.677734
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 163640.05957
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 158658.332031
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 159386.237305
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 157908.482422
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 163316.887695
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 161513.990234
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 159367.082031
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 158524.416992
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 166435.359375
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 164324
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 156902.34375
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 162969.705078
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 169109.075195
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 163733.182617
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 161899.981445
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 161996.578125
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 161831.985352
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 161991.412109
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 164198.871094
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 162381.569336
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 164376.842773
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 163456.462891
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 167220.1875
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 166238.203125
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 165727.896484
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 165782.466797
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 162873.648438
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 168785.019531
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 166361.113281
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 162649.456055
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 163538.417969
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 164066.321289
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 165426.735352
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 166433.157227
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 172340.768555
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 165874.754883
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 171565.334961
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 167416.970703
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 167536.136719
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 168347.680664
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 163321.345703
+      }
+    ]
+  },
+  {
+    "task_id": 300,
+    "wandb_name": "ahc061-ppo-10m-ch256-lr5p3348e-4",
+    "wandb_run_id": "wt2v5igp",
+    "channels": 256,
+    "lr": 0.000533483823,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 164003.620117,
+    "elapsed_sec": 2024.0245518684387,
+    "pueue_started_at": "2026-09-14T08:09:58.451380182+09:00",
+    "pueue_finished_at": "2026-09-14T08:43:47.781965725+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83827.149414
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 83526.036133
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 88645.801758
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 90330.9375
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 92370.521484
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 94690.224609
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 97245.746094
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 100693.572266
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 102741.37207
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 107783.978516
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 110479.490234
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 108636.522461
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 115309.168945
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 115803.717773
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 119327.897461
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 120843.871094
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 122555.428711
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 122628.757812
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 124854.226562
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 128470.832031
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 133312.681641
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 133264.539062
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 134558.842773
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 134999.118164
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 141936.618164
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 139974.52832
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 139521.630859
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 138058.776367
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 142189.554688
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 142696.367188
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 143236.103516
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 148247.603516
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 147801.089844
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 149015.378906
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 148860.910156
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 147484.073242
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 153973.124023
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 150703.244141
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 154047.37207
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 155836.948242
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 156063.521484
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 157002.966797
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 156535.96875
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 157519.601562
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 158252.838867
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 161968.117188
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 157977.914062
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 158070.600586
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 161250.885742
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 162213.308594
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 164410.00293
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 165602.267578
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 159530.84082
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 156351.704102
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 156560.165039
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 158953.681641
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 159421.490234
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 170824.273438
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 162199.379883
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 164076.24707
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 161795.259766
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 164967.006836
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 164768.268555
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 161382.667969
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 161891.102539
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 167413.407227
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 164720.044922
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 158292.259766
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 164689.917969
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 169428.272461
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 163202.131836
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 164467.168945
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 161768.15332
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 163086.867188
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 160814.700195
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 165171.421875
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 162143.868164
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 167968.092773
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 165196.578125
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 166505.635742
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 168986.268555
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 167022.438477
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 164708.026367
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 163357.22168
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 166233.81543
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 165517.657227
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 163373.339844
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 164556.417969
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 163730.208008
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 163182.124023
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 166858.350586
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 172958.400391
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 166043.587891
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 172010.493164
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 167383.154297
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 168232.03418
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 167497.443359
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 164003.620117
+      }
+    ]
+  },
+  {
+    "task_id": 301,
+    "wandb_name": "ahc061-ppo-10m-ch256-lr9p4868e-4",
+    "wandb_run_id": "eg6xasl3",
+    "channels": 256,
+    "lr": 0.0009486832981,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 162128.422852,
+    "elapsed_sec": 2026.8666191101074,
+    "pueue_started_at": "2026-09-14T08:43:47.787458976+09:00",
+    "pueue_finished_at": "2026-09-14T09:17:39.844214920+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83827.149414
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82830.679688
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 87302.555664
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 89334.09082
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 93276.169922
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 96361.899414
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 96759.421875
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 101325.62793
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 103172.208008
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 107274.834961
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 110059.375977
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 109430.766602
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 111740.118164
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 115231.821289
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 115983.040039
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 117297.267578
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 119319.56543
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 118298.999023
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 119022.556641
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 122049.598633
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 125492.81543
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 126389.475586
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 130647.905273
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 130254.164062
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 135409.227539
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 134612.481445
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 135732.496094
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 135412.751953
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 138447.336914
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 139952.798828
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 141498.796875
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 145729.211914
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 146311.233398
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 148360.740234
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 150537.987305
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 150600.55957
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 154424.833008
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 151271.755859
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 155136.969727
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 158099.75
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 158481.600586
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 155832.477539
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 154919.162109
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 155971.615234
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 155281.290039
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 163360.121094
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 159846.147461
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 158737.665039
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 160401.453125
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 164526.527344
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 164919.575195
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 166264.895508
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 161086.895508
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 159089.768555
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 158744.25293
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 160390.317383
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 159715.354492
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 168017.864258
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 160894.055664
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 165667.554688
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 163191.769531
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 164855.686523
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 163429.908203
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 160939.391602
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 162560.039062
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 166586.895508
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 164461.249023
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 159211.441406
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 161660.876953
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 167325.734375
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 161902.231445
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 162980.745117
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 161078.973633
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 160901.756836
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 164001.357422
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 165929.480469
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 162314.560547
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 164604.461914
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 163809.357422
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 167949.047852
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 166988.884766
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 164684.720703
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 166410.063477
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 163051.536133
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 166933.629883
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 168464.030273
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 163132.605469
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 163304.106445
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 161898.365234
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 162828.779297
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 164278.274414
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 169432.222656
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 164493.856445
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 170266.083008
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 165088.729492
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 168296.368164
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 167309.657227
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 162128.422852
+      }
+    ]
+  },
+  {
+    "task_id": 302,
+    "wandb_name": "ahc061-ppo-10m-ch64-lr4p0006e-4",
+    "wandb_run_id": "sf3v0rjc",
+    "channels": 64,
+    "lr": 0.0004000563416,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 150573.263672,
+    "elapsed_sec": 1741.230741262436,
+    "pueue_started_at": "2026-09-14T10:03:20.170201690+09:00",
+    "pueue_finished_at": "2026-09-14T10:32:27.315231670+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 84753.179688
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82825.492188
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 88376.138672
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 88888.220703
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 90769.49707
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 91412.672852
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 93823.09375
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 97909.348633
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 100678.040039
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 103477.328125
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 106966.961914
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 106659.415039
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 109973.226562
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 111196.867188
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 112279.216797
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 114417.710938
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 115220.208008
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 116968.506836
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 117327.419922
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 120052.396484
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 121362.016602
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 123850.117188
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 125443.379883
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 126354.870117
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 132114.31543
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 128495.011719
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 129944.974609
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 130021.848633
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 132453.018555
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 132802.848633
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 134359.583008
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 136923.910156
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 137862.654297
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 134806.644531
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 138609.611328
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 138443.732422
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 143054.46875
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 137203.410156
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 140691.90332
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 140906.830078
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 140944.290039
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 140038.84668
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 140080.526367
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 140843.623047
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 143683.462891
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 148524.643555
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 143574.835938
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 146277.772461
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 147651.349609
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 148873.21875
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 148309.331055
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 150446.466797
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 144410.692383
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 146967.77832
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 144910.041016
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 147566.541992
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 146917.728516
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 151839.599609
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 149136.208984
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 149507.075195
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 148620.054688
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 151603.301758
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 154034.574219
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 149444.753906
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 149774.674805
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 154673.453125
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 153696.883789
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 145232.955078
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 148645.71875
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 155956.688477
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 152327.664062
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 150991.482422
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 149488.749023
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 151560.81543
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 148354.8125
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 151335.126953
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 151268.217773
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 152673.774414
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 152582.313477
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 154181.138672
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 153951.113281
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 155154.636719
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 154062.754883
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 153784.782227
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 153630.553711
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 153977.459961
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 153288.602539
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 150077.064453
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 151274.101562
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 152381.878906
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 153789.555664
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 158255.154297
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 153091.036133
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 156753.958984
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 153561.552734
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 154065.616211
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 155389.360352
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 150573.263672
+      }
+    ]
+  },
+  {
+    "task_id": 303,
+    "wandb_name": "ahc061-ppo-10m-ch64-lr7p1149e-4",
+    "wandb_run_id": "w0rqomau",
+    "channels": 64,
+    "lr": 0.000711485113,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 159214.512695,
+    "elapsed_sec": 1737.0963535308838,
+    "pueue_started_at": "2026-09-14T10:32:27.322312469+09:00",
+    "pueue_finished_at": "2026-09-14T11:01:29.929327183+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 84753.179688
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 84266.330078
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 87973.508789
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 89771.097656
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 92146.486328
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 93859.518555
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 95263.470703
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 99443.375
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 101614.983398
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 105395.12207
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 108483.775391
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 107981.396484
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 111947.496094
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 112529.831055
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 116141.911133
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 116964.321289
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 118228.500977
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 121006.868164
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 119730.529297
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 123101.341797
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 125896.663086
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 127903.262695
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 129054.022461
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 127563.947266
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 134874.462891
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 134290.761719
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 135110.253906
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 132154.033203
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 133764.751953
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 133689.102539
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 137171.460938
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 139711.302734
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 140404.55957
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 142058.924805
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 140141.419922
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 142251.456055
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 146013.540039
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 144916.923828
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 148963.240234
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 149602.233398
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 149938.444336
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 147331.283203
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 148913.461914
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 151113.427734
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 151411.535156
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 156137.180664
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 153024.545898
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 154038.345703
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 154427.232422
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 155429.121094
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 156546.37207
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 159144.81543
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 152588.885742
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 151360.130859
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 150875.883789
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 153334.289062
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 151855.357422
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 157793.90918
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 152946.836914
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 154872.920898
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 154436.460938
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 157551.34668
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 157925.046875
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 155272.817383
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 157247.661133
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 161181.521484
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 158616.149414
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 152538.801758
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 158105.780273
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 163781.071289
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 160321.986328
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 159755.266602
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 156437.258789
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 155929.731445
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 156825.800781
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 157340.520508
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 157801.454102
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 159095.145508
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 159404.588867
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 160820.853516
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 162812.394531
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 160137.716797
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 159653.013672
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 158923.426758
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 160579.245117
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 159955.503906
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 159208.167969
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 158126.546875
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 158429.172852
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 160989.345703
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 161140.548828
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 164478.59668
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 158773.739258
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 163575.15625
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 161627.368164
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 156239.179688
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 161915.486328
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 159214.512695
+      }
+    ]
+  },
+  {
+    "task_id": 304,
+    "wandb_name": "ahc061-ppo-10m-ch128-lr4p0006e-4",
+    "wandb_run_id": "1uiotvkl",
+    "channels": 128,
+    "lr": 0.0004000563416,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 158538.875977,
+    "elapsed_sec": 1831.2006032466888,
+    "pueue_started_at": "2026-09-14T11:01:29.942418610+09:00",
+    "pueue_finished_at": "2026-09-14T11:32:07.097029320+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83694.474609
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 83963.3125
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 90140.283203
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 90681.652344
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 93193.191406
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 94087.254883
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 96703.432617
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 100160.444336
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 103557.228516
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 106075.224609
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 110429.518555
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 109373.896484
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 114187.920898
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 115125.612305
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 115893.283203
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 118117.551758
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 119233.399414
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 119899.807617
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 121512.231445
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 123572.043945
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 126884.070312
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 126954.826172
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 131162.967773
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 129282.491211
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 135563.170898
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 132926.541016
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 135532.624023
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 135132.168945
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 136291.416016
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 137168.708984
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 136765.121094
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 140924.34668
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 140265.001953
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 140290.271484
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 142755.634766
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 141939.295898
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 147536.176758
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 144670.688477
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 147166.859375
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 151038.169922
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 150530.091797
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 147997.110352
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 147645.982422
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 149752.449219
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 150523.462891
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 155249.948242
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 152918.774414
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 150112.519531
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 153947.674805
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 155083.999023
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 155451.746094
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 158716.210938
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 154448.533203
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 153066.355469
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 152139.049805
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 154833.30957
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 151770.422852
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 158661.176758
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 156641.339844
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 155611.680664
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 154826.275391
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 158691.119141
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 156573.532227
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 156020.732422
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 157182.150391
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 163196.594727
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 158528.578125
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 154662.169922
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 157943.793945
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 163424.37207
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 160368.416992
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 158356.75293
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 156472.549805
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 158963.136719
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 159356.608398
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 161282.369141
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 158327.352539
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 161953.28418
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 161410.435547
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 162616.829102
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 160692.086914
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 161374.463867
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 162194.111328
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 160127.56543
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 163692.658203
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 160803.632812
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 161072.073242
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 158569.942383
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 158374.586914
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 160745.036133
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 162134.645508
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 165108.347656
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 162691.050781
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 167304.849609
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 159915.689453
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 159234.269531
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 163688.364258
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 158538.875977
+      }
+    ]
+  },
+  {
+    "task_id": 305,
+    "wandb_name": "ahc061-ppo-10m-ch128-lr7p1149e-4",
+    "wandb_run_id": "spv52an2",
+    "channels": 128,
+    "lr": 0.000711485113,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 159398.910156,
+    "elapsed_sec": 1885.0595996379852,
+    "pueue_started_at": "2026-09-14T11:32:07.102693641+09:00",
+    "pueue_finished_at": "2026-09-14T12:03:38.369100816+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83694.474609
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 84033.560547
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 89274.067383
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 90428.863281
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 94881.551758
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 97186.044922
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 97521.891602
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 104022.305664
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 104706.941406
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 108913.959961
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 111976.373047
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 112071.21875
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 116043.725586
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 116660.025391
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 119731.604492
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 119269.224609
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 122387.980469
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 122097.085938
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 124641.157227
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 125645.022461
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 129727.199219
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 129739.076172
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 133393.186523
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 133257.189453
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 138998.34082
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 137908.880859
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 140710.875
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 139430.083984
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 140746.03418
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 142111.330078
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 145292.535156
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 145885.016602
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 148500.759766
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 148459.258789
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 150241.003906
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 151172.771484
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 155753.134766
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 150989.282227
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 155514.307617
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 155525.681641
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 155225.964844
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 153578.96875
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 152934.163086
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 154508.786133
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 156316.158203
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 162952.972656
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 158384.477539
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 160425.87207
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 162148.775391
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 163417.764648
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 165139.827148
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 163862.836914
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 160885.240234
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 157187.982422
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 158470.62793
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 161548.039062
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 157085.367188
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 166241.642578
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 159404.50293
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 161093.53125
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 159217.34668
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 163078.919922
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 162254.598633
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 159930.140625
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 159654.655273
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 166054.916992
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 162388.834961
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 154212.432617
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 159927.865234
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 166007.371094
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 160914.869141
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 164304.74707
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 160473.341797
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 159780.716797
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 159980.458984
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 162459.631836
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 159760.211914
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 164640.527344
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 162758.529297
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 167000.602539
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 165527.354492
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 164769.313477
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 163905.230469
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 163106.320312
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 161110.283203
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 164057.529297
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 162013.797852
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 161482.244141
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 161728.436523
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 161175.756836
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 163134.811523
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 167738.366211
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 163078.535156
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 169899.469727
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 162922.040039
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 161439.308594
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 162888.956055
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 159398.910156
+      }
+    ]
+  },
+  {
+    "task_id": 306,
+    "wandb_name": "ahc061-ppo-10m-ch256-lr4p0006e-4",
+    "wandb_run_id": "ok5n1134",
+    "channels": 256,
+    "lr": 0.0004000563416,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 164060.191406,
+    "elapsed_sec": 2181.999670982361,
+    "pueue_started_at": "2026-09-14T12:03:38.376112708+09:00",
+    "pueue_finished_at": "2026-09-14T12:40:06.120009185+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83827.149414
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 82469.12793
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 88024.925781
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 90211.618164
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 93568.875
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 95521.557617
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 97818.492188
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 100663.007812
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 104430.519531
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 106839.647461
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 110091.061523
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 110722.710938
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 115641.962891
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 116846.287109
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 120163.939453
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 122557.541992
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 121589.362305
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 122824.242188
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 126104.118164
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 128063.636719
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 130670.179688
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 131808.433594
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 134362.538086
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 132600.53125
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 139774.425781
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 138049.931641
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 139494.387695
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 139763.946289
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 140093.095703
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 140102.954102
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 145203.586914
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 147258.793945
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 146306.761719
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 147408.453125
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 147365.84668
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 148651.526367
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 152698.084961
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 149186.197266
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 153954.712891
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 155337.838867
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 157163.993164
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 153417.916992
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 153889.902344
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 155230.472656
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 154999.744141
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 161671.926758
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 158034.790039
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 160072.762695
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 163124.824219
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 162786.96582
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 164597.672852
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 164656.330078
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 160879.731445
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 161453.762695
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 159311.601562
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 162281.269531
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 159701.327148
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 168497.863281
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 161846.641602
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 162717.521484
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 161331.356445
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 167771.355469
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 163891.720703
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 161232.725586
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 162401.680664
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 169278.610352
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 167296.583984
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 160672.579102
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 165499.490234
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 169097.875
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 166250.429688
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 164351.334961
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 160325.376953
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 163615.348633
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 163233.367188
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 163981.394531
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 164576.237305
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 166296.597656
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 166320.994141
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 168908.608398
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 170345.631836
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 165644.476562
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 167103.30957
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 166324.84082
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 166968.199219
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 167481.491211
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 164994.71582
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 163903.296875
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 162647.826172
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 165251.318359
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 165871.504883
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 170085.253906
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 164576.985352
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 168894.954102
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 168793.110352
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 165747.807617
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 166225.040039
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 164060.191406
+      }
+    ]
+  },
+  {
+    "task_id": 307,
+    "wandb_name": "ahc061-ppo-10m-ch256-lr7p1149e-4",
+    "wandb_run_id": "0kw4vtb4",
+    "channels": 256,
+    "lr": 0.000711485113,
+    "total_steps_requested": 10000000,
+    "total_env_steps": 10035200,
+    "final_mean_score": 161997.535156,
+    "elapsed_sec": 2193.023210287094,
+    "pueue_started_at": "2026-09-14T12:40:06.124954858+09:00",
+    "pueue_finished_at": "2026-09-14T13:16:45.022502154+09:00",
+    "history": [
+      {
+        "env_steps": 102400,
+        "mean_score": 83827.149414
+      },
+      {
+        "env_steps": 204800,
+        "mean_score": 83054.922852
+      },
+      {
+        "env_steps": 307200,
+        "mean_score": 88712.255859
+      },
+      {
+        "env_steps": 409600,
+        "mean_score": 90852.558594
+      },
+      {
+        "env_steps": 512000,
+        "mean_score": 94763.088867
+      },
+      {
+        "env_steps": 614400,
+        "mean_score": 96035.118164
+      },
+      {
+        "env_steps": 716800,
+        "mean_score": 99138.436523
+      },
+      {
+        "env_steps": 819200,
+        "mean_score": 103002.598633
+      },
+      {
+        "env_steps": 921600,
+        "mean_score": 106175.657227
+      },
+      {
+        "env_steps": 1024000,
+        "mean_score": 108864.556641
+      },
+      {
+        "env_steps": 1126400,
+        "mean_score": 112322.323242
+      },
+      {
+        "env_steps": 1228800,
+        "mean_score": 110949.016602
+      },
+      {
+        "env_steps": 1331200,
+        "mean_score": 114332.540039
+      },
+      {
+        "env_steps": 1433600,
+        "mean_score": 115015.759766
+      },
+      {
+        "env_steps": 1536000,
+        "mean_score": 117950.288086
+      },
+      {
+        "env_steps": 1638400,
+        "mean_score": 119573.983398
+      },
+      {
+        "env_steps": 1740800,
+        "mean_score": 120773.331055
+      },
+      {
+        "env_steps": 1843200,
+        "mean_score": 121877.450195
+      },
+      {
+        "env_steps": 1945600,
+        "mean_score": 125376.119141
+      },
+      {
+        "env_steps": 2048000,
+        "mean_score": 127264.87207
+      },
+      {
+        "env_steps": 2150400,
+        "mean_score": 131727.675781
+      },
+      {
+        "env_steps": 2252800,
+        "mean_score": 129661.550781
+      },
+      {
+        "env_steps": 2355200,
+        "mean_score": 133041.331055
+      },
+      {
+        "env_steps": 2457600,
+        "mean_score": 133271.749023
+      },
+      {
+        "env_steps": 2560000,
+        "mean_score": 138033.317383
+      },
+      {
+        "env_steps": 2662400,
+        "mean_score": 136632.360352
+      },
+      {
+        "env_steps": 2764800,
+        "mean_score": 139126.928711
+      },
+      {
+        "env_steps": 2867200,
+        "mean_score": 138308.567383
+      },
+      {
+        "env_steps": 2969600,
+        "mean_score": 140644.042969
+      },
+      {
+        "env_steps": 3072000,
+        "mean_score": 140623.505859
+      },
+      {
+        "env_steps": 3174400,
+        "mean_score": 142425.120117
+      },
+      {
+        "env_steps": 3276800,
+        "mean_score": 145217.560547
+      },
+      {
+        "env_steps": 3379200,
+        "mean_score": 146189.375
+      },
+      {
+        "env_steps": 3481600,
+        "mean_score": 147468.379883
+      },
+      {
+        "env_steps": 3584000,
+        "mean_score": 146671.076172
+      },
+      {
+        "env_steps": 3686400,
+        "mean_score": 148040.547852
+      },
+      {
+        "env_steps": 3788800,
+        "mean_score": 150650.96875
+      },
+      {
+        "env_steps": 3891200,
+        "mean_score": 146990.304688
+      },
+      {
+        "env_steps": 3993600,
+        "mean_score": 151878.839844
+      },
+      {
+        "env_steps": 4096000,
+        "mean_score": 152047.116211
+      },
+      {
+        "env_steps": 4198400,
+        "mean_score": 153029.025391
+      },
+      {
+        "env_steps": 4300800,
+        "mean_score": 152439.180664
+      },
+      {
+        "env_steps": 4403200,
+        "mean_score": 153656.581055
+      },
+      {
+        "env_steps": 4505600,
+        "mean_score": 156004.430664
+      },
+      {
+        "env_steps": 4608000,
+        "mean_score": 155601.984375
+      },
+      {
+        "env_steps": 4710400,
+        "mean_score": 162468.763672
+      },
+      {
+        "env_steps": 4812800,
+        "mean_score": 157199.744141
+      },
+      {
+        "env_steps": 4915200,
+        "mean_score": 157298.735352
+      },
+      {
+        "env_steps": 5017600,
+        "mean_score": 160747.645508
+      },
+      {
+        "env_steps": 5120000,
+        "mean_score": 159542.347656
+      },
+      {
+        "env_steps": 5222400,
+        "mean_score": 162873.142578
+      },
+      {
+        "env_steps": 5324800,
+        "mean_score": 164329.398438
+      },
+      {
+        "env_steps": 5427200,
+        "mean_score": 159444.404297
+      },
+      {
+        "env_steps": 5529600,
+        "mean_score": 156118.121094
+      },
+      {
+        "env_steps": 5632000,
+        "mean_score": 157110.763672
+      },
+      {
+        "env_steps": 5734400,
+        "mean_score": 159993.289062
+      },
+      {
+        "env_steps": 5836800,
+        "mean_score": 159341.391602
+      },
+      {
+        "env_steps": 5939200,
+        "mean_score": 166798.99707
+      },
+      {
+        "env_steps": 6041600,
+        "mean_score": 160369.90625
+      },
+      {
+        "env_steps": 6144000,
+        "mean_score": 161949.496094
+      },
+      {
+        "env_steps": 6246400,
+        "mean_score": 160969.476562
+      },
+      {
+        "env_steps": 6348800,
+        "mean_score": 163232.018555
+      },
+      {
+        "env_steps": 6451200,
+        "mean_score": 163747.047852
+      },
+      {
+        "env_steps": 6553600,
+        "mean_score": 157825
+      },
+      {
+        "env_steps": 6656000,
+        "mean_score": 160758.426758
+      },
+      {
+        "env_steps": 6758400,
+        "mean_score": 168032.743164
+      },
+      {
+        "env_steps": 6860800,
+        "mean_score": 162928.912109
+      },
+      {
+        "env_steps": 6963200,
+        "mean_score": 158713.370117
+      },
+      {
+        "env_steps": 7065600,
+        "mean_score": 162583.481445
+      },
+      {
+        "env_steps": 7168000,
+        "mean_score": 169210.97168
+      },
+      {
+        "env_steps": 7270400,
+        "mean_score": 162878.783203
+      },
+      {
+        "env_steps": 7372800,
+        "mean_score": 165498.360352
+      },
+      {
+        "env_steps": 7475200,
+        "mean_score": 163191.90332
+      },
+      {
+        "env_steps": 7577600,
+        "mean_score": 163850.683594
+      },
+      {
+        "env_steps": 7680000,
+        "mean_score": 165267.493164
+      },
+      {
+        "env_steps": 7782400,
+        "mean_score": 165011.366211
+      },
+      {
+        "env_steps": 7884800,
+        "mean_score": 162452.760742
+      },
+      {
+        "env_steps": 7987200,
+        "mean_score": 167273.662109
+      },
+      {
+        "env_steps": 8089600,
+        "mean_score": 165533.754883
+      },
+      {
+        "env_steps": 8192000,
+        "mean_score": 167977.952148
+      },
+      {
+        "env_steps": 8294400,
+        "mean_score": 169688.168945
+      },
+      {
+        "env_steps": 8396800,
+        "mean_score": 167261.375
+      },
+      {
+        "env_steps": 8499200,
+        "mean_score": 166989.194336
+      },
+      {
+        "env_steps": 8601600,
+        "mean_score": 164073.500977
+      },
+      {
+        "env_steps": 8704000,
+        "mean_score": 167076.066406
+      },
+      {
+        "env_steps": 8806400,
+        "mean_score": 166175.295898
+      },
+      {
+        "env_steps": 8908800,
+        "mean_score": 159891.767578
+      },
+      {
+        "env_steps": 9011200,
+        "mean_score": 163374.87793
+      },
+      {
+        "env_steps": 9113600,
+        "mean_score": 161019.706055
+      },
+      {
+        "env_steps": 9216000,
+        "mean_score": 163139.302734
+      },
+      {
+        "env_steps": 9318400,
+        "mean_score": 165545.664062
+      },
+      {
+        "env_steps": 9420800,
+        "mean_score": 170567.753906
+      },
+      {
+        "env_steps": 9523200,
+        "mean_score": 162129.080078
+      },
+      {
+        "env_steps": 9625600,
+        "mean_score": 170149.076172
+      },
+      {
+        "env_steps": 9728000,
+        "mean_score": 164457.613281
+      },
+      {
+        "env_steps": 9830400,
+        "mean_score": 163743.057617
+      },
+      {
+        "env_steps": 9932800,
+        "mean_score": 165561.601562
+      },
+      {
+        "env_steps": 10035200,
+        "mean_score": 161997.535156
+      }
+    ]
+  }
+]
