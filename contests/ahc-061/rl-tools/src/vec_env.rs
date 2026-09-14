@@ -45,7 +45,7 @@ impl EnvSlot {
                 )
             })
             .collect();
-        let mut slot = Self {
+        Self {
             input,
             state,
             pfilters,
@@ -56,9 +56,7 @@ impl EnvSlot {
             reward: 0.0,
             action_history: vec![],
             encoded: None,
-        };
-        slot.refresh_encoded();
-        slot
+        }
     }
 
     pub fn step_action_index(&mut self, action: usize) -> Result<(), String> {
@@ -105,11 +103,10 @@ impl EnvSlot {
         self.reward = (score - self.prev_score) as f64 / 100000.0;
         self.prev_score = score;
         self.done = self.turn >= self.input.T;
-        self.refresh_encoded();
         Ok(())
     }
 
-    fn refresh_encoded(&mut self) {
+    pub(crate) fn refresh_encoded(&mut self) {
         self.encoded = Some(crate::env::encode_slot(self));
     }
 

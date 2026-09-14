@@ -23,11 +23,11 @@ def test_schema_step_and_partial_reset() -> None:
     with create_env(2) as env:
         initial = env.obs["planes"].copy()
         assert initial.shape == (2, NUM_PLANES, 10, 10)
-        assert initial.dtype == np.float32
+        assert initial.dtype == np.float16
         assert env.obs["mask"].shape == (2, 100)
         assert env.obs["mask"].dtype == np.bool_
         assert env.obs["critic_oracle"].shape == (2, *CRITIC_FEATURE_SHAPE)
-        assert env.obs["critic_oracle"].dtype == np.float32
+        assert env.obs["critic_oracle"].dtype == np.float16
         actions = np.argmax(env.obs["mask"], axis=1).astype(np.uint32)
         stepped = env.step(actions).obs["planes"].copy()
         reset = env.reset_done(np.asarray([False, True]), seed_start=100)["planes"].copy()

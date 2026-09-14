@@ -35,15 +35,17 @@ def test_schema_and_observations_match_numpy_golden() -> None:
     golden = np.load(GOLDEN)
     with create_env() as env:
         assert env.obs["planes"].shape == (1, 44, 16, 16)
-        assert env.obs["planes"].dtype == np.float32
+        assert env.obs["planes"].dtype == np.float16
         assert env.obs["mask"].shape == (1, 4)
         assert env.obs["mask"].dtype == np.bool_
-        np.testing.assert_array_equal(env.obs["planes"][0], golden["planes"][0])
+        np.testing.assert_array_equal(env.obs["planes"][0], golden["planes"][0].astype(np.float16))
         np.testing.assert_array_equal(env.obs["mask"][0], golden["mask"][0])
 
         for frame, action in enumerate(golden["actions"], start=1):
             result = env.step(np.asarray([action], dtype=np.uint32))
-            np.testing.assert_array_equal(result.obs["planes"][0], golden["planes"][frame])
+            np.testing.assert_array_equal(
+                result.obs["planes"][0], golden["planes"][frame].astype(np.float16)
+            )
             np.testing.assert_array_equal(result.obs["mask"][0], golden["mask"][frame])
             assert result.reward[0] == golden["reward"][frame]
             assert result.done[0] == golden["done"][frame]
@@ -81,7 +83,9 @@ def test_invalid_batch_is_rejected_without_mutation() -> None:
 
         result = env.step(np.asarray([1], dtype=np.uint32))
         assert result.score[0] == golden["score"][1]
-        np.testing.assert_array_equal(result.obs["planes"][0], golden["planes"][1])
+        np.testing.assert_array_equal(
+            result.obs["planes"][0], golden["planes"][1].astype(np.float16)
+        )
 
 
 def test_removed_fixed_max_steps_config_is_rejected() -> None:

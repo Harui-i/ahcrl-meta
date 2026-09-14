@@ -10,8 +10,9 @@ from typing import Any, cast
 
 import numpy as np
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 _DTYPES: dict[str, np.dtype] = {
+    "f16": np.dtype("<f2"),
     "f32": np.dtype("<f4"),
     "i64": np.dtype("<i8"),
     "u8": np.dtype("u1"),

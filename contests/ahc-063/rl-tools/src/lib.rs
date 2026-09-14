@@ -1,6 +1,6 @@
 use ahcrl_env_core::{
-    write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, StepOutcome, TensorSpec,
-    VisualizerData, PROTOCOL_VERSION,
+    write_f16_slice, write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, StepOutcome,
+    TensorSpec, VisualizerData, PROTOCOL_VERSION,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -98,7 +98,7 @@ impl EnvFactory for Ahc063Factory {
             observations: vec![
                 TensorSpec {
                     name: "planes".to_owned(),
-                    dtype: DType::F32,
+                    dtype: DType::F16,
                     shape: vec![NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE],
                 },
                 TensorSpec {
@@ -328,7 +328,7 @@ impl ContestEnv for Ahc063Env {
 
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
         match name {
-            "planes" => write_f32_slice(&self.encode_planes(), destination),
+            "planes" => write_f16_slice(&self.encode_planes(), destination),
             "mask" => {
                 let mask = self.legal_mask();
                 if destination.len() != mask.len() {

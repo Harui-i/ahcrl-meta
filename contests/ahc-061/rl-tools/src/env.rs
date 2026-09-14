@@ -1,8 +1,7 @@
 //! AHC061 adapter for the shared vector-environment protocol.
 
 use ahcrl_env_core::{
-    write_f32_slice, ContestEnv, DType, EnvFactory, EnvSpec, StepOutcome, TensorSpec,
-    PROTOCOL_VERSION,
+    ContestEnv, DType, EnvFactory, EnvSpec, StepOutcome, TensorSpec, PROTOCOL_VERSION,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -659,7 +658,7 @@ impl EnvFactory for Ahc061Factory {
             observations: vec![
                 TensorSpec {
                     name: "planes".to_owned(),
-                    dtype: DType::F32,
+                    dtype: DType::F16,
                     shape: vec![NUM_PLANES, BOARD_SIZE, BOARD_SIZE],
                 },
                 TensorSpec {
@@ -669,7 +668,7 @@ impl EnvFactory for Ahc061Factory {
                 },
                 TensorSpec {
                     name: "critic_oracle".to_owned(),
-                    dtype: DType::F32,
+                    dtype: DType::F16,
                     shape: vec![MAX_PLAYERS, ORACLE_PARAMS_PER_PLAYER],
                 },
             ],
@@ -717,13 +716,28 @@ impl ContestEnv for EnvSlot {
         })
     }
 
+    fn prepare_observation(&mut self) -> Result<(), String> {
+        self.refresh_encoded();
+        Ok(())
+    }
+
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
         let encoded = self
             .encoded
             .as_ref()
             .expect("observation cache is initialized");
         match name {
-            "planes" => write_f32_slice(&decode_f16(&encoded.plane_bytes), destination),
+            "planes" => {
+                if destination.len() != encoded.plane_bytes.len() {
+                    return Err(format!(
+                        "planes destination has {} bytes, expected {}",
+                        destination.len(),
+                        encoded.plane_bytes.len()
+                    ));
+                }
+                destination.copy_from_slice(&encoded.plane_bytes);
+                Ok(())
+            }
             "mask" => {
                 if destination.len() != BOARD_CELLS {
                     return Err(format!(
@@ -735,7 +749,15 @@ impl ContestEnv for EnvSlot {
                 Ok(())
             }
             "critic_oracle" => {
-                write_f32_slice(&decode_f16(&encoded.critic_oracle_bytes), destination)
+                if destination.len() != encoded.critic_oracle_bytes.len() {
+                    return Err(format!(
+                        "critic_oracle destination has {} bytes, expected {}",
+                        destination.len(),
+                        encoded.critic_oracle_bytes.len()
+                    ));
+                }
+                destination.copy_from_slice(&encoded.critic_oracle_bytes);
+                Ok(())
             }
             _ => Err(format!("unknown observation {name}")),
         }
@@ -744,37 +766,4 @@ impl ContestEnv for EnvSlot {
     fn write_metric(&self, name: &str, _destination: &mut [u8]) -> Result<(), String> {
         Err(format!("unknown metric {name}"))
     }
-}
-
-fn decode_f16(bytes: &[u8]) -> Vec<f32> {
-    let (chunks, remainder) = bytes.as_chunks::<2>();
-    debug_assert!(remainder.is_empty());
-    chunks
-        .iter()
-        .map(|&chunk| f16_to_f32(u16::from_le_bytes(chunk)))
-        .collect()
-}
-
-fn f16_to_f32(bits: u16) -> f32 {
-    let sign = ((bits & 0x8000) as u32) << 16;
-    let exponent = (bits >> 10) & 0x1f;
-    let mantissa = (bits & 0x03ff) as u32;
-    let value = if exponent == 0 {
-        if mantissa == 0 {
-            sign
-        } else {
-            let mut exponent = -14_i32;
-            let mut mantissa = mantissa;
-            while (mantissa & 0x400) == 0 {
-                mantissa <<= 1;
-                exponent -= 1;
-            }
-            sign | (((exponent + 127) as u32) << 23) | ((mantissa & 0x3ff) << 13)
-        }
-    } else if exponent == 0x1f {
-        sign | 0x7f80_0000 | (mantissa << 13)
-    } else {
-        sign | ((exponent as u32 + 112) << 23) | (mantissa << 13)
-    };
-    f32::from_bits(value)
 }

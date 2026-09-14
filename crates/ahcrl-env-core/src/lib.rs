@@ -6,11 +6,12 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DType {
+    F16,
     F32,
     I64,
     U8,
@@ -19,6 +20,7 @@ pub enum DType {
 impl DType {
     pub const fn item_size(self) -> usize {
         match self {
+            Self::F16 => std::mem::size_of::<u16>(),
             Self::F32 => std::mem::size_of::<f32>(),
             Self::I64 => std::mem::size_of::<i64>(),
             Self::U8 => std::mem::size_of::<u8>(),
@@ -121,6 +123,10 @@ pub trait ContestEnv: Send {
     fn initial_outcome(&self) -> StepOutcome;
     /// Advances the environment once and returns the values reported for this transition.
     fn step(&mut self, action: u32) -> Result<StepOutcome, String>;
+    /// Prepares any cached data shared by this environment's observation tensors.
+    fn prepare_observation(&mut self) -> Result<(), String> {
+        Ok(())
+    }
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String>;
     fn write_metric(&self, name: &str, destination: &mut [u8]) -> Result<(), String>;
 
@@ -374,6 +380,7 @@ impl<F: EnvFactory> VecEnvServer<F> {
 
     pub fn encode_batch(&mut self) -> Result<Vec<u8>, String> {
         self.require_initialized()?;
+        self.prepare_observations()?;
         let capacity = self.spec.batch_bytes(self.num_envs)?;
         let mut output = Vec::with_capacity(capacity);
         for tensor in self.spec.observations.clone() {
@@ -385,6 +392,21 @@ impl<F: EnvFactory> VecEnvServer<F> {
         }
         debug_assert_eq!(output.len(), capacity);
         Ok(output)
+    }
+
+    fn prepare_observations(&mut self) -> Result<(), String> {
+        let results = self.pool.install(|| {
+            self.envs
+                .par_iter_mut()
+                .enumerate()
+                .map(|(env_id, env)| {
+                    env.prepare_observation().map_err(|error| {
+                        format!("failed to prepare observation for env {env_id}: {error}")
+                    })
+                })
+                .collect::<Vec<_>>()
+        });
+        collect_ordered(results).map(|_| ())
     }
 
     fn encode_tensor(
@@ -771,6 +793,12 @@ pub fn write_f32_slice(values: &[f32], destination: &mut [u8]) -> Result<(), Str
     write_numeric_slice(values, destination, f32::to_le_bytes)
 }
 
+pub fn write_f16_slice(values: &[f32], destination: &mut [u8]) -> Result<(), String> {
+    write_numeric_slice(values, destination, |value| {
+        f32_to_f16_bits(value).to_le_bytes()
+    })
+}
+
 pub fn write_i64_slice(values: &[i64], destination: &mut [u8]) -> Result<(), String> {
     write_numeric_slice(values, destination, i64::to_le_bytes)
 }
@@ -799,6 +827,37 @@ where
         chunk.copy_from_slice(&to_bytes(value));
     }
     Ok(())
+}
+
+fn f32_to_f16_bits(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let mantissa = bits & 0x7f_ffff;
+    if exp == 0xff {
+        return sign | if mantissa == 0 { 0x7c00 } else { 0x7e00 };
+    }
+    let half_exp = exp - 127 + 15;
+    if half_exp >= 0x1f {
+        return sign | 0x7c00;
+    }
+    if half_exp <= 0 {
+        if half_exp < -10 {
+            return sign;
+        }
+        let mantissa_with_hidden = mantissa | 0x80_0000;
+        let shift = 14 - half_exp;
+        let mut half = (mantissa_with_hidden >> shift) as u16;
+        if (mantissa_with_hidden >> (shift - 1)) & 1 != 0 {
+            half = half.wrapping_add(1);
+        }
+        return sign | half;
+    }
+    let mut half = sign | ((half_exp as u16) << 10) | (mantissa >> 13) as u16;
+    if mantissa & 0x1000 != 0 {
+        half = half.wrapping_add(1);
+    }
+    half
 }
 
 #[cfg(test)]
@@ -888,6 +947,7 @@ mod tests {
         inner: DummyEnv,
         in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         max_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        prepared: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl ContestEnv for ProbeEnv {
@@ -912,6 +972,12 @@ mod tests {
             self.inner.step(action)
         }
 
+        fn prepare_observation(&mut self) -> Result<(), String> {
+            self.prepared
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
         fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
             self.inner.write_observation(name, destination)
         }
@@ -924,6 +990,7 @@ mod tests {
     struct ProbeFactory {
         in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         max_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        prepared: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl ProbeFactory {
@@ -931,6 +998,7 @@ mod tests {
             Self {
                 in_flight: Default::default(),
                 max_in_flight: Default::default(),
+                prepared: Default::default(),
             }
         }
     }
@@ -951,6 +1019,7 @@ mod tests {
                 inner: DummyEnv { value: seed as u32 },
                 in_flight: self.in_flight.clone(),
                 max_in_flight: self.max_in_flight.clone(),
+                prepared: self.prepared.clone(),
             })
         }
     }
@@ -1097,6 +1166,23 @@ mod tests {
         parallel.reset_all(0, 1).unwrap();
         parallel.step(&[1, 1, 1, 1]).unwrap();
         assert!(parallel_max.load(std::sync::atomic::Ordering::SeqCst) > 1);
+    }
+
+    #[test]
+    fn f16_writer_uses_little_endian_half_precision_bits() {
+        let mut destination = [0_u8; 6];
+        write_f16_slice(&[1.0, -2.0, f32::INFINITY], &mut destination).unwrap();
+        assert_eq!(destination, [0x00, 0x3c, 0x00, 0xc0, 0x00, 0x7c]);
+    }
+
+    #[test]
+    fn prepare_observation_runs_once_per_environment_per_batch() {
+        let factory = ProbeFactory::new();
+        let prepared = factory.prepared.clone();
+        let mut server = VecEnvServer::new_with_workers(factory, 3, 3).unwrap();
+        server.reset_all(0, 1).unwrap();
+        server.encode_batch().unwrap();
+        assert_eq!(prepared.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 
     #[test]

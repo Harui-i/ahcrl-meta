@@ -135,8 +135,9 @@ profile = "minimal"
 2. `AhcXXXEnv::from_seed` で公式 generator から `Input` を作り、公式状態型を初期化する。固定入力で検証したい場合は `new(input)` も追加する。
 3. 行動を `u32` の連番に割り当て、`validate_action` で範囲と合法性を確認する。action mask が必要なら観測に `mask: U8[action_count]` を追加する。
 4. `step` は公式の状態遷移を一度だけ呼び、直前・直後の公式 score/cost から reward を作る。終了条件も公式のターン数・完了判定に合わせる。
-5. `encode_*` で状態を固定shapeの `f32` tensor にし、`write_observation` から `write_f32_slice` で書き込む。
-6. 少数seedの軌跡について、RL環境の最終scoreと公式 scorer のscoreが一致するテストを書く。
+5. `encode_*` で状態を固定shapeの tensor にし、`write_observation` から dtype に対応する helper で書き込む。GPU入力で転送量が支配的なら `F16` / `write_f16_slice` を検討する。
+6. 複数 observation が同じ中間特徴を使う場合は、`prepare_observation(&mut self)` で1回だけ計算してcacheし、`write_observation` はcacheから書き込む。core は各 batch の直前にこの hook をenvごとに一度だけ呼ぶ。
+7. 少数seedの軌跡について、RL環境の最終scoreと公式 scorer のscoreが一致するテストを書く。
 
 ## 公式toolsをどこまで編集してよいか
 
