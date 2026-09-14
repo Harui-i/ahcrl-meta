@@ -86,12 +86,12 @@ def starter_files(slug: str, directory: str) -> dict[str, str]:
         f"contests/{directory}/problem_ja.md": "# 問題文（日本語）\n\nTODO: AtCoderの問題文を保存する。\n",
         f"contests/{directory}/problem_en.md": "# Problem Statement (English)\n\nTODO: Save the AtCoder problem statement here.\n",
         f"contests/{directory}/configs/ppo_smoke.toml": render(
-            """[training]\nnum_envs = 4\ntotal_steps = 4096\nrollout_steps = 32\nseed_start = 0\nseed_stride = 1\ndevice = \"cpu\"\ncompile = false\nartifact_dir = \"contests/__DIRECTORY__/artifacts/ppo\"\ncheckpoint_interval_updates = 1\n\n[ppo]\nlr = 0.0003\ngamma = 0.99\ngae_lambda = 0.95\nclip = 0.2\nepochs = 1\nminibatch_size = 32\nentropy_coef = 0.01\nvalue_coef = 0.5\nmax_grad_norm = 0.5\n\n[wandb]\nenabled = false\nproject = \"ahcrl-meta-__SLUG__\"\nname = \"__SLUG__-ppo-smoke\"\ntags = [\"__SLUG__\", \"ppo\", \"smoke\"]\n\n[model]\nchannels = 32\nblocks = 2\nblock_type = \"convnext\"\n""",
+            """[training]\nnum_envs = 4\ntotal_steps = 4096\nrollout_steps = 32\nseed_start = 0\nseed_stride = 1\ndevice = \"cpu\"\ncompile = false\nartifact_dir = \"contests/__DIRECTORY__/artifacts/ppo\"\ncheckpoint_interval_updates = 1\n\n[ppo]\nlr = 0.0003\ngamma = 0.99\ngae_lambda = 0.95\nclip = 0.2\nepochs = 1\nminibatch_size = 32\nentropy_coef = 0.01\nvalue_coef = 0.5\nmax_grad_norm = 0.5\n\n[wandb]\nenabled = false\nproject = \"ahcrl-meta-__SLUG__\"\nname = \"__SLUG__-ppo-smoke\"\ntags = [\"__SLUG__\", \"ppo\", \"smoke\"]\n\n[model]\nchannels = 32\nblocks = 2\n""",
             slug=slug,
             directory=directory,
         ),
         f"contests/{directory}/configs/ppo_train.toml": render(
-            """[training]\nnum_envs = 256\ntotal_steps = 20000000\nrollout_steps = 128\nseed_start = 0\nseed_stride = 1\ndevice = \"cuda\"\ncompile = true\nartifact_dir = \"contests/__DIRECTORY__/artifacts/ppo\"\ncheckpoint_interval_updates = 40\n\n[ppo]\nlr = 0.0003\ngamma = 0.99\ngae_lambda = 0.95\nclip = 0.2\nepochs = 1\nminibatch_size = 1024\nentropy_coef = 0.001\nvalue_coef = 0.5\nmax_grad_norm = 0.5\n\n[wandb]\nenabled = true\nproject = \"ahcrl-meta-__SLUG__\"\nname = \"__SLUG__-ppo\"\ntags = [\"__SLUG__\", \"ppo\"]\n\n[model]\nchannels = 128\nblocks = 4\nblock_type = \"convnext\"\n""",
+            """[training]\nnum_envs = 256\ntotal_steps = 20000000\nrollout_steps = 128\nseed_start = 0\nseed_stride = 1\ndevice = \"cuda\"\ncompile = true\nartifact_dir = \"contests/__DIRECTORY__/artifacts/ppo\"\ncheckpoint_interval_updates = 40\n\n[ppo]\nlr = 0.0003\ngamma = 0.99\ngae_lambda = 0.95\nclip = 0.2\nepochs = 1\nminibatch_size = 1024\nentropy_coef = 0.001\nvalue_coef = 0.5\nmax_grad_norm = 0.5\n\n[wandb]\nenabled = true\nproject = \"ahcrl-meta-__SLUG__\"\nname = \"__SLUG__-ppo\"\ntags = [\"__SLUG__\", \"ppo\"]\n\n[model]\nchannels = 128\nblocks = 4\n""",
             slug=slug,
             directory=directory,
         ),

@@ -31,7 +31,6 @@ name = "ahc063-ezcur"
 [model]
 channels = 256
 blocks = 2
-block_type = "convnext"
 
 [contest]
 max_steps_per_cell = 4

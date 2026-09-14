@@ -31,7 +31,6 @@ CONFIG_DEFAULTS = {
     "wandb_tags": [],
     "model_channels": 1,
     "model_blocks": 1,
-    "model_block_type": "convnext",
 }
 
 
@@ -63,7 +62,6 @@ def test_starter_ppo_configs_use_shared_training_sections(tmp_path: Path) -> Non
         assert "train" not in parsed
         assert set(parsed) == {"training", "ppo", "wandb", "model"}
         assert config["wandb_project"] == "ahcrl-meta-ahc068"
-        assert config["model_block_type"] == "convnext"
 
 
 def test_starter_uses_shared_rust_env_protocol(tmp_path: Path) -> None:

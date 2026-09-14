@@ -26,7 +26,6 @@ obs_norm_epsilon = 1e-8
 [model]
 channels = 256
 blocks = 2
-block_type = "convnext"
 
 [contest]
 pf_particles = 16

@@ -58,7 +58,6 @@ def load_export_model(checkpoint_path: Path, config: dict[str, object]) -> Actor
     model = ActorCritic(
         channels=int(cast(Any, config["model_channels"])),
         blocks=int(cast(Any, config["model_blocks"])),
-        block_type=str(config["model_block_type"]),
     ).to(dtype=torch.bfloat16)
     if bool(config.get("obs_norm", True)):
         model.observation_normalizer = RunningObservationNormalizer(

@@ -6,7 +6,7 @@ from ahcrl.contests.ahc063.model import ActorCritic
 
 
 def test_actor_critic_convnext() -> None:
-    model = ActorCritic(NUM_PLANES, 16, 4, "convnext")
+    model = ActorCritic(NUM_PLANES, 16, 4)
     batch_size = 5
     x = torch.randn(batch_size, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
     policy, value = model(x)
@@ -15,8 +15,8 @@ def test_actor_critic_convnext() -> None:
     assert value.shape == (batch_size,)
 
 
-def test_actor_critic_spatial_transformer() -> None:
-    model = ActorCritic(NUM_PLANES, 16, 2, "spatial-transformer")
+def test_actor_critic_with_two_blocks() -> None:
+    model = ActorCritic(NUM_PLANES, 16, 2)
     x = torch.randn(3, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
 
     policy, value = model(x)
@@ -26,7 +26,7 @@ def test_actor_critic_spatial_transformer() -> None:
 
 
 def test_actor_critic_uses_explicit_max_pool_for_compile_safety() -> None:
-    model = ActorCritic(NUM_PLANES, 16, 1, "spherical_attention_simba")
+    model = ActorCritic(NUM_PLANES, 16, 1)
     features = torch.randn(2, 16, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
 
     assert isinstance(model.max_pool, nn.AdaptiveMaxPool2d)

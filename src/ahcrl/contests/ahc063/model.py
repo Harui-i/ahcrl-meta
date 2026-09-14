@@ -17,7 +17,6 @@ class ActorCritic(nn.Module):
         in_channels: int = NUM_PLANES,
         channels: int = 64,
         blocks: int = 4,
-        block_type: str = "convnext",
     ) -> None:
         super().__init__()
         self.NUM_PLANES = NUM_PLANES
@@ -27,7 +26,6 @@ class ActorCritic(nn.Module):
             raise ValueError("channels and blocks must be positive")
         self.observation_normalizer: nn.Module | None = None
         self.trunk = make_trunk(
-            block_type=block_type,
             in_channels=in_channels,
             channels=channels,
             blocks=blocks,

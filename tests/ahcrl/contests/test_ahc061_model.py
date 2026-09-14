@@ -1,6 +1,5 @@
 from typing import Any, cast
 
-import pytest
 import torch
 
 from ahcrl.contests.ahc061.encoder import (
@@ -11,19 +10,8 @@ from ahcrl.contests.ahc061.encoder import (
 from ahcrl.contests.ahc061.model import ActorCritic, RunningObservationNormalizer
 
 
-@pytest.mark.parametrize(
-    "block_type",
-    [
-        "convnext",
-        "per_cell_mlp",
-        "residual",
-        "spatial-transformer",
-        "simbav2_block",
-        "spherical_attention_simba",
-    ],
-)
-def test_actor_critic_output_shapes(block_type: str) -> None:
-    model = ActorCritic(channels=8, blocks=2, block_type=block_type)
+def test_actor_critic_output_shapes() -> None:
+    model = ActorCritic(channels=8, blocks=2)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
 
     logits, value = model(x)
@@ -126,8 +114,3 @@ def test_critic_features_only_affect_value_head() -> None:
         if name.startswith("value.critic_") and parameter.grad is not None
     )
     assert critic_grad_norm > 0.0
-
-
-def test_actor_critic_rejects_unknown_block_type() -> None:
-    with pytest.raises(ValueError, match="unknown block_type"):
-        ActorCritic(block_type="unknown")

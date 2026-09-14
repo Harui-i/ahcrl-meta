@@ -1,5 +1,3 @@
-from collections.abc import Callable
-
 import torch
 from torch import nn
 
@@ -8,8 +6,9 @@ from ahcrl.contests.ahc061.encoder import (
     MAX_PLAYERS,
     NUM_PLANES,
 )
+from ahcrl.nn.blocks import ConvNeXtBlock
 from ahcrl.nn.components import make_group_norm
-from ahcrl.nn.trunk import make_block_factory, make_trunk
+from ahcrl.nn.trunk import make_trunk
 
 
 class RunningObservationNormalizer(nn.Module):
@@ -79,17 +78,13 @@ class ActorCritic(nn.Module):
         in_channels: int = NUM_PLANES,
         channels: int = 64,
         blocks: int = 4,
-        block_type: str = "convnext",
     ) -> None:
         super().__init__()
         self.observation_normalizer: RunningObservationNormalizer | None = None
-        block_factory = make_block_factory(block_type, channels=channels, blocks=blocks)
         self.trunk = make_trunk(
-            block_type=block_type,
             in_channels=in_channels,
             channels=channels,
             blocks=blocks,
-            block_factory=block_factory,
         )
         self.policy = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=1, bias=False),
@@ -101,7 +96,6 @@ class ActorCritic(nn.Module):
         self.value = RichValueHead(
             in_channels=in_channels,
             channels=channels,
-            block_factory=block_factory,
         )
 
     def forward(
@@ -134,10 +128,9 @@ class RichValueHead(nn.Module):
         *,
         in_channels: int,
         channels: int,
-        block_factory: Callable[[], nn.Module],
     ) -> None:
         super().__init__()
-        self.blocks = nn.Sequential(block_factory(), block_factory())
+        self.blocks = nn.Sequential(ConvNeXtBlock(channels), ConvNeXtBlock(channels))
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
         stats_channels = in_channels * 2

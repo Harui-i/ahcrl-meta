@@ -33,7 +33,6 @@ name = "ahc063-ppo-ewma-com1024"
 [model]
 channels = 256
 blocks = 2
-block_type = "convnext"
 
 [contest]
 max_steps_per_cell = 4

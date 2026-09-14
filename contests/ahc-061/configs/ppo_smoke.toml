@@ -25,7 +25,6 @@ obs_norm = true
 [model]
 channels = 64
 blocks = 4
-block_type = "convnext"
 
 [contest]
 fixed_m = 4

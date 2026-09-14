@@ -91,7 +91,6 @@ def load_policy(
     model = ActorCritic(
         channels=int(config["model_channels"]),
         blocks=int(config["model_blocks"]),
-        block_type=str(config.get("model_block_type", "convnext")),
     ).float()
     normalizer: RunningObservationNormalizer | None = None
     if bool(config.get("obs_norm", False)):

@@ -15,7 +15,6 @@ minibatch_size = 8
 [model]
 channels = 16
 blocks = 1
-block_type = "convnext"
 
 [contest]
 fixed_n = 8

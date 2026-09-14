@@ -61,7 +61,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "checkpoint_interval_updates": 20,
     "model_channels": 64,
     "model_blocks": 4,
-    "model_block_type": "convnext",
     "wandb_enabled": False,
     "wandb_project": "ahcrl-meta",
     "wandb_entity": None,
@@ -166,7 +165,6 @@ def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
     model = ActorCritic(
         channels=args.model_channels,
         blocks=args.model_blocks,
-        block_type=args.model_block_type,
     ).to(device=device)
     if device.type == "cuda":
         model = model.to(dtype=MODEL_DTYPE)
