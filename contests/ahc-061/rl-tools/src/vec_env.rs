@@ -1,5 +1,6 @@
 use tools::{gen, Input, State};
 
+use crate::env::EncodedSlot;
 use crate::official_compat::{current_scores, get_candidates, legal_mask};
 use crate::particle_filter::ParticleFilterSmc;
 
@@ -15,6 +16,7 @@ pub struct EnvSlot {
     pub score_sums: Vec<i64>,
     pub reward: f64,
     pub action_history: Vec<(usize, usize)>,
+    pub(crate) encoded: Option<EncodedSlot>,
 }
 
 impl EnvSlot {
@@ -43,7 +45,7 @@ impl EnvSlot {
                 )
             })
             .collect();
-        Self {
+        let mut slot = Self {
             input,
             state,
             pfilters,
@@ -53,7 +55,10 @@ impl EnvSlot {
             score_sums,
             reward: 0.0,
             action_history: vec![],
-        }
+            encoded: None,
+        };
+        slot.refresh_encoded();
+        slot
     }
 
     pub fn step_action_index(&mut self, action: usize) -> Result<(), String> {
@@ -100,7 +105,12 @@ impl EnvSlot {
         self.reward = (score - self.prev_score) as f64 / 100000.0;
         self.prev_score = score;
         self.done = self.turn >= self.input.T;
+        self.refresh_encoded();
         Ok(())
+    }
+
+    fn refresh_encoded(&mut self) {
+        self.encoded = Some(crate::env::encode_slot(self));
     }
 
     pub fn score(&self) -> i64 {

@@ -276,6 +276,10 @@ impl<F: EnvFactory> VecEnvServer<F> {
 
     pub fn step(&mut self, actions: &[u32]) -> Result<(), String> {
         self.validate_actions(actions)?;
+        self.step_validated(actions)
+    }
+
+    fn step_validated(&mut self, actions: &[u32]) -> Result<(), String> {
         let results = self.pool.install(|| {
             self.envs
                 .par_iter_mut()
@@ -645,7 +649,7 @@ where
                     send_error(&mut writer, &error)?;
                     continue;
                 }
-                server.step(&actions)?;
+                server.step_validated(&actions)?;
                 write_batch(server, &mut writer)?;
             }
             "STEP_MASK" => {

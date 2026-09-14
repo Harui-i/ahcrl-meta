@@ -194,13 +194,13 @@ fn dist_to_sources(sources: &BoolBoard) -> FloatBoard {
     out
 }
 
-struct EncodedSlot {
-    plane_bytes: Vec<u8>,
-    critic_oracle_bytes: Vec<u8>,
-    mask: [u8; BOARD_CELLS],
+pub(crate) struct EncodedSlot {
+    pub(crate) plane_bytes: Vec<u8>,
+    pub(crate) critic_oracle_bytes: Vec<u8>,
+    pub(crate) mask: [u8; BOARD_CELLS],
 }
 
-fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
+pub(crate) fn encode_slot(slot: &EnvSlot) -> EncodedSlot {
     let mut plane_bytes =
         vec![0_u8; NUM_PLANES * BOARD_SIZE * BOARD_SIZE * std::mem::size_of::<u16>()];
     let mut critic_oracle_bytes =
@@ -718,7 +718,10 @@ impl ContestEnv for EnvSlot {
     }
 
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
-        let encoded = encode_slot(self);
+        let encoded = self
+            .encoded
+            .as_ref()
+            .expect("observation cache is initialized");
         match name {
             "planes" => write_f32_slice(&decode_f16(&encoded.plane_bytes), destination),
             "mask" => {
