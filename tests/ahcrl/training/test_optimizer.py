@@ -45,6 +45,21 @@ def _take_step(
     master.copy_master_to_model()
 
 
+def test_master_weights_retain_fp32_updates_after_model_sync() -> None:
+    model = _model().to(dtype=torch.bfloat16)
+    master = FP32MasterWeights(model)
+    before = master.parameters[0].detach().clone()
+    update = torch.full_like(before, 1e-5)
+
+    with torch.no_grad():
+        master.parameters[0].add_(update)
+    master.copy_master_to_model()
+
+    assert torch.equal(master.parameters[0], before + update)
+    model_weight = dict(model.named_parameters())["0.weight"]
+    assert not torch.equal(master.parameters[0], model_weight.float())
+
+
 def test_hybrid_optimizer_updates_modular_and_adamw_parameters() -> None:
     model = _model()
     master = FP32MasterWeights(model)

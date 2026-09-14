@@ -725,7 +725,6 @@ def update_model(
                 master_weights.copy_master_to_model()
                 if proximal_ewma is not None:
                     proximal_ewma.update(master_weights.parameters)
-                master_weights.copy_model_to_master()
             elif proximal_ewma is not None:
                 proximal_ewma.update(
                     [parameter for parameter in raw_model.parameters() if parameter.requires_grad]

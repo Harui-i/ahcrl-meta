@@ -355,7 +355,6 @@ def update_model(
                     ) from error
             optimizer.step()
             master_weights.copy_master_to_model()
-            master_weights.copy_model_to_master()
             for key, value_ in {
                 "policy_loss": policy_loss,
                 "value_loss": value_loss,
