@@ -28,6 +28,7 @@ __all__ = [
     "build_modula_parameter_specs",
     "mark_adaptive_parameter",
     "module_to_modula_graph",
+    "validate_modula_graph",
 ]
 
 
@@ -402,20 +403,29 @@ class ModularSequential(nn.Sequential):
 
 
 class ModularResidual(nn.Module):
-    def __init__(self, branch: nn.Module) -> None:
+    def __init__(self, branch: nn.Module, *, branch_scale: float = 1.0) -> None:
         super().__init__()
+        if not 0.0 < branch_scale <= 1.0:
+            raise ValueError(f"branch_scale must be in (0, 1], got {branch_scale}")
         self.branch = branch
+        self.branch_scale = branch_scale
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.branch(x)
+        return (1.0 - self.branch_scale) * x + self.branch_scale * self.branch(x)
 
     def modula_node(self, prefix: str = "") -> ModulaGraphNode:
+        branch = module_to_modula_graph(self.branch, _join_name(prefix, "branch"))
+        if self.branch_scale != 1.0:
+            branch = ModulaGraphNode(
+                "sequence",
+                (branch, ModulaGraphNode("bond", own_sensitivity=self.branch_scale)),
+            )
+        children = (branch,)
+        if self.branch_scale != 1.0:
+            children = (ModulaGraphNode("bond", own_sensitivity=1.0 - self.branch_scale), branch)
         return ModulaGraphNode(
             "residual",
-            (
-                ModulaGraphNode("bond", own_sensitivity=1.0),
-                module_to_modula_graph(self.branch, _join_name(prefix, "branch")),
-            ),
+            children,
         )
 
 
@@ -487,6 +497,34 @@ def module_to_modula_graph(module: nn.Module, prefix: str = "") -> ModulaGraphNo
     return ModulaGraphNode("bond", own_sensitivity=1.0)
 
 
+def validate_modula_graph(graph: ModulaGraphNode) -> float:
+    """Validate a Modula graph and return its declared input sensitivity.
+
+    The returned value is the graph's structural input-to-output sensitivity:
+    sequences multiply sensitivities while parallel and residual branches add
+    them.  It is the value used by ``allocate()``, not a data-dependent
+    Jacobian measurement of the initialized PyTorch model.
+    """
+
+    def visit(node: ModulaGraphNode) -> float:
+        if node.kind not in {"atom", "bond", "parameter_group", "sequence", "parallel", "residual"}:
+            raise ValueError(f"unknown Modula graph node kind: {node.kind}")
+        if node.kind == "atom" and node.parameter_name is None:
+            raise ValueError("atom node is missing parameter_name")
+        if node.kind in {"atom", "bond", "parameter_group"}:
+            return _validate_positive_finite(node.own_sensitivity, name=f"{node.kind} sensitivity")
+
+        child_sensitivities = tuple(visit(child) for child in node.children)
+        sensitivity = (
+            math.prod(child_sensitivities)
+            if node.kind == "sequence"
+            else sum(child_sensitivities, 0.0)
+        )
+        return _validate_positive_finite(sensitivity, name=f"{node.kind} sensitivity")
+
+    return visit(graph)
+
+
 def mark_adaptive_parameter(module: nn.Module, parameter_name: str) -> None:
     parameter = module._parameters.get(parameter_name)
     if parameter is None:
@@ -545,6 +583,7 @@ def build_modula_parameter_specs(
         if not isinstance(candidate, ModulaGraphNode):
             raise TypeError("modula_graph() must return ModulaGraphNode")
         graph = candidate
+    validate_modula_graph(graph)
     allocations = graph.allocate()
     classified_geometries = set(modular) | set(adaptive)
     if set(allocations) != classified_geometries:

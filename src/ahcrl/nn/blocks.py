@@ -26,6 +26,7 @@ class ConvNeXtBlock(nn.Module):
         expansion: int = 4,
         kernel_size: int = 3,
         layer_scale_init: float = 1e-6,
+        residual_branch_scale: float = 1.0,
     ) -> None:
         super().__init__()
         if channels <= 0:
@@ -36,6 +37,10 @@ class ConvNeXtBlock(nn.Module):
             raise ValueError(f"kernel_size must be a positive odd integer, got {kernel_size}")
         if layer_scale_init < 0.0:
             raise ValueError(f"layer_scale_init must be non-negative, got {layer_scale_init}")
+        if not 0.0 < residual_branch_scale <= 1.0:
+            raise ValueError(
+                f"residual_branch_scale must be in (0, 1], got {residual_branch_scale}"
+            )
 
         self.depthwise = ModularDepthwiseConv2d(
             channels,
@@ -50,6 +55,7 @@ class ConvNeXtBlock(nn.Module):
             ModularLinear(hidden_channels, channels),
         )
         self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
+        self.residual_branch_scale = residual_branch_scale
         mark_adaptive_parameter(self, "layer_scale")
 
     def modula_node(self, prefix: str = "") -> ModulaGraphNode:
@@ -57,23 +63,34 @@ class ConvNeXtBlock(nn.Module):
             path = f"{prefix}.{name}" if prefix else name
             return module_to_modula_graph(module, path)
 
-        branch = ModulaGraphNode(
-            "sequence",
-            (
-                child("depthwise", self.depthwise),
-                child("norm", self.norm),
-                child("pointwise", self.pointwise),
-                ModulaGraphNode(
-                    "atom",
-                    parameter_name=(f"{prefix}.layer_scale" if prefix else "layer_scale"),
-                    own_mass=1.0,
-                    own_sensitivity=1.0,
-                ),
+        branch_children: tuple[ModulaGraphNode, ...] = (
+            child("depthwise", self.depthwise),
+            child("norm", self.norm),
+            child("pointwise", self.pointwise),
+            ModulaGraphNode(
+                "atom",
+                parameter_name=(f"{prefix}.layer_scale" if prefix else "layer_scale"),
+                own_mass=1.0,
+                own_sensitivity=1.0,
             ),
         )
+        if self.residual_branch_scale != 1.0:
+            branch_children += (
+                ModulaGraphNode("bond", own_sensitivity=self.residual_branch_scale),
+            )
+        branch = ModulaGraphNode(
+            "sequence",
+            branch_children,
+        )
+        children = (branch,)
+        if self.residual_branch_scale != 1.0:
+            children = (
+                ModulaGraphNode("bond", own_sensitivity=1.0 - self.residual_branch_scale),
+                branch,
+            )
         return ModulaGraphNode(
             "residual",
-            (ModulaGraphNode("bond", own_sensitivity=1.0), branch),
+            children,
         )
 
     def forward(
@@ -86,4 +103,4 @@ class ConvNeXtBlock(nn.Module):
         y = self.pointwise(y)
         y = self.layer_scale * y
         y = y.permute(0, 3, 1, 2)
-        return residual + y
+        return (1.0 - self.residual_branch_scale) * residual + self.residual_branch_scale * y

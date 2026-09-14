@@ -15,6 +15,7 @@ from ahcrl.nn.modula import (
     ModularLinear,
     ModularSequential,
     build_modula_parameter_specs,
+    validate_modula_graph,
 )
 
 
@@ -108,6 +109,33 @@ def test_graph_allocates_serial_parallel_and_residual_target_norms() -> None:
     )
     residual = ModulaGraphNode("residual", (ModulaGraphNode("bond", own_sensitivity=1.0), first))
     assert residual.allocate() == {"first": 1.0}
+
+
+def test_graph_validation_returns_structural_input_sensitivity() -> None:
+    graph = ModulaGraphNode(
+        "sequence",
+        (
+            ModulaGraphNode("atom", parameter_name="first", own_mass=1.0, own_sensitivity=2.0),
+            ModulaGraphNode(
+                "residual",
+                (
+                    ModulaGraphNode("bond", own_sensitivity=1.0),
+                    ModulaGraphNode(
+                        "atom", parameter_name="second", own_mass=1.0, own_sensitivity=3.0
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    assert validate_modula_graph(graph) == pytest.approx(8.0)
+
+
+def test_graph_validation_rejects_nonpositive_sensitivity() -> None:
+    graph = ModulaGraphNode("atom", parameter_name="weight", own_mass=1.0, own_sensitivity=0.0)
+
+    with pytest.raises(ValueError, match="sensitivity"):
+        validate_modula_graph(graph)
 
 
 def test_unclassified_trainable_parameter_is_rejected() -> None:

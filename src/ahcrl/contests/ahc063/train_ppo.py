@@ -13,6 +13,7 @@ from torch import nn
 from torch.distributions import Categorical, kl_divergence
 
 from ahcrl.envs import RustVecEnv, cargo_server_command
+from ahcrl.nn.modula import validate_modula_graph
 from ahcrl.training import (
     ExplainedVariancePolicyWarmup,
     FixedSeedEvaluation,
@@ -818,6 +819,8 @@ def main() -> None:
     device = torch.device(args.device)
     raw_model = create_model(args, device)
     print(f"model parameters: {sum(p.numel() for p in raw_model.parameters()):,}")
+    if args.optimizer == "modula":
+        print(f"modula input sensitivity: {validate_modula_graph(raw_model.modula_graph()):g}")
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, model=raw_model, device=device)
     master_weights = FP32MasterWeights(raw_model)

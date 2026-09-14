@@ -14,6 +14,7 @@ from ahcrl.nn.modula import (
     ModularLinear,
     ModularSequential,
     module_to_modula_graph,
+    validate_modula_graph,
 )
 from ahcrl.nn.trunk import make_trunk
 
@@ -104,6 +105,7 @@ class ActorCritic(nn.Module):
             in_channels=in_channels,
             channels=channels,
         )
+        validate_modula_graph(self.modula_graph())
 
     def modula_graph(self) -> ModulaGraphNode:
         return ModulaGraphNode(
@@ -152,7 +154,10 @@ class RichValueHead(nn.Module):
         channels: int,
     ) -> None:
         super().__init__()
-        self.blocks = ModularSequential(ConvNeXtBlock(channels), ConvNeXtBlock(channels))
+        self.blocks = ModularSequential(
+            ConvNeXtBlock(channels, residual_branch_scale=0.5),
+            ConvNeXtBlock(channels, residual_branch_scale=0.5),
+        )
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
         stats_channels = in_channels * 2

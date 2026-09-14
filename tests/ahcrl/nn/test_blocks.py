@@ -41,6 +41,20 @@ def test_convnext_block_rejects_negative_layer_scale() -> None:
         ConvNeXtBlock(channels=8, layer_scale_init=-1e-6)
 
 
+@pytest.mark.parametrize("residual_branch_scale", [0.0, 1.1])
+def test_convnext_block_rejects_invalid_residual_branch_scale(
+    residual_branch_scale: float,
+) -> None:
+    with pytest.raises(ValueError, match="residual_branch_scale"):
+        ConvNeXtBlock(channels=8, residual_branch_scale=residual_branch_scale)
+
+
+def test_convnext_block_convex_residual_has_unit_declared_sensitivity() -> None:
+    block = ConvNeXtBlock(channels=8, residual_branch_scale=0.5)
+
+    assert block.modula_node().sensitivity == pytest.approx(1.0)
+
+
 @pytest.mark.parametrize(
     ("channels", "expected_groups"),
     [(64, 8), (10, 5), (7, 7)],

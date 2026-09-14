@@ -9,6 +9,7 @@ from ahcrl.nn.modula import (
     ModularLinear,
     ModularSequential,
     module_to_modula_graph,
+    validate_modula_graph,
 )
 from ahcrl.nn.trunk import make_trunk
 
@@ -50,6 +51,7 @@ class ActorCritic(nn.Module):
             nn.ReLU(inplace=True),
             ModularLinear(channels, 1),
         )
+        validate_modula_graph(self.modula_graph())
 
     def modula_graph(self) -> ModulaGraphNode:
         return ModulaGraphNode(

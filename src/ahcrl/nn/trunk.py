@@ -13,5 +13,5 @@ def make_trunk(*, in_channels: int, channels: int, blocks: int) -> nn.Sequential
         ModularConv2d(in_channels, channels, kernel_size=3, padding=1, bias=False),
         make_group_norm(channels),
         nn.ReLU(inplace=True),
-        *[ConvNeXtBlock(channels) for _ in range(blocks)],
+        *[ConvNeXtBlock(channels, residual_branch_scale=1.0 / blocks) for _ in range(blocks)],
     )
