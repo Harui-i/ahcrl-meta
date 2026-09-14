@@ -7,6 +7,7 @@ from torch import nn
 from ahcrl.contests.ahc061.model import ActorCritic as AHC061ActorCritic
 from ahcrl.contests.ahc063.model import ActorCritic as AHC063ActorCritic
 from ahcrl.nn.modula import (
+    AdaptiveRMSGeometry,
     ModulaGraphNode,
     ModularConv2d,
     ModularDepthwiseConv2d,
@@ -48,12 +49,22 @@ def test_linear_geometry_maps_zero_gradient_to_zero() -> None:
     assert update.count_nonzero() == 0
 
 
+def test_adaptive_rms_geometry_assigns_requested_natural_norm() -> None:
+    geometry = AdaptiveRMSGeometry()
+    direction = torch.tensor([1.0, -2.0, 3.0, -4.0])
+
+    update = geometry.dualize(direction, target_norm=0.25)
+
+    assert update.square().mean().sqrt() == pytest.approx(torch.tensor(0.25))
+    assert geometry.dualize(torch.zeros(3), target_norm=1.0).count_nonzero() == 0
+
+
 def test_one_hot_embedding_is_not_classified_as_linear() -> None:
     class SemanticModel(nn.Module):
         def __init__(self) -> None:
             super().__init__()
             self.embedding = ModularEmbedding(5, 3)
-            self.linear = ModularLinear(5, 3)
+            self.linear = ModularLinear(5, 3, bias=False)
 
         def modula_graph(self) -> ModulaGraphNode:
             return ModulaGraphNode(
@@ -122,7 +133,8 @@ def test_contest_models_classify_every_trainable_parameter(
     assert {spec.name for spec in specs} == {
         name for name, parameter in model.named_parameters() if parameter.requires_grad
     }
-    assert {spec.role for spec in specs} == {"modular", "adamw"}
+    assert {spec.role for spec in specs} == {"modular", "adaptive"}
+    assert all(spec.geometry is not None and spec.target_norm > 0 for spec in specs)
 
 
 def test_modular_sequential_keeps_standard_state_dict_names() -> None:

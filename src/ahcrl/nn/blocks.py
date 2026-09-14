@@ -9,7 +9,7 @@ from ahcrl.nn.modula import (
     ModularDepthwiseConv2d,
     ModularLinear,
     ModularSequential,
-    mark_adamw_parameter,
+    mark_adaptive_parameter,
     module_to_modula_graph,
 )
 
@@ -50,7 +50,7 @@ class ConvNeXtBlock(nn.Module):
             ModularLinear(hidden_channels, channels),
         )
         self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
-        mark_adamw_parameter(self, "layer_scale")
+        mark_adaptive_parameter(self, "layer_scale")
 
     def modula_node(self, prefix: str = "") -> ModulaGraphNode:
         def child(name: str, module: nn.Module) -> ModulaGraphNode:
@@ -63,7 +63,12 @@ class ConvNeXtBlock(nn.Module):
                 child("depthwise", self.depthwise),
                 child("norm", self.norm),
                 child("pointwise", self.pointwise),
-                ModulaGraphNode("bond", own_sensitivity=1.0),
+                ModulaGraphNode(
+                    "atom",
+                    parameter_name=(f"{prefix}.layer_scale" if prefix else "layer_scale"),
+                    own_mass=1.0,
+                    own_sensitivity=1.0,
+                ),
             ),
         )
         return ModulaGraphNode(

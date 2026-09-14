@@ -15,6 +15,7 @@ import torch
 from torch import nn
 
 __all__ = [
+    "AdaptiveRMSGeometry",
     "ModulaGraphNode",
     "ModulaParameterSpec",
     "ModularConv2d",
@@ -25,7 +26,7 @@ __all__ = [
     "ModularResidual",
     "ModularSequential",
     "build_modula_parameter_specs",
-    "mark_adamw_parameter",
+    "mark_adaptive_parameter",
     "module_to_modula_graph",
 ]
 
@@ -155,6 +156,35 @@ class EmbeddingGeometry:
         if not bool(active.any().item()):
             return torch.zeros((), device=tensor.device, dtype=tensor.dtype)
         return (tensor[active].norm(dim=1) / self.scale - 1.0).abs().mean()
+
+
+@dataclass(frozen=True)
+class AdaptiveRMSGeometry:
+    """RMS geometry for bias, normalization affine, and residual gates.
+
+    Adam moments determine the direction while this geometry gives that
+    direction a parameterization-independent RMS update budget.  These
+    parameters keep their module-defined initialization and are not projected.
+    """
+
+    name: str = "adaptive_rms"
+
+    def dualize(self, gradient: torch.Tensor, *, target_norm: float) -> torch.Tensor:
+        rms = gradient.square().mean().sqrt()
+        normalized = gradient / rms.clamp_min(torch.finfo(gradient.dtype).tiny)
+        return torch.where(rms > 0, normalized * target_norm, torch.zeros_like(gradient))
+
+    def project(self, weight: torch.Tensor) -> torch.Tensor:
+        return weight
+
+    def initialize(self, weight: torch.Tensor) -> torch.Tensor:
+        return weight
+
+    def spectral_norm(self, tensor: torch.Tensor) -> torch.Tensor:
+        return tensor.square().mean().sqrt()
+
+    def orthogonality_residual(self, tensor: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((), device=tensor.device, dtype=tensor.dtype)
 
 
 @dataclass(frozen=True)
@@ -316,7 +346,7 @@ class ModulaGraphNode:
 
     @property
     def sensitivity(self) -> float:
-        if self.kind in {"atom", "bond"}:
+        if self.kind in {"atom", "bond", "parameter_group"}:
             return self.own_sensitivity
         if self.kind == "sequence":
             return math.prod(child.sensitivity for child in self.children)
@@ -343,7 +373,7 @@ class ModulaGraphNode:
                 child_target = target_norm * child.mass / self.mass / downstream
                 targets.append((child, child_target))
             child_targets = iter(targets)
-        elif self.kind in {"parallel", "residual"}:
+        elif self.kind in {"parallel", "residual", "parameter_group"}:
             child_targets = (
                 (child, target_norm * child.mass / self.mass) for child in self.children
             )
@@ -413,12 +443,35 @@ def _join_name(prefix: str, name: str) -> str:
 
 def module_to_modula_graph(module: nn.Module, prefix: str = "") -> ModulaGraphNode:
     if isinstance(module, _ModularAtom):
-        return ModulaGraphNode(
+        weight = ModulaGraphNode(
             "atom",
             parameter_name=_join_name(prefix, "weight"),
             own_mass=module.mass,
             own_sensitivity=module.sensitivity,
         )
+        if module.bias is None or not module.bias.requires_grad:
+            return weight
+        bias = ModulaGraphNode(
+            "atom",
+            parameter_name=_join_name(prefix, "bias"),
+            own_mass=module.mass,
+        )
+        return ModulaGraphNode(
+            "parameter_group", (weight, bias), own_sensitivity=module.sensitivity
+        )
+    if isinstance(module, (nn.GroupNorm, nn.LayerNorm)):
+        parameters = tuple(
+            ModulaGraphNode(
+                "atom",
+                parameter_name=_join_name(prefix, name),
+                own_mass=1.0,
+            )
+            for name, parameter in module.named_parameters(recurse=False)
+            if parameter.requires_grad
+        )
+        if not parameters:
+            return ModulaGraphNode("bond", own_sensitivity=1.0)
+        return ModulaGraphNode("parameter_group", parameters, own_sensitivity=1.0)
     node_factory = getattr(module, "modula_node", None)
     if callable(node_factory):
         node = node_factory(prefix)
@@ -434,13 +487,13 @@ def module_to_modula_graph(module: nn.Module, prefix: str = "") -> ModulaGraphNo
     return ModulaGraphNode("bond", own_sensitivity=1.0)
 
 
-def mark_adamw_parameter(module: nn.Module, parameter_name: str) -> None:
+def mark_adaptive_parameter(module: nn.Module, parameter_name: str) -> None:
     parameter = module._parameters.get(parameter_name)
     if parameter is None:
         raise ValueError(f"module has no direct parameter named {parameter_name}")
-    names = set(getattr(module, "_modula_adamw_parameters", set()))
+    names = set(getattr(module, "_modula_adaptive_parameters", set()))
     names.add(parameter_name)
-    object.__setattr__(module, "_modula_adamw_parameters", names)
+    object.__setattr__(module, "_modula_adaptive_parameters", names)
 
 
 @dataclass(frozen=True)
@@ -456,35 +509,35 @@ def build_modula_parameter_specs(
     model: nn.Module, graph: ModulaGraphNode | None = None
 ) -> tuple[ModulaParameterSpec, ...]:
     modular: dict[str, tuple[nn.Parameter, WeightGeometry]] = {}
-    fallback: dict[str, nn.Parameter] = {}
+    adaptive: dict[str, nn.Parameter] = {}
     for module_name, module in model.named_modules():
         direct = dict(module.named_parameters(recurse=False))
         if isinstance(module, _ModularAtom):
             modular[_join_name(module_name, "weight")] = (module.weight, module.geometry)
             bias = direct.get("bias")
-            if bias is not None:
-                fallback[_join_name(module_name, "bias")] = bias
+            if bias is not None and bias.requires_grad:
+                adaptive[_join_name(module_name, "bias")] = bias
             direct.pop("weight", None)
             direct.pop("bias", None)
-        declared_fallback = getattr(module, "_modula_adamw_parameters", set())
+        declared_adaptive = getattr(module, "_modula_adaptive_parameters", set())
         if isinstance(module, (nn.GroupNorm, nn.LayerNorm)):
-            declared_fallback = declared_fallback | set(direct)
-        for name in declared_fallback:
+            declared_adaptive = declared_adaptive | set(direct)
+        for name in declared_adaptive:
             if name in direct:
-                fallback[_join_name(module_name, name)] = direct.pop(name)
+                adaptive[_join_name(module_name, name)] = direct.pop(name)
         remaining = [name for name, parameter in direct.items() if parameter.requires_grad]
         if remaining:
             qualified = [_join_name(module_name, name) for name in remaining]
             raise ValueError("unclassified trainable parameters: " + ", ".join(qualified))
 
     actual = {name for name, parameter in model.named_parameters() if parameter.requires_grad}
-    classified = set(modular) | set(fallback)
+    classified = set(modular) | set(adaptive)
     if actual != classified:
         missing = sorted(actual - classified)
         extra = sorted(classified - actual)
         raise ValueError(f"parameter classification mismatch: missing={missing}, extra={extra}")
-    if set(modular) & set(fallback):
-        raise ValueError("parameters cannot be both modular and AdamW fallback")
+    if set(modular) & set(adaptive):
+        raise ValueError("parameters cannot have both matrix and adaptive RMS geometry")
 
     if graph is None:
         graph_factory = getattr(model, "modula_graph", None)
@@ -493,11 +546,12 @@ def build_modula_parameter_specs(
             raise TypeError("modula_graph() must return ModulaGraphNode")
         graph = candidate
     allocations = graph.allocate()
-    if set(allocations) != set(modular):
+    classified_geometries = set(modular) | set(adaptive)
+    if set(allocations) != classified_geometries:
         raise ValueError(
             "Modula graph mismatch: "
-            f"missing={sorted(set(modular) - set(allocations))}, "
-            f"extra={sorted(set(allocations) - set(modular))}"
+            f"missing={sorted(classified_geometries - set(allocations))}, "
+            f"extra={sorted(set(allocations) - classified_geometries)}"
         )
 
     specs = [
@@ -505,7 +559,7 @@ def build_modula_parameter_specs(
         for name, (parameter, geometry) in modular.items()
     ]
     specs.extend(
-        ModulaParameterSpec(name, parameter, "adamw", None, 0.0)
-        for name, parameter in fallback.items()
+        ModulaParameterSpec(name, parameter, "adaptive", AdaptiveRMSGeometry(), allocations[name])
+        for name, parameter in adaptive.items()
     )
     return tuple(sorted(specs, key=lambda spec: spec.name))

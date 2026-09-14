@@ -11,7 +11,7 @@ from ahcrl.nn.modula import (
     ModularResidual,
     ModularSequential,
     build_modula_parameter_specs,
-    mark_adamw_parameter,
+    mark_adaptive_parameter,
 )
 from ahcrl.nn.trunk import make_trunk
 
@@ -27,5 +27,5 @@ __all__ = [
     "build_modula_parameter_specs",
     "make_group_norm",
     "make_trunk",
-    "mark_adamw_parameter",
+    "mark_adaptive_parameter",
 ]

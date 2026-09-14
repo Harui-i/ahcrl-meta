@@ -46,7 +46,8 @@ modula_project = true
 `modula_initialize`と`modula_project`は独立に切り替えられます。Modula weightには
 Muon型のmomentumとJiachengの固定six-step Newton--Schulz dualizationを適用します。
 反復回数は設定項目ではありません。bias、normalizationのaffine parameter、LayerScaleは
-AdamWで更新します。通常Convはgroupごとにkernelを
+Adamのmomentで方向を推定し、RMS自然ノルムへ正規化して同じglobal learning rateで
+更新します。通常Convはgroupごとにkernelを
 行列化し、depthwise Convはchannelごとのfilterとして扱います。このConv幾何は空間を
 含む厳密な畳み込み作用素ノルムではなく、最適化実験用のkernel-matrix近似です。
 高コストな直交性・spectral norm診断は`modula_diagnostics_interval` optimizer stepごとに

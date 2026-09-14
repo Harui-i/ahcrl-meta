@@ -12,18 +12,10 @@ from torch import nn
 
 from ahcrl.nn.modula import ModulaParameterSpec, build_modula_parameter_specs
 
-MODULA_OPTIMIZER_FORMAT_VERSION = 1
-
-
-def _parameter_gradient_norm(parameters: list[nn.Parameter]) -> torch.Tensor:
-    norms = []
-    for parameter in parameters:
-        gradient = parameter.grad
-        if gradient is not None:
-            norms.append(gradient.norm())
-    if not norms:
-        return torch.zeros((), device=parameters[0].device)
-    return torch.linalg.vector_norm(torch.stack(norms))
+MODULA_OPTIMIZER_FORMAT_VERSION = 2
+_ADAPTIVE_BETA1 = 0.9
+_ADAPTIVE_BETA2 = 0.999
+_ADAPTIVE_EPSILON = 1e-8
 
 
 @runtime_checkable
@@ -111,7 +103,7 @@ class FP32MasterWeights:
 
 
 class HybridModularOptimizer:
-    """Muon-style modular updates with AdamW fallback parameter groups."""
+    """Modular updates with Adam-preconditioned RMS directions for affine vectors."""
 
     def __init__(
         self,
@@ -123,7 +115,6 @@ class HybridModularOptimizer:
         momentum: float,
         nesterov: bool,
         project: bool,
-        max_fallback_grad_norm: float,
         diagnostics_interval: int,
     ) -> None:
         if lr <= 0 or not math.isfinite(lr):
@@ -142,18 +133,14 @@ class HybridModularOptimizer:
         self.momentum = momentum
         self.nesterov = nesterov
         self.project_enabled = project
-        if max_fallback_grad_norm <= 0 or not math.isfinite(max_fallback_grad_norm):
-            raise ValueError("max_fallback_grad_norm must be finite and positive")
         if diagnostics_interval <= 0:
             raise ValueError("diagnostics_interval must be positive")
-        self.max_fallback_grad_norm = max_fallback_grad_norm
         self.diagnostics_interval = diagnostics_interval
         self.step_count = 0
         self.momentum_buffers: dict[str, torch.Tensor] = {}
-        fallback = [self.parameters_by_name[spec.name] for spec in specs if spec.role == "adamw"]
-        self.fallback_optimizer = (
-            torch.optim.AdamW(fallback, lr=lr, weight_decay=weight_decay) if fallback else None
-        )
+        self.adaptive_first_moments: dict[str, torch.Tensor] = {}
+        self.adaptive_second_moments: dict[str, torch.Tensor] = {}
+        self.adaptive_steps: dict[str, int] = {}
         self.last_metrics: dict[str, float] = {}
         self._gradients_validated = False
 
@@ -256,25 +243,50 @@ class HybridModularOptimizer:
                 totals[metric] = totals.get(metric, 0.0) + value
             counts[geometry] = counts.get(geometry, 0) + 1
 
-        fallback_parameters = [
-            self.parameters_by_name[spec.name]
-            for spec in self.specs
-            if spec.role == "adamw" and self.parameters_by_name[spec.name].grad is not None
-        ]
-        if fallback_parameters and collect_diagnostics:
-            before_norm = _parameter_gradient_norm(fallback_parameters)
-        if fallback_parameters:
-            torch.nn.utils.clip_grad_norm_(
-                fallback_parameters,
-                self.max_fallback_grad_norm,
-                error_if_nonfinite=True,
-            )
-        if fallback_parameters and collect_diagnostics:
-            after_norm = _parameter_gradient_norm(fallback_parameters)
-            totals["optimizer/adamw/grad_norm_before_clip"] = float(before_norm.item())
-            totals["optimizer/adamw/grad_norm_after_clip"] = float(after_norm.item())
-        if self.fallback_optimizer is not None:
-            self.fallback_optimizer.step()
+        for spec in self.specs:
+            if spec.role != "adaptive" or spec.geometry is None:
+                continue
+            parameter = self.parameters_by_name[spec.name]
+            gradient = parameter.grad
+            if gradient is None:
+                continue
+            first = self.adaptive_first_moments.get(spec.name)
+            second = self.adaptive_second_moments.get(spec.name)
+            if first is None or second is None:
+                first = torch.zeros_like(parameter)
+                second = torch.zeros_like(parameter)
+                self.adaptive_first_moments[spec.name] = first
+                self.adaptive_second_moments[spec.name] = second
+            first.lerp_(gradient, 1.0 - _ADAPTIVE_BETA1)
+            second.mul_(_ADAPTIVE_BETA2).addcmul_(gradient, gradient, value=1.0 - _ADAPTIVE_BETA2)
+            adaptive_step = self.adaptive_steps.get(spec.name, 0) + 1
+            self.adaptive_steps[spec.name] = adaptive_step
+            first_hat = first / (1.0 - _ADAPTIVE_BETA1**adaptive_step)
+            second_hat = second / (1.0 - _ADAPTIVE_BETA2**adaptive_step)
+            direction = first_hat / (second_hat.sqrt() + _ADAPTIVE_EPSILON)
+            dualize_started = time.perf_counter() if collect_diagnostics else 0.0
+            dualized = spec.geometry.dualize(direction, target_norm=spec.target_norm)
+            if collect_diagnostics:
+                dualize_seconds += time.perf_counter() - dualize_started
+            parameter.add_(dualized, alpha=-self.lr)
+            if not collect_diagnostics:
+                continue
+            geometry = spec.geometry.name
+            update = self.lr * dualized
+            parameter_rms = float(parameter.square().mean().sqrt().item())
+            update_rms = float(update.square().mean().sqrt().item())
+            values = {
+                "raw_grad_rms": float(gradient.square().mean().sqrt().item()),
+                "update_rms": update_rms,
+                "update_natural_norm": float(spec.geometry.spectral_norm(update).item()),
+                "parameter_rms": parameter_rms,
+                "update_parameter_ratio": update_rms
+                / max(parameter_rms, torch.finfo(parameter.dtype).tiny),
+            }
+            for key, value in values.items():
+                metric = f"optimizer/{geometry}/{key}"
+                totals[metric] = totals.get(metric, 0.0) + value
+            counts[geometry] = counts.get(geometry, 0) + 1
 
         if collect_diagnostics:
             for geometry, count in counts.items():
@@ -303,9 +315,15 @@ class HybridModularOptimizer:
                 name: buffer.detach().cpu().clone()
                 for name, buffer in self.momentum_buffers.items()
             },
-            "fallback": (
-                None if self.fallback_optimizer is None else self.fallback_optimizer.state_dict()
-            ),
+            "adaptive_first_moments": {
+                name: moment.detach().cpu().clone()
+                for name, moment in self.adaptive_first_moments.items()
+            },
+            "adaptive_second_moments": {
+                name: moment.detach().cpu().clone()
+                for name, moment in self.adaptive_second_moments.items()
+            },
+            "adaptive_steps": dict(self.adaptive_steps),
         }
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
@@ -332,14 +350,42 @@ class HybridModularOptimizer:
             name: saved.to(device=self.parameters_by_name[name].device, dtype=torch.float32)
             for name, saved in buffers.items()
         }
-        fallback = state_dict.get("fallback")
-        if self.fallback_optimizer is None:
-            if fallback is not None:
-                raise ValueError("unexpected AdamW fallback state")
-        else:
-            if not isinstance(fallback, dict):
-                raise ValueError("missing AdamW fallback state")
-            self.fallback_optimizer.load_state_dict(fallback)
+        adaptive_names = {spec.name for spec in self.specs if spec.role == "adaptive"}
+        self.adaptive_first_moments = self._load_adaptive_moments(
+            state_dict, key="adaptive_first_moments", expected_names=adaptive_names
+        )
+        self.adaptive_second_moments = self._load_adaptive_moments(
+            state_dict, key="adaptive_second_moments", expected_names=adaptive_names
+        )
+        saved_steps = state_dict.get("adaptive_steps")
+        if not isinstance(saved_steps, dict) or not set(saved_steps) <= adaptive_names:
+            raise ValueError("invalid adaptive RMS step state")
+        self.adaptive_steps = {}
+        for name, step in saved_steps.items():
+            if not isinstance(name, str) or not isinstance(step, int) or step <= 0:
+                raise ValueError("invalid adaptive RMS step entry")
+            self.adaptive_steps[name] = step
+        state_names = set(self.adaptive_steps)
+        if (
+            set(self.adaptive_first_moments) != state_names
+            or set(self.adaptive_second_moments) != state_names
+        ):
+            raise ValueError("inconsistent adaptive RMS optimizer state")
+
+    def _load_adaptive_moments(
+        self, state_dict: Mapping[str, Any], *, key: str, expected_names: set[str]
+    ) -> dict[str, torch.Tensor]:
+        saved_moments = state_dict.get(key)
+        if not isinstance(saved_moments, dict) or not set(saved_moments) <= expected_names:
+            raise ValueError(f"invalid {key} state")
+        loaded: dict[str, torch.Tensor] = {}
+        for name, saved in saved_moments.items():
+            if not isinstance(name, str) or not isinstance(saved, torch.Tensor):
+                raise ValueError(f"invalid {key} entry")
+            loaded[name] = saved.to(
+                device=self.parameters_by_name[name].device, dtype=torch.float32
+            )
+        return loaded
 
 
 def build_optimizer(
@@ -366,7 +412,6 @@ def build_optimizer(
         momentum=float(config["modula_momentum"]),
         nesterov=bool(config["modula_nesterov"]),
         project=bool(config["modula_project"]),
-        max_fallback_grad_norm=float(config["max_grad_norm"]),
         diagnostics_interval=int(config["modula_diagnostics_interval"]),
     )
 

@@ -60,7 +60,7 @@ def test_master_weights_retain_fp32_updates_after_model_sync() -> None:
     assert not torch.equal(master.parameters[0], model_weight.float())
 
 
-def test_hybrid_optimizer_updates_modular_and_adamw_parameters() -> None:
+def test_hybrid_optimizer_updates_modular_and_adaptive_parameters() -> None:
     model = _model()
     master = FP32MasterWeights(model)
     optimizer = build_optimizer(model=model, master_weights=master, config=_config())
@@ -70,11 +70,33 @@ def test_hybrid_optimizer_updates_modular_and_adamw_parameters() -> None:
     _take_step(model, master, optimizer)
 
     assert optimizer.momentum_buffers
+    assert optimizer.adaptive_first_moments
+    assert optimizer.adaptive_second_moments
     assert "optimizer/linear/update_spectral_norm" in optimizer.last_metrics
-    assert "optimizer/adamw/grad_norm_before_clip" in optimizer.last_metrics
+    assert "optimizer/adaptive_rms/update_natural_norm" in optimizer.last_metrics
     assert any(
         not torch.equal(before[name], parameter) for name, parameter in model.named_parameters()
     )
+
+
+def test_adaptive_parameter_uses_global_lr_and_allocated_rms_budget() -> None:
+    model = ModularSequential(ModularLinear(3, 2))
+    master = FP32MasterWeights(model)
+    config = _config()
+    config["lr"] = 0.2
+    config["weight_decay"] = 0.0
+    optimizer = build_optimizer(model=model, master_weights=master, config=config)
+    assert isinstance(optimizer, HybridModularOptimizer)
+    bias_spec = next(spec for spec in optimizer.specs if spec.name == "0.bias")
+    bias = dict(master.named_parameters())["0.bias"]
+    before = bias.detach().clone()
+    for parameter in master.parameters:
+        parameter.grad = torch.ones_like(parameter)
+
+    optimizer.step()
+
+    update_rms = float((bias - before).square().mean().sqrt().item())
+    assert update_rms == pytest.approx(0.2 * bias_spec.target_norm)
 
 
 def test_modular_optimizer_checkpoint_resume_reproduces_next_step(tmp_path: Path) -> None:
