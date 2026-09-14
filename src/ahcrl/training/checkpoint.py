@@ -10,6 +10,8 @@ import numpy as np
 import torch
 from torch import nn
 
+from ahcrl.training.optimizer import HybridModularOptimizer, OptimizerLike
+
 FORMAT_VERSION = 1
 LATEST_CHECKPOINT_NAME = "checkpoint_latest.pt"
 
@@ -31,7 +33,7 @@ def save_training_checkpoint(
     run_dir: Path,
     *,
     model: nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: OptimizerLike,
     config: Mapping[str, Any],
     progress: TrainingProgress,
     extras: Mapping[str, Any],
@@ -64,7 +66,7 @@ def load_latest_training_checkpoint(
     run_dir: Path,
     *,
     model: nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: OptimizerLike,
     device: torch.device,
 ) -> LoadedTrainingCheckpoint:
     path = run_dir / LATEST_CHECKPOINT_NAME
@@ -77,11 +79,17 @@ def load_training_checkpoint(
     path: Path,
     *,
     model: nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: OptimizerLike,
     device: torch.device,
 ) -> LoadedTrainingCheckpoint:
     payload = _load_payload(path, device=device)
     model.load_state_dict(payload["model"])
+    saved_optimizer = str(payload["config"].get("optimizer", "adamw"))
+    current_optimizer = "modula" if isinstance(optimizer, HybridModularOptimizer) else "adamw"
+    if saved_optimizer != current_optimizer:
+        raise ValueError(
+            f"checkpoint optimizer mismatch: saved={saved_optimizer}, current={current_optimizer}"
+        )
     optimizer.load_state_dict(payload["optimizer"])
     torch.set_rng_state(payload["rng"]["torch"].cpu())
     np.random.set_state(payload["rng"]["numpy"])

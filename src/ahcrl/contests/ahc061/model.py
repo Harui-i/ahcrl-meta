@@ -8,6 +8,13 @@ from ahcrl.contests.ahc061.encoder import (
 )
 from ahcrl.nn.blocks import ConvNeXtBlock
 from ahcrl.nn.components import make_group_norm
+from ahcrl.nn.modula import (
+    ModulaGraphNode,
+    ModularConv2d,
+    ModularLinear,
+    ModularSequential,
+    module_to_modula_graph,
+)
 from ahcrl.nn.trunk import make_trunk
 
 
@@ -86,16 +93,31 @@ class ActorCritic(nn.Module):
             channels=channels,
             blocks=blocks,
         )
-        self.policy = nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=1, bias=False),
+        self.policy = ModularSequential(
+            ModularConv2d(channels, channels, kernel_size=1, bias=False),
             make_group_norm(channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(channels, 1, kernel_size=1),
+            ModularConv2d(channels, 1, kernel_size=1),
             nn.Flatten(),
         )
         self.value = RichValueHead(
             in_channels=in_channels,
             channels=channels,
+        )
+
+    def modula_graph(self) -> ModulaGraphNode:
+        return ModulaGraphNode(
+            "sequence",
+            (
+                module_to_modula_graph(self.trunk, "trunk"),
+                ModulaGraphNode(
+                    "parallel",
+                    (
+                        module_to_modula_graph(self.policy, "policy"),
+                        module_to_modula_graph(self.value, "value"),
+                    ),
+                ),
+            ),
         )
 
     def forward(
@@ -130,27 +152,27 @@ class RichValueHead(nn.Module):
         channels: int,
     ) -> None:
         super().__init__()
-        self.blocks = nn.Sequential(ConvNeXtBlock(channels), ConvNeXtBlock(channels))
+        self.blocks = ModularSequential(ConvNeXtBlock(channels), ConvNeXtBlock(channels))
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
         stats_channels = in_channels * 2
         pooled_channels = channels * 2
         hidden_channels = channels * 2
         player_embedding_channels = max(8, channels // MAX_PLAYERS)
-        self.critic_player_encoder = nn.Sequential(
-            nn.Linear(CRITIC_FEATURE_SHAPE[1], player_embedding_channels),
+        self.critic_player_encoder = ModularSequential(
+            ModularLinear(CRITIC_FEATURE_SHAPE[1], player_embedding_channels),
             nn.ReLU(inplace=True),
         )
-        self.critic_encoder = nn.Sequential(
-            nn.Linear(MAX_PLAYERS * player_embedding_channels, channels),
+        self.critic_encoder = ModularSequential(
+            ModularLinear(MAX_PLAYERS * player_embedding_channels, channels),
             nn.ReLU(inplace=True),
         )
-        self.mlp = nn.Sequential(
-            nn.Linear(pooled_channels + stats_channels + channels, hidden_channels),
+        self.mlp = ModularSequential(
+            ModularLinear(pooled_channels + stats_channels + channels, hidden_channels),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_channels, hidden_channels),
+            ModularLinear(hidden_channels, hidden_channels),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_channels, 1),
+            ModularLinear(hidden_channels, 1),
         )
 
     def forward(

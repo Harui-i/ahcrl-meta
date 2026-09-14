@@ -4,6 +4,12 @@ import torch
 from jaxtyping import Float
 from torch import nn
 
+from ahcrl.nn.modula import (
+    ModulaGraphNode,
+    ModularLinear,
+    ModularSequential,
+    module_to_modula_graph,
+)
 from ahcrl.nn.trunk import make_trunk
 
 from .encoder import ACTION_COUNT, NUM_PLANES
@@ -34,15 +40,30 @@ class ActorCritic(nn.Module):
         # Inductor can fuse the final fp32-to-bf16 cast into Tensor.amax and make
         # its tie-counting backward divide by zero.
         self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.policy = nn.Sequential(
-            nn.Linear(channels * 2, channels),
+        self.policy = ModularSequential(
+            ModularLinear(channels * 2, channels),
             nn.ReLU(inplace=True),
-            nn.Linear(channels, ACTION_COUNT),
+            ModularLinear(channels, ACTION_COUNT),
         )
-        self.value = nn.Sequential(
-            nn.Linear(channels * 2, channels),
+        self.value = ModularSequential(
+            ModularLinear(channels * 2, channels),
             nn.ReLU(inplace=True),
-            nn.Linear(channels, 1),
+            ModularLinear(channels, 1),
+        )
+
+    def modula_graph(self) -> ModulaGraphNode:
+        return ModulaGraphNode(
+            "sequence",
+            (
+                module_to_modula_graph(self.trunk, "trunk"),
+                ModulaGraphNode(
+                    "parallel",
+                    (
+                        module_to_modula_graph(self.policy, "policy"),
+                        module_to_modula_graph(self.value, "value"),
+                    ),
+                ),
+            ),
         )
 
     def forward(

@@ -1,4 +1,11 @@
 [training]
+optimizer = "adamw"
+weight_decay = 0.01
+modula_momentum = 0.95
+modula_nesterov = true
+modula_diagnostics_interval = 100
+modula_initialize = true
+modula_project = true
 num_envs = 2
 env_workers = 0
 total_steps = 16

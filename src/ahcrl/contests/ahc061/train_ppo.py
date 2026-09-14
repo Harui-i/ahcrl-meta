@@ -12,8 +12,12 @@ from torch.distributions import Categorical
 
 from ahcrl.envs import RustVecEnv, cargo_server_command
 from ahcrl.training import (
+    FP32MasterWeights,
+    HybridModularOptimizer,
+    OptimizerLike,
     TrainingProgress,
     WandbConfig,
+    build_optimizer,
     build_standard_ppo_metrics,
     config_for_save,
     finish_wandb,
@@ -21,6 +25,7 @@ from ahcrl.training import (
     init_wandb,
     load_initial_model,
     load_latest_training_checkpoint,
+    optimizer_metrics,
     prepare_run_dir,
     resolve_config,
     save_training_checkpoint,
@@ -47,6 +52,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "device": "auto",
     "compile": True,
     "lr": 3e-4,
+    "optimizer": "adamw",
+    "weight_decay": 0.01,
+    "modula_momentum": 0.95,
+    "modula_nesterov": True,
+    "modula_diagnostics_interval": 100,
+    "modula_initialize": True,
+    "modula_project": True,
     "gamma": 0.995,
     "gae_lambda": 0.95,
     "clip": 0.2,
@@ -119,54 +131,6 @@ class RunningRewardScaler:
         self.count = int(state["count"])
         self.mean = float(state["mean"])
         self.m2 = float(state["m2"])
-
-
-class FP32MasterWeights:
-    """Keep bf16 model parameters with fp32 optimizer parameters and states."""
-
-    def __init__(self, model: nn.Module) -> None:
-        self.model_parameters = [p for p in model.parameters() if p.requires_grad]
-        self.parameters = [nn.Parameter(p.detach().float().clone()) for p in self.model_parameters]
-
-    @torch.no_grad()
-    def copy_model_to_master(self) -> None:
-        for model_parameter, master_parameter in zip(
-            self.model_parameters, self.parameters, strict=True
-        ):
-            master_parameter.copy_(model_parameter.float())
-
-    @torch.no_grad()
-    def copy_master_to_model(self) -> None:
-        for model_parameter, master_parameter in zip(
-            self.model_parameters, self.parameters, strict=True
-        ):
-            model_parameter.copy_(master_parameter.to(dtype=model_parameter.dtype))
-
-    def copy_gradients_from_model(self) -> None:
-        for model_parameter, master_parameter in zip(
-            self.model_parameters, self.parameters, strict=True
-        ):
-            master_parameter.grad = (
-                None
-                if model_parameter.grad is None
-                else model_parameter.grad.detach().float().clone()
-            )
-
-    def first_nonfinite_gradient(self) -> int | None:
-        for index, parameter in enumerate(self.parameters):
-            if parameter.grad is not None and not bool(torch.isfinite(parameter.grad).all().item()):
-                return index
-        return None
-
-    def state_dict(self) -> list[torch.Tensor]:
-        return [parameter.detach().cpu().clone() for parameter in self.parameters]
-
-    @torch.no_grad()
-    def load_state_dict(self, state: list[torch.Tensor]) -> None:
-        if len(state) != len(self.parameters):
-            raise ValueError("master weight count mismatch")
-        for parameter, saved in zip(self.parameters, state, strict=True):
-            parameter.copy_(saved.to(device=parameter.device, dtype=torch.float32))
 
 
 def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
@@ -309,7 +273,7 @@ def collect_rollout(
 def update_model(
     model: nn.Module,
     raw_model: ActorCritic,
-    optimizer: torch.optim.Optimizer,
+    optimizer: OptimizerLike,
     rollout: dict[str, torch.Tensor],
     args: argparse.Namespace,
     device: torch.device,
@@ -375,17 +339,20 @@ def update_model(
             _synchronize_device(device)
             backward_seconds += time.perf_counter() - started
             master_weights.copy_gradients_from_model()
-            try:
-                grad_norm = float(
-                    nn.utils.clip_grad_norm_(
-                        master_weights.parameters, args.max_grad_norm, error_if_nonfinite=True
+            if isinstance(optimizer, HybridModularOptimizer):
+                grad_norm = optimizer.validate_gradients()
+            else:
+                try:
+                    grad_norm = float(
+                        nn.utils.clip_grad_norm_(
+                            master_weights.parameters, args.max_grad_norm, error_if_nonfinite=True
+                        )
                     )
-                )
-            except RuntimeError as error:
-                raise FloatingPointError(
-                    "non-finite gradient at master parameter "
-                    f"{master_weights.first_nonfinite_gradient()}"
-                ) from error
+                except RuntimeError as error:
+                    raise FloatingPointError(
+                        "non-finite gradient at master parameter "
+                        f"{master_weights.first_nonfinite_gradient()}"
+                    ) from error
             optimizer.step()
             master_weights.copy_master_to_model()
             master_weights.copy_model_to_master()
@@ -401,11 +368,15 @@ def update_model(
             }.items():
                 totals[key] += float(value_.item())
             count += 1
-    return {key: value / max(count, 1) for key, value in totals.items()} | {
-        "grad_norm": grad_norm,
-        "forward_seconds": forward_seconds,
-        "backward_seconds": backward_seconds,
-    }
+    return (
+        {key: value / max(count, 1) for key, value in totals.items()}
+        | {
+            "grad_norm": grad_norm,
+            "forward_seconds": forward_seconds,
+            "backward_seconds": backward_seconds,
+        }
+        | optimizer_metrics(optimizer)
+    )
 
 
 def main() -> None:
@@ -420,7 +391,15 @@ def main() -> None:
     if args.init_checkpoint is not None:
         load_initial_model(args.init_checkpoint, model=raw_model, device=device)
     master_weights = FP32MasterWeights(raw_model)
-    optimizer = torch.optim.AdamW(master_weights.parameters, lr=args.lr)
+    optimizer = build_optimizer(model=raw_model, master_weights=master_weights, config=vars(args))
+    if (
+        isinstance(optimizer, HybridModularOptimizer)
+        and args.modula_initialize
+        and args.resume_dir is None
+        and args.init_checkpoint is None
+    ):
+        optimizer.initialize_modular_parameters()
+        master_weights.copy_master_to_model()
     scaler = RunningRewardScaler() if args.reward_scale else None
     global_step = update = 0
     next_seed_start = args.seed_start + args.num_envs * args.seed_stride
@@ -430,7 +409,7 @@ def main() -> None:
         )
         global_step, update = checkpoint.progress.global_step, checkpoint.progress.update
         master_state = checkpoint.extras.get("master_weights")
-        if not isinstance(master_state, list):
+        if not isinstance(master_state, (dict, list)):
             raise ValueError("checkpoint extras missing master_weights")
         master_weights.load_state_dict(master_state)
         master_weights.copy_master_to_model()

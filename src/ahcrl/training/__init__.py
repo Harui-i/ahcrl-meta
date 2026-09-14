@@ -18,6 +18,13 @@ from .evaluation import (
     write_visualizer_artifacts,
 )
 from .metrics import build_completed_episode_score_metrics, build_standard_ppo_metrics
+from .optimizer import (
+    FP32MasterWeights,
+    HybridModularOptimizer,
+    OptimizerLike,
+    build_optimizer,
+    optimizer_metrics,
+)
 from .policy_warmup import ExplainedVariancePolicyWarmup, calculate_explained_variance
 from .run import get_wandb_run_id, prepare_run_dir, update_run_state, write_config
 from .wandb import WandbConfig, finish_wandb, init_wandb
@@ -27,13 +34,17 @@ __all__ = [
     "EVALUATIONS_FILE_NAME",
     "ExplainedVariancePolicyWarmup",
     "FixedSeedEvaluation",
+    "FP32MasterWeights",
+    "HybridModularOptimizer",
     "LoadedTrainingCheckpoint",
+    "OptimizerLike",
     "TrainingProgress",
     "WandbConfig",
     "append_evaluation_record",
     "build_completed_episode_score_metrics",
     "build_evaluation_metrics",
     "build_standard_ppo_metrics",
+    "build_optimizer",
     "calculate_explained_variance",
     "config_for_save",
     "evaluate_fixed_seeds",
@@ -43,6 +54,7 @@ __all__ = [
     "load_initial_model",
     "load_latest_training_checkpoint",
     "load_toml_config",
+    "optimizer_metrics",
     "prepare_run_dir",
     "resolve_config",
     "save_training_checkpoint",

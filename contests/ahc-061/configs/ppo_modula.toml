@@ -1,5 +1,5 @@
 [training]
-optimizer = "adamw"
+optimizer = "modula"
 weight_decay = 0.01
 modula_momentum = 0.95
 modula_nesterov = true
@@ -14,11 +14,12 @@ seed_start = 0
 seed_stride = 1
 device = "cuda"
 compile = true
-artifact_dir = "contests/ahc-061/artifacts/ppo"
+artifact_dir = "contests/ahc-061/artifacts/ppo_modula"
 checkpoint_interval_updates = 40
 
 [ppo]
-lr = 0.0003
+# modula公式例では0.1. 自然ノルム1の方向にどれだけのサイズで更新するかの値で、大き目にする
+lr = 0.3
 gamma = 0.99
 gae_lambda = 0.95
 clip = 0.2
@@ -41,5 +42,5 @@ pf_particles = 16
 [wandb]
 enabled = true
 project = "ahcrl-meta-ahc061"
-name = "ahc061-ppo"
-tags = ["ahc061", "ppo"]
+name = "ahc061-ppo-modula"
+tags = ["ahc061", "ppo", "modula", "jiacheng-ns6"]

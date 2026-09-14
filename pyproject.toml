@@ -47,3 +47,5 @@ ignore = ["F722", "F821", "UP037"]
 include = ["src", "tests", "contests"]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"

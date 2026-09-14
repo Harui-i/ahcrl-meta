@@ -78,4 +78,9 @@ def build_standard_ppo_metrics(
     scores = rollout.get("scores")
     if scores is not None:
         metrics |= build_completed_episode_score_metrics(scores, dones)
+    metrics |= {
+        key: value
+        for key, value in update_stats.items()
+        if key.startswith(("optimizer/", "timing/dualize_", "timing/optimizer_", "timing/project_"))
+    }
     return metrics

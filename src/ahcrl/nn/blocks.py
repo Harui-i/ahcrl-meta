@@ -4,6 +4,15 @@ import torch
 from jaxtyping import Float
 from torch import nn
 
+from ahcrl.nn.modula import (
+    ModulaGraphNode,
+    ModularDepthwiseConv2d,
+    ModularLinear,
+    ModularSequential,
+    mark_adamw_parameter,
+    module_to_modula_graph,
+)
+
 __all__ = ["ConvNeXtBlock"]
 
 
@@ -28,21 +37,39 @@ class ConvNeXtBlock(nn.Module):
         if layer_scale_init < 0.0:
             raise ValueError(f"layer_scale_init must be non-negative, got {layer_scale_init}")
 
-        self.depthwise = nn.Conv2d(
-            channels,
+        self.depthwise = ModularDepthwiseConv2d(
             channels,
             kernel_size=kernel_size,
             padding=kernel_size // 2,
-            groups=channels,
         )
         self.norm = nn.LayerNorm(channels)
         hidden_channels = channels * expansion
-        self.pointwise = nn.Sequential(
-            nn.Linear(channels, hidden_channels),
+        self.pointwise = ModularSequential(
+            ModularLinear(channels, hidden_channels),
             nn.GELU(),
-            nn.Linear(hidden_channels, channels),
+            ModularLinear(hidden_channels, channels),
         )
         self.layer_scale = nn.Parameter(torch.full((channels,), layer_scale_init))
+        mark_adamw_parameter(self, "layer_scale")
+
+    def modula_node(self, prefix: str = "") -> ModulaGraphNode:
+        def child(name: str, module: nn.Module) -> ModulaGraphNode:
+            path = f"{prefix}.{name}" if prefix else name
+            return module_to_modula_graph(module, path)
+
+        branch = ModulaGraphNode(
+            "sequence",
+            (
+                child("depthwise", self.depthwise),
+                child("norm", self.norm),
+                child("pointwise", self.pointwise),
+                ModulaGraphNode("bond", own_sensitivity=1.0),
+            ),
+        )
+        return ModulaGraphNode(
+            "residual",
+            (ModulaGraphNode("bond", own_sensitivity=1.0), branch),
+        )
 
     def forward(
         self, x: Float[torch.Tensor, "batch channels H W"]
