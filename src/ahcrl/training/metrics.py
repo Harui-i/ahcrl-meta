@@ -78,4 +78,16 @@ def build_standard_ppo_metrics(
     scores = rollout.get("scores")
     if scores is not None:
         metrics |= build_completed_episode_score_metrics(scores, dones)
+    adaptive_metric_names = (
+        "adaptive_clip_eps_mean",
+        "adaptive_clip_eps_min",
+        "adaptive_clip_eps_max",
+        "adaptive_clip_at_min_frac",
+        "adaptive_clip_at_max_frac",
+    )
+    metrics |= {
+        "train/" + name: update_stats[name]
+        for name in adaptive_metric_names
+        if name in update_stats
+    }
     return metrics

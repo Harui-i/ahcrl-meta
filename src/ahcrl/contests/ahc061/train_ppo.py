@@ -50,6 +50,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "gamma": 0.995,
     "gae_lambda": 0.95,
     "clip": 0.2,
+    "adaptive_clip": False,
+    "adaptive_clip_kappa": 0.2,
+    "adaptive_clip_min": 0.05,
+    "adaptive_clip_max": 0.4,
     "epochs": 4,
     "minibatch_size": 1024,
     "entropy_coef": 0.01,
@@ -207,6 +211,29 @@ def _to_model_tensor(array: np.ndarray, device: torch.device) -> torch.Tensor:
     return tensor.to(dtype=MODEL_DTYPE if device.type == "cuda" else torch.float32)
 
 
+def _clip_epsilons(advantages: torch.Tensor, args: argparse.Namespace) -> torch.Tensor:
+    """標準化済み advantage から PPO clipping 幅を作る。"""
+    if not args.adaptive_clip:
+        return torch.full_like(advantages, args.clip)
+    return (args.adaptive_clip_kappa * advantages.abs()).clamp(
+        min=args.adaptive_clip_min,
+        max=args.adaptive_clip_max,
+    )
+
+
+def _surrogate_clip_mask(
+    ratio: torch.Tensor, advantages: torch.Tensor, clip_epsilons: torch.Tensor
+) -> torch.Tensor:
+    """PPO surrogate が ratio clipping を選ぶ sample を返す。"""
+    return torch.where(
+        advantages > 0,
+        ratio > 1.0 + clip_epsilons,
+        torch.where(
+            advantages < 0, ratio < 1.0 - clip_epsilons, torch.zeros_like(ratio, dtype=torch.bool)
+        ),
+    )
+
+
 def collect_rollout(
     model: nn.Module,
     env: RustVecEnv,
@@ -323,6 +350,7 @@ def update_model(
     returns = rollout["returns"].flatten().to(device)
     masks = rollout["masks"].flatten(0, 1).to(device)
     advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
+    clip_epsilons = _clip_epsilons(advantages, args)
     batch_size = observations.shape[0]
     minibatch_size = min(args.minibatch_size, batch_size)
     totals = {
@@ -352,9 +380,14 @@ def update_model(
             dist = Categorical(logits=logits.float().masked_fill(~masks[index], -1e9))
             new_logprob = dist.log_prob(actions[index])
             ratio = (new_logprob - old_logprobs[index]).exp()
+            minibatch_clip_epsilons = clip_epsilons[index]
             surrogate = torch.min(
                 ratio * advantages[index],
-                ratio.clamp(1.0 - args.clip, 1.0 + args.clip) * advantages[index],
+                ratio.clamp(
+                    1.0 - minibatch_clip_epsilons,
+                    1.0 + minibatch_clip_epsilons,
+                )
+                * advantages[index],
             )
             policy_loss = -surrogate.mean()
             value_loss = 0.5 * (value.float() - returns[index]).square().mean()
@@ -393,7 +426,9 @@ def update_model(
                 "policy_loss": policy_loss,
                 "value_loss": value_loss,
                 "entropy": entropy,
-                "clip_frac": (ratio.sub(1.0).abs() > args.clip).float().mean(),
+                "clip_frac": _surrogate_clip_mask(ratio, advantages[index], minibatch_clip_epsilons)
+                .float()
+                .mean(),
                 "weighted_policy_loss": weighted_policy_loss,
                 "weighted_value_loss": weighted_value_loss,
                 "entropy_loss": entropy_loss,
@@ -401,11 +436,24 @@ def update_model(
             }.items():
                 totals[key] += float(value_.item())
             count += 1
-    return {key: value / max(count, 1) for key, value in totals.items()} | {
+    stats = {key: value / max(count, 1) for key, value in totals.items()} | {
         "grad_norm": grad_norm,
         "forward_seconds": forward_seconds,
         "backward_seconds": backward_seconds,
     }
+    if args.adaptive_clip:
+        stats |= {
+            "adaptive_clip_eps_mean": float(clip_epsilons.mean().item()),
+            "adaptive_clip_eps_min": float(clip_epsilons.min().item()),
+            "adaptive_clip_eps_max": float(clip_epsilons.max().item()),
+            "adaptive_clip_at_min_frac": float(
+                clip_epsilons.eq(args.adaptive_clip_min).float().mean().item()
+            ),
+            "adaptive_clip_at_max_frac": float(
+                clip_epsilons.eq(args.adaptive_clip_max).float().mean().item()
+            ),
+        }
+    return stats
 
 
 def main() -> None:
@@ -612,6 +660,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("checkpoint_interval_updates must be positive")
     if config["pf_particles"] <= 0:
         raise ValueError("pf_particles must be positive")
+    if config["adaptive_clip_kappa"] < 0:
+        raise ValueError("adaptive_clip_kappa must be non-negative")
+    if config["adaptive_clip_min"] < 0:
+        raise ValueError("adaptive_clip_min must be non-negative")
+    if config["adaptive_clip_max"] < config["adaptive_clip_min"]:
+        raise ValueError("adaptive_clip_max must be at least adaptive_clip_min")
     return argparse.Namespace(**config)
 
 

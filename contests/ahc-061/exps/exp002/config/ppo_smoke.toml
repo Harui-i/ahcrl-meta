@@ -1,0 +1,44 @@
+[training]
+num_envs = 2
+env_workers = 0
+total_steps = 128
+rollout_steps = 64
+seed_start = 0
+seed_stride = 1
+device = "cpu"
+compile = false
+artifact_dir = "contests/ahc-061/artifacts/ppo/exp002"
+checkpoint_interval_updates = 1
+
+[ppo]
+lr = 0.0003
+gamma = 0.995
+gae_lambda = 0.95
+clip = 0.2
+adaptive_clip = true
+adaptive_clip_kappa = 0.20
+adaptive_clip_min = 0.05
+adaptive_clip_max = 0.40
+epochs = 4
+minibatch_size = 1024
+entropy_coef = 0.01
+value_coef = 0.5
+max_grad_norm = 0.5
+reward_scale = true
+obs_norm = true
+obs_norm_epsilon = 1e-8
+
+[model]
+channels = 64
+blocks = 4
+
+[contest]
+fixed_m = 4
+fixed_u = 3
+pf_particles = 16
+
+[wandb]
+enabled = false
+project = "ahcrl-meta-ahc061"
+name = "ahc061-ppo-smoke-adaptive-k020"
+tags = ["ahc061", "ppo", "exp-002", "adaptive-clip", "smoke"]
