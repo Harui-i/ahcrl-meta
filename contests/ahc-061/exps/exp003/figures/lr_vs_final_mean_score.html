@@ -1,0 +1,46 @@
+<div class="ahc061-exp003-chart">
+  <style>
+    .ahc061-exp003-chart {
+      --foreground: #111827; --border: #cbd5e1; --popover: #ffffff; --popover-foreground: #111827;
+      --viz-series-1: #2563eb; --viz-series-2: #d97706; --viz-series-3: #059669;
+      color: var(--foreground); font: 14px system-ui, sans-serif; max-width: 860px;
+    }
+    .ahc061-exp003-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+    .ahc061-exp003-chart .title { font-size: 17px; font-weight: 500; margin: 0 0 8px; }
+    .ahc061-exp003-chart .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 8px 72px; }
+    .ahc061-exp003-chart button { appearance: none; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; padding: 2px 0; }
+    .ahc061-exp003-chart button[aria-pressed="false"] { opacity: .35; text-decoration: line-through; }
+    .ahc061-exp003-chart .swatch { display: inline-block; width: 18px; height: 3px; margin: 0 5px 3px 0; vertical-align: middle; }
+    .ahc061-exp003-chart .axis, .ahc061-exp003-chart .grid { stroke: var(--border); stroke-width: 1; }
+    .ahc061-exp003-chart .grid { opacity: .45; } .ahc061-exp003-chart text { fill: var(--foreground); font-size: 12px; }
+    @media (max-width: 420px) { .ahc061-exp003-chart .legend { margin-left: 0; } }
+  </style>
+  <div class="title">AHC061 Modula: learning rate vs. final mean_score</div><div class="legend"></div><svg viewBox="0 0 860 430" role="img"></svg>
+  <script>
+  (() => {
+    const root=document.currentScript.parentElement, svg=root.querySelector('svg'), data=[{"channels":64,"lr":0.3,"mean_score":170737.8984375},{"channels":64,"lr":0.4,"mean_score":172714.09765625},{"channels":64,"lr":0.5333,"mean_score":175897.57421875},{"channels":64,"lr":0.7111,"mean_score":171694.3271484375},{"channels":128,"lr":0.3,"mean_score":177025.6044921875},{"channels":128,"lr":0.4,"mean_score":178979.1181640625},{"channels":128,"lr":0.5333,"mean_score":176833.619140625},{"channels":128,"lr":0.7111,"mean_score":175554.603515625},{"channels":256,"lr":0.3,"mean_score":179474.4755859375},{"channels":256,"lr":0.4,"mean_score":181501.443359375},{"channels":256,"lr":0.5333,"mean_score":176656.2265625},{"channels":256,"lr":0.7111,"mean_score":176350.2138671875}];
+    const colors={64:'var(--viz-series-1)',128:'var(--viz-series-2)',256:'var(--viz-series-3)'}, dashes=['','7,3','2,3','10,3,2,3'];
+    const mode='lr', margin={l:76,r:24,t:20,b:62}, W=860,H=430;
+    const series=mode==='lr'
+      ? [64,128,256].map(ch=>({key:`ch${ch}`,ch,color:colors[ch],points:data.filter(r=>r.channels===ch)}))
+      : [...new Map(data.map(p=>[`${p.channels}-${p.lr}`,p])).values()].map(seed=>({key:`ch${seed.channels} · lr=${seed.lr}`,ch:seed.channels,lr:seed.lr,color:colors[seed.channels],points:data.filter(p=>p.channels===seed.channels&&p.lr===seed.lr)}));
+    const active=new Set(series.map(s=>s.key)); const ns='http://www.w3.org/2000/svg';
+    const add=(tag,attrs,text)=>{const e=document.createElementNS(ns,tag);Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,v));if(text)e.textContent=text;svg.append(e);return e;};
+    const legend=root.querySelector('.legend'); series.forEach(s=>{const b=document.createElement('button');b.setAttribute('aria-pressed','true');b.innerHTML=`<span class="swatch" style="background:${s.color}"></span>${mode==='lr'?'channels '+s.ch:s.key}`;b.onclick=()=>{active.has(s.key)?active.delete(s.key):active.add(s.key);b.setAttribute('aria-pressed',active.has(s.key));draw();};legend.append(b);});
+    const xval=p=>mode==='lr'?p.lr:p.env_steps*({64:193e6,128:661.9e6,256:2.428e9}[p.channels]);
+    const fmtX=x=>mode==='lr'?x.toPrecision(3):(x/1e15).toFixed(x<1e16?1:0)+'e15';
+    function draw() {
+      svg.replaceChildren(); const points=series.flatMap(s=>s.points); const xs=points.map(xval),ys=points.map(p=>p.mean_score);
+      const xmin=Math.min(...xs),xmax=Math.max(...xs),ymin=Math.min(...ys),ymax=Math.max(...ys);
+      const lx=v=>Math.log(v), sx=v=>margin.l+(lx(v)-lx(xmin*.88))/(lx(xmax*1.14)-lx(xmin*.88))*(W-margin.l-margin.r);
+      const sy=v=>H-margin.b-(v-(ymin-(ymax-ymin)*.08))/((ymax-ymin)*1.16)*(H-margin.t-margin.b);
+      for(let i=0;i<5;i++){const y=ymin+(ymax-ymin)*i/4, py=sy(y);add('line',{x1:margin.l,y1:py,x2:W-margin.r,y2:py,class:'grid'});add('text',{x:margin.l-8,y:py+4,'text-anchor':'end'},Math.round(y/1000)+'k');}
+      add('line',{x1:margin.l,y1:margin.t,x2:margin.l,y2:H-margin.b,class:'axis'});add('line',{x1:margin.l,y1:H-margin.b,x2:W-margin.r,y2:H-margin.b,class:'axis'});
+      for(let i=0;i<5;i++){const x=Math.exp(lx(xmin*.88)+(lx(xmax*1.14)-lx(xmin*.88))*i/4),px=sx(x);add('line',{x1:px,y1:H-margin.b,x2:px,y2:H-margin.b+5,class:'axis'});add('text',{x:px,y:H-margin.b+21,'text-anchor':'middle'},fmtX(x));}
+      series.forEach(s=>{if(!active.has(s.key))return;const pts=s.points.map(p=>`${sx(xval(p))},${sy(p.mean_score)}`).join(' ');add('polyline',{points:pts,fill:'none',stroke:s.color,'stroke-width':2.5,'stroke-dasharray':s.lr?dashes[[0.3,0.4,0.5333,0.7111].indexOf(s.lr)]:''});s.points.forEach(p=>{add('circle',{cx:sx(xval(p)),cy:sy(p.mean_score),r:mode==='lr'?4.5:1.7,fill:s.color});});});
+      add('text',{x:(margin.l+W-margin.r)/2,y:H-12,'text-anchor':'middle'},'Learning rate (log scale)');
+      add('text',{x:18,y:(margin.t+H-margin.b)/2,transform:`rotate(-90 18 ${(margin.t+H-margin.b)/2})`,'text-anchor':'middle'},'Mean score');
+    } draw();
+  })();
+  </script>
+</div>
