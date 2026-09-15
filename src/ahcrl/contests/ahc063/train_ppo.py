@@ -20,6 +20,8 @@ from ahcrl.training import (
     FP32MasterWeights,
     HybridModularOptimizer,
     OptimizerLike,
+    RolloutBuffer,
+    RolloutFieldSpec,
     TrainingProgress,
     WandbConfig,
     append_evaluation_record,
@@ -436,15 +438,28 @@ def collect_rollout(
     reward_scaler: RunningRewardScaler | None,
     *,
     update_observation_normalizer: bool = True,
+    rollout_buffer: RolloutBuffer | None = None,
 ) -> tuple[dict[str, torch.Tensor], dict[str, np.ndarray], dict[str, float]]:
-    observations: list[torch.Tensor] = []
-    actions: list[torch.Tensor] = []
-    logprobs: list[torch.Tensor] = []
-    rewards: list[torch.Tensor] = []
-    dones: list[torch.Tensor] = []
-    scores: list[torch.Tensor] = []
-    values: list[torch.Tensor] = []
-    masks: list[torch.Tensor] = []
+    if rollout_buffer is None:
+        model_device = device if device.type == "cuda" else torch.device("cpu")
+        model_dtype = MODEL_DTYPE if device.type == "cuda" else torch.float32
+        rollout_buffer = RolloutBuffer(
+            args.rollout_steps,
+            args.num_envs,
+            {
+                "obs": RolloutFieldSpec(tuple(obs["planes"].shape[1:]), model_dtype, model_device),
+                "actions": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
+                "logprobs": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+                "rewards": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+                "dones": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+                "scores": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
+                "values": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+                "masks": RolloutFieldSpec(
+                    tuple(obs["mask"].shape[1:]), torch.bool, torch.device("cpu")
+                ),
+            },
+        )
+    rollout_buffer.reset()
     forward_seconds = 0.0
     env_step_seconds = 0.0
     for step in range(args.rollout_steps):
@@ -480,14 +495,17 @@ def collect_rollout(
         env_step_started = time.perf_counter()
         result = env.step(action.cpu().numpy())
         env_step_seconds += time.perf_counter() - env_step_started
-        observations.append(encoded.cpu())
-        actions.append(action.cpu())
-        logprobs.append(logprob.cpu())
-        rewards.append(torch.from_numpy(result.reward.copy()))
-        dones.append(torch.from_numpy(result.done.astype(np.float32)))
-        scores.append(torch.from_numpy(result.score.copy()))
-        values.append(value.float().cpu())
-        masks.append(mask.cpu())
+        rollout_buffer.store(
+            step,
+            obs=encoded,
+            actions=action.cpu(),
+            logprobs=logprob.float().cpu(),
+            rewards=torch.from_numpy(result.reward.copy()),
+            dones=torch.from_numpy(result.done.astype(np.float32)),
+            scores=torch.from_numpy(result.score.copy()),
+            values=value.float().cpu(),
+            masks=mask.cpu(),
+        )
         obs = result.obs
         if result.done.any():
             obs = env.reset_done(
@@ -507,10 +525,11 @@ def collect_rollout(
         next_value = _model_forward(model, next_encoded)[1].float().cpu()
     _synchronize_device(device)
     forward_seconds += time.perf_counter() - forward_started
-    raw_rewards = torch.stack(rewards)
+    stored = rollout_buffer.as_dict()
+    raw_rewards = stored["rewards"]
     scaled_rewards = reward_scaler.scale(raw_rewards) if reward_scaler is not None else raw_rewards
-    stacked_dones = torch.stack(dones)
-    stacked_values = torch.stack(values)
+    stacked_dones = stored["dones"]
+    stacked_values = stored["values"]
     advantages = torch.zeros_like(scaled_rewards)
     last_gae = torch.zeros(args.num_envs)
     for step in reversed(range(args.rollout_steps)):
@@ -523,17 +542,13 @@ def collect_rollout(
         advantages[step] = last_gae
     return (
         {
-            "obs": torch.stack(observations),
-            "actions": torch.stack(actions),
-            "logprobs": torch.stack(logprobs),
+            **stored,
             "rewards": raw_rewards,
             "scaled_rewards": scaled_rewards,
             "dones": stacked_dones,
-            "scores": torch.stack(scores),
             "values": stacked_values,
             "advantages": advantages,
             "returns": advantages + stacked_values,
-            "masks": torch.stack(masks),
         },
         obs,
         {"forward_seconds": forward_seconds, "env_step_seconds": env_step_seconds},
@@ -904,6 +919,26 @@ def main() -> None:
             torch.compile(proximal_ewma.model) if args.compile else proximal_ewma.model,
         )
     obs = env.obs
+    rollout_buffer = RolloutBuffer(
+        args.rollout_steps,
+        args.num_envs,
+        {
+            "obs": RolloutFieldSpec(
+                tuple(obs["planes"].shape[1:]),
+                MODEL_DTYPE if device.type == "cuda" else torch.float32,
+                device if device.type == "cuda" else torch.device("cpu"),
+            ),
+            "actions": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
+            "logprobs": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+            "rewards": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+            "dones": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+            "scores": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
+            "values": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+            "masks": RolloutFieldSpec(
+                tuple(obs["mask"].shape[1:]), torch.bool, torch.device("cpu")
+            ),
+        },
+    )
     started = time.time()
     timing_totals = {
         "forward_seconds": 0.0,
@@ -941,6 +976,7 @@ def main() -> None:
                 device,
                 scaler,
                 update_observation_normalizer=policy_warmup.policy_updates_enabled,
+                rollout_buffer=rollout_buffer,
             )
             policy_warmup.observe(rollout["values"], rollout["returns"])
             training_epochs = policy_warmup.training_epochs(

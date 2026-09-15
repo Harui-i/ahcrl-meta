@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import io
 import json
+import mmap
+import os
 import subprocess
+import tempfile
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -11,7 +14,7 @@ from typing import Any, cast
 
 import numpy as np
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 _DTYPES: dict[str, np.dtype] = {
     "f16": np.dtype("<f2"),
     "f32": np.dtype("<f4"),
@@ -86,7 +89,9 @@ class RustVecEnv:
             raise ValueError("command must not be empty")
         self.num_envs = num_envs
         self._closed = False
-        self._buffer = bytearray()
+        self._buffer: mmap.mmap | None = None
+        self._shared_path: str | None = None
+        self._expected_generation = 0
         self.last_timings: dict[str, float] = {}
         self._proc = subprocess.Popen(
             list(command),
@@ -100,10 +105,11 @@ class RustVecEnv:
         try:
             self.observation_specs, self.metric_specs = self._initialize(config or {}, workers)
             self._batch_size = self._expected_batch_size()
-            self._buffer = bytearray(self._batch_size)
+            self._bind_shared_memory()
             self.obs = self.reset(seed_start, seed_stride)
         except BaseException:
             self._terminate()
+            self._cleanup_shared_memory()
             raise
 
     def reset(self, seed_start: int = 0, seed_stride: int = 1) -> dict[str, np.ndarray]:
@@ -238,6 +244,7 @@ class RustVecEnv:
             self._terminate()
             raise
         finally:
+            self._cleanup_shared_memory()
             self._closed = True
 
     def __enter__(self) -> RustVecEnv:
@@ -284,6 +291,42 @@ class RustVecEnv:
             raise RuntimeError("schema must contain at least one observation")
         return observations, metrics
 
+    def _bind_shared_memory(self) -> None:
+        if not os.path.isdir("/dev/shm"):
+            raise RuntimeError("/dev/shm is unavailable; shared-memory RustVecEnv is required")
+        path: str | None = None
+        mapping: mmap.mmap | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w+b", prefix="ahcrl-", dir="/dev/shm", delete=False
+            ) as file:
+                path = file.name
+                file.truncate(self._batch_size)
+                mapping = mmap.mmap(file.fileno(), self._batch_size, access=mmap.ACCESS_WRITE)
+            path_bytes = os.fsencode(path)
+            self._send_line(
+                f"BIND_SHM {len(path_bytes)} {self._batch_size}",
+                path_bytes + b"\n",
+            )
+            response = self._readline()
+            self._raise_if_error(response)
+            if response != "OK_SHM":
+                raise RuntimeError(f"unexpected BIND_SHM response: {response!r}")
+            os.unlink(path)
+            self._shared_path = None
+            self._buffer = mapping
+            mapping = None
+            self._expected_generation = 0
+        except BaseException:
+            if mapping is not None:
+                mapping.close()
+            if path is not None:
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+            raise
+
     def _parse_specs(self, value: Any, field: str) -> list[TensorSpec]:
         if not isinstance(value, list):
             raise RuntimeError(f"schema field {field!r} must be a list")
@@ -322,11 +365,15 @@ class RustVecEnv:
         if len(parts) not in {2, 7} or parts[0] != "OK_BATCH":
             raise RuntimeError(f"unexpected batch response: {header!r}")
         try:
-            length = int(parts[1])
+            generation = int(parts[1])
         except ValueError as error:
-            raise RuntimeError(f"invalid batch length in {header!r}") from error
-        if length != self._batch_size:
-            raise RuntimeError(f"batch has {length} bytes, expected {self._batch_size}")
+            raise RuntimeError(f"invalid batch generation in {header!r}") from error
+        if generation != self._expected_generation + 1:
+            raise RuntimeError(
+                f"batch generation {generation} is not the next generation "
+                f"after {self._expected_generation}"
+            )
+        self._expected_generation = generation
         timings = {
             "client_header_wait_seconds": header_wait_seconds,
             "rust_input_seconds": 0.0,
@@ -352,11 +399,7 @@ class RustVecEnv:
                 )
             except ValueError as error:
                 raise RuntimeError(f"invalid batch timing in {header!r}") from error
-        payload_started = time.perf_counter()
-        self._read_exact_into(memoryview(self._buffer))
-        if self._read_exact(5) != b"\nEND\n":
-            raise RuntimeError("batch was not terminated by END")
-        timings["client_payload_read_seconds"] = time.perf_counter() - payload_started
+        timings["client_payload_read_seconds"] = 0.0
 
         decode_started = time.perf_counter()
         offset = 0
@@ -383,6 +426,8 @@ class RustVecEnv:
         return StepResult(observations, reward, done, score, metrics, timings)
 
     def _array_from_buffer(self, spec: TensorSpec, offset: int) -> tuple[np.ndarray, int]:
+        if self._buffer is None:
+            raise RuntimeError("shared memory is not bound")
         count = spec.elements_per_env * self.num_envs
         array = np.frombuffer(self._buffer, dtype=spec.dtype, count=count, offset=offset)
         array = array.reshape(self.num_envs, *spec.shape)
@@ -454,6 +499,24 @@ class RustVecEnv:
             except subprocess.TimeoutExpired:
                 self._proc.kill()
                 self._proc.wait(timeout=5)
+
+    def _cleanup_shared_memory(self) -> None:
+        path = self._shared_path
+        self._shared_path = None
+        if path is not None:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        mapping = self._buffer
+        self._buffer = None
+        if mapping is not None:
+            try:
+                mapping.close()
+            except BufferError:
+                # Existing observation views keep the mapping alive.  The file
+                # has already been unlinked, so its eventual GC is sufficient.
+                pass
 
     @staticmethod
     def _validate_seed(value: int, name: str) -> None:

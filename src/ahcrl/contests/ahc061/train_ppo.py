@@ -16,6 +16,8 @@ from ahcrl.training import (
     FP32MasterWeights,
     HybridModularOptimizer,
     OptimizerLike,
+    RolloutBuffer,
+    RolloutFieldSpec,
     TrainingProgress,
     WandbConfig,
     build_optimizer,
@@ -182,6 +184,32 @@ def _accumulate_timing(
         target[f"{prefix}{key}"] = target.get(f"{prefix}{key}", 0.0) + value
 
 
+def _make_rollout_buffer(
+    args: argparse.Namespace, device: torch.device, obs: dict[str, np.ndarray]
+) -> RolloutBuffer:
+    model_device = device if device.type == "cuda" else torch.device("cpu")
+    model_dtype = MODEL_DTYPE if device.type == "cuda" else torch.float32
+    return RolloutBuffer(
+        args.rollout_steps,
+        args.num_envs,
+        {
+            "obs": RolloutFieldSpec(tuple(obs["planes"].shape[1:]), model_dtype, model_device),
+            "critic_features": RolloutFieldSpec(
+                tuple(obs["critic_oracle"].shape[1:]), model_dtype, model_device
+            ),
+            "actions": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
+            "logprobs": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+            "rewards": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+            "dones": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+            "scores": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
+            "values": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
+            "masks": RolloutFieldSpec(
+                tuple(obs["mask"].shape[1:]), torch.bool, torch.device("cpu")
+            ),
+        },
+    )
+
+
 def collect_rollout(
     model: nn.Module,
     env: RustVecEnv,
@@ -190,21 +218,16 @@ def collect_rollout(
     args: argparse.Namespace,
     device: torch.device,
     reward_scaler: RunningRewardScaler | None,
+    rollout_buffer: RolloutBuffer | None = None,
 ) -> tuple[dict[str, torch.Tensor], dict[str, np.ndarray], int, dict[str, float]]:
     collect_started = time.perf_counter()
-    observations: list[torch.Tensor] = []
-    critic_features: list[torch.Tensor] = []
-    actions: list[torch.Tensor] = []
-    logprobs: list[torch.Tensor] = []
-    rewards: list[torch.Tensor] = []
-    dones: list[torch.Tensor] = []
-    scores: list[torch.Tensor] = []
-    values: list[torch.Tensor] = []
-    masks: list[torch.Tensor] = []
+    if rollout_buffer is None:
+        rollout_buffer = _make_rollout_buffer(args, device, obs)
+    rollout_buffer.reset()
     forward_seconds = 0.0
     env_step_seconds = 0.0
     detailed: dict[str, float] = {}
-    for _ in range(args.rollout_steps):
+    for step in range(args.rollout_steps):
         started = time.perf_counter()
         encoded = _to_model_tensor(obs["planes"], device)
         normalizer = _observation_normalizer(model)
@@ -251,15 +274,18 @@ def collect_rollout(
             "env_header_residual_seconds", 0.0
         ) + max(result.timings.get("client_header_wait_seconds", 0.0) - rust_until_header, 0.0)
         started = time.perf_counter()
-        observations.append(encoded.cpu())
-        critic_features.append(oracle.cpu())
-        actions.append(action.cpu())
-        logprobs.append(logprob.cpu())
-        rewards.append(torch.from_numpy(result.reward.copy()))
-        dones.append(torch.from_numpy(result.done.astype(np.float32)))
-        scores.append(torch.from_numpy(result.score.copy()))
-        values.append(value.float().cpu())
-        masks.append(mask.cpu())
+        rollout_buffer.store(
+            step,
+            obs=encoded,
+            critic_features=oracle,
+            actions=action.cpu(),
+            logprobs=logprob.float().cpu(),
+            rewards=torch.from_numpy(result.reward.copy()),
+            dones=torch.from_numpy(result.done.astype(np.float32)),
+            scores=torch.from_numpy(result.score.copy()),
+            values=value.float().cpu(),
+            masks=mask.cpu(),
+        )
         _synchronize_device(device)
         detailed["rollout_store_d2h_seconds"] = detailed.get("rollout_store_d2h_seconds", 0.0) + (
             time.perf_counter() - started
@@ -288,16 +314,11 @@ def collect_rollout(
     _synchronize_device(device)
     detailed["rollout_bootstrap_forward_seconds"] = time.perf_counter() - bootstrap_forward_started
     finalize_started = time.perf_counter()
-    stacked_observations = torch.stack(observations)
-    stacked_critic_features = torch.stack(critic_features)
-    stacked_actions = torch.stack(actions)
-    stacked_logprobs = torch.stack(logprobs)
-    raw_rewards = torch.stack(rewards)
+    stored = rollout_buffer.as_dict()
+    raw_rewards = stored["rewards"]
     scaled_rewards = reward_scaler.scale(raw_rewards) if reward_scaler is not None else raw_rewards
-    stacked_dones = torch.stack(dones)
-    stacked_scores = torch.stack(scores)
-    stacked_values = torch.stack(values)
-    stacked_masks = torch.stack(masks)
+    stacked_dones = stored["dones"]
+    stacked_values = stored["values"]
     advantages = torch.zeros_like(scaled_rewards)
     last_gae = torch.zeros(args.num_envs)
     for step in reversed(range(args.rollout_steps)):
@@ -327,18 +348,13 @@ def collect_rollout(
     )
     return (
         {
-            "obs": stacked_observations,
-            "critic_features": stacked_critic_features,
-            "actions": stacked_actions,
-            "logprobs": stacked_logprobs,
+            **stored,
             "rewards": raw_rewards,
             "scaled_rewards": scaled_rewards,
             "dones": stacked_dones,
-            "scores": stacked_scores,
             "values": stacked_values,
             "advantages": advantages,
             "returns": advantages + stacked_values,
-            "masks": stacked_masks,
         },
         obs,
         next_seed_start,
@@ -616,6 +632,7 @@ def main() -> None:
     )
     model: nn.Module = cast(nn.Module, torch.compile(raw_model) if args.compile else raw_model)
     obs = env.obs
+    rollout_buffer = _make_rollout_buffer(args, device, obs)
     started = time.time()
     timing_totals: dict[str, float] = {"checkpoint_seconds": 0.0}
     wandb_run = None
@@ -641,7 +658,7 @@ def main() -> None:
         )
         while global_step < args.total_steps:
             rollout, obs, next_seed_start, rollout_timing = collect_rollout(
-                model, env, obs, next_seed_start, args, device, scaler
+                model, env, obs, next_seed_start, args, device, scaler, rollout_buffer
             )
             stats = update_model(model, raw_model, optimizer, rollout, args, device, master_weights)
             _accumulate_timing(timing_totals, rollout_timing)
@@ -714,7 +731,7 @@ def main() -> None:
                 f"rust_step={timing_totals.get('env_rust_step_seconds', 0.0):.3f} "
                 f"rust_prepare={timing_totals.get('env_rust_prepare_seconds', 0.0):.3f} "
                 f"rust_encode={timing_totals.get('env_rust_encode_seconds', 0.0):.3f} "
-                f"pipe_read={timing_totals.get('env_client_payload_read_seconds', 0.0):.3f} "
+                f"shared_batch_wait={timing_totals.get('env_client_header_wait_seconds', 0.0):.3f} "
                 f"h2d_norm={timing_totals.get('rollout_input_h2d_normalize_seconds', 0.0):.3f} "
                 f"rollout_store={timing_totals.get('rollout_store_d2h_seconds', 0.0):.3f} "
                 f"stack_gae={timing_totals.get('rollout_stack_gae_seconds', 0.0):.3f} "

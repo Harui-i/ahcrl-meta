@@ -26,6 +26,7 @@ from .optimizer import (
     optimizer_metrics,
 )
 from .policy_warmup import ExplainedVariancePolicyWarmup, calculate_explained_variance
+from .rollout import RolloutBuffer, RolloutFieldSpec
 from .run import get_wandb_run_id, prepare_run_dir, update_run_state, write_config
 from .wandb import WandbConfig, finish_wandb, init_wandb
 
@@ -57,6 +58,8 @@ __all__ = [
     "optimizer_metrics",
     "prepare_run_dir",
     "resolve_config",
+    "RolloutBuffer",
+    "RolloutFieldSpec",
     "save_training_checkpoint",
     "update_run_state",
     "write_config",

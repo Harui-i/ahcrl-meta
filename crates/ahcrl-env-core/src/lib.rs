@@ -1,13 +1,16 @@
 use std::collections::HashSet;
+use std::fs::OpenOptions;
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
+use memmap2::{MmapMut, MmapOptions};
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -157,6 +160,18 @@ pub struct VecEnvServer<F: EnvFactory> {
     envs: Vec<F::Env>,
     outcomes: Vec<StepOutcome>,
     pool: ThreadPool,
+    batch_size: usize,
+    batch_buffer: Vec<u8>,
+    layouts: Vec<TensorLayout>,
+    outcome_offset: usize,
+}
+
+#[derive(Clone)]
+struct TensorLayout {
+    tensor: TensorSpec,
+    metric: bool,
+    offset: usize,
+    bytes_per_env: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -183,7 +198,32 @@ impl<F: EnvFactory> VecEnvServer<F> {
         }
         let spec = factory.spec();
         spec.validate()?;
-        spec.batch_bytes(num_envs)?;
+        let batch_size = spec.batch_bytes(num_envs)?;
+        let mut layouts = Vec::with_capacity(spec.observations.len() + spec.metrics.len());
+        let mut offset = 0;
+        for tensor in &spec.observations {
+            let bytes_per_env = tensor.bytes_per_env()?;
+            layouts.push(TensorLayout {
+                tensor: tensor.clone(),
+                metric: false,
+                offset,
+                bytes_per_env,
+            });
+            offset += bytes_per_env * num_envs;
+        }
+        let outcome_offset = offset;
+        offset += num_envs * (std::mem::size_of::<f32>() + 1 + std::mem::size_of::<i64>());
+        for tensor in &spec.metrics {
+            let bytes_per_env = tensor.bytes_per_env()?;
+            layouts.push(TensorLayout {
+                tensor: tensor.clone(),
+                metric: true,
+                offset,
+                bytes_per_env,
+            });
+            offset += bytes_per_env * num_envs;
+        }
+        debug_assert_eq!(offset, batch_size);
         let workers = worker_count(workers, num_envs);
         let pool = ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -196,6 +236,10 @@ impl<F: EnvFactory> VecEnvServer<F> {
             envs: Vec::new(),
             outcomes: Vec::new(),
             pool,
+            batch_size,
+            batch_buffer: vec![0; batch_size],
+            layouts,
+            outcome_offset,
         })
     }
 
@@ -392,33 +436,46 @@ impl<F: EnvFactory> VecEnvServer<F> {
             .collect()
     }
 
-    pub fn encode_batch(&mut self) -> Result<Vec<u8>, String> {
-        self.encode_batch_timed().map(|(batch, _timing)| batch)
+    /// Encode into the server-owned fixed buffer and return its stable view.
+    pub fn encode_batch(&mut self) -> Result<&[u8], String> {
+        let mut output = std::mem::take(&mut self.batch_buffer);
+        let result = self.encode_batch_into(&mut output);
+        self.batch_buffer = output;
+        result.map(|()| self.batch_buffer.as_slice())
     }
 
-    fn encode_batch_timed(&mut self) -> Result<(Vec<u8>, EncodeTiming), String> {
+    /// Encode one batch into an exact-size caller-provided destination.
+    pub fn encode_batch_into(&mut self, destination: &mut [u8]) -> Result<(), String> {
+        self.require_initialized()?;
+        if destination.len() != self.batch_size {
+            return Err(format!(
+                "batch destination has {} bytes, expected {}",
+                destination.len(),
+                self.batch_size
+            ));
+        }
+        self.encode_batch_into_timed(destination).map(|_| ())
+    }
+
+    fn encode_batch_into_timed(&mut self, destination: &mut [u8]) -> Result<EncodeTiming, String> {
         self.require_initialized()?;
         let prepare_started = Instant::now();
         self.prepare_observations()?;
         let prepare = prepare_started.elapsed();
         let encode_started = Instant::now();
-        let capacity = self.spec.batch_bytes(self.num_envs)?;
-        let mut output = Vec::with_capacity(capacity);
-        for tensor in self.spec.observations.clone() {
-            self.encode_tensor(&tensor, false, &mut output)?;
+        let result = self.encode_batch_into_prepared(destination);
+        result.map(|()| EncodeTiming {
+            prepare,
+            encode: encode_started.elapsed(),
+        })
+    }
+
+    fn encode_batch_into_prepared(&mut self, destination: &mut [u8]) -> Result<(), String> {
+        for index in 0..self.layouts.len() {
+            self.encode_layout(index, destination)?;
         }
-        self.encode_outcomes(&mut output);
-        for tensor in self.spec.metrics.clone() {
-            self.encode_tensor(&tensor, true, &mut output)?;
-        }
-        debug_assert_eq!(output.len(), capacity);
-        Ok((
-            output,
-            EncodeTiming {
-                prepare,
-                encode: encode_started.elapsed(),
-            },
-        ))
+        self.encode_outcomes(destination);
+        Ok(())
     }
 
     fn prepare_observations(&mut self) -> Result<(), String> {
@@ -436,28 +493,31 @@ impl<F: EnvFactory> VecEnvServer<F> {
         collect_ordered(results).map(|_| ())
     }
 
-    fn encode_tensor(
-        &mut self,
-        tensor: &TensorSpec,
-        metric: bool,
-        output: &mut Vec<u8>,
-    ) -> Result<(), String> {
-        let bytes_per_env = tensor.bytes_per_env()?;
-        let start = output.len();
-        output.resize(start + bytes_per_env * self.num_envs, 0);
+    fn encode_layout(&mut self, index: usize, output: &mut [u8]) -> Result<(), String> {
+        let layout = &self.layouts[index];
+        let bytes_per_env = layout.bytes_per_env;
+        let offset = layout.offset;
+        let size = bytes_per_env * self.num_envs;
+        let end = offset + size;
+        let destination = output
+            .get_mut(offset..end)
+            .ok_or_else(|| "batch destination is too small".to_owned())?;
         let results = self.pool.install(|| {
             self.envs
                 .par_iter_mut()
-                .zip(output[start..].par_chunks_mut(bytes_per_env))
+                .zip(destination.par_chunks_mut(bytes_per_env))
                 .enumerate()
                 .map(|(env_id, (env, destination))| {
-                    let result = if metric {
-                        env.write_metric(&tensor.name, destination)
+                    let result = if layout.metric {
+                        env.write_metric(&layout.tensor.name, destination)
                     } else {
-                        env.write_observation(&tensor.name, destination)
+                        env.write_observation(&layout.tensor.name, destination)
                     };
                     result.map_err(|error| {
-                        format!("failed to encode {} for env {env_id}: {error}", tensor.name)
+                        format!(
+                            "failed to encode {} for env {env_id}: {error}",
+                            layout.tensor.name
+                        )
                     })
                 })
                 .collect::<Vec<_>>()
@@ -465,30 +525,33 @@ impl<F: EnvFactory> VecEnvServer<F> {
         collect_ordered(results).map(|_| ())
     }
 
-    fn encode_outcomes(&self, output: &mut Vec<u8>) {
-        let reward_start = output.len();
-        output.resize(reward_start + self.num_envs * std::mem::size_of::<f32>(), 0);
+    fn encode_outcomes(&self, output: &mut [u8]) {
+        let reward_start = self.outcome_offset;
+        let reward_end = reward_start + self.num_envs * std::mem::size_of::<f32>();
+        let reward_output = &mut output[reward_start..reward_end];
         let outcomes = &self.outcomes;
         self.pool.install(|| {
-            output[reward_start..]
+            reward_output
                 .par_chunks_mut(std::mem::size_of::<f32>())
                 .zip(outcomes.par_iter())
                 .for_each(|(destination, outcome)| {
                     destination.copy_from_slice(&outcome.reward.to_le_bytes())
                 });
         });
-        let done_start = output.len();
-        output.resize(done_start + self.num_envs, 0);
+        let done_start = reward_end;
+        let done_end = done_start + self.num_envs;
+        let done_output = &mut output[done_start..done_end];
         self.pool.install(|| {
-            output[done_start..]
+            done_output
                 .par_iter_mut()
                 .zip(outcomes.par_iter())
                 .for_each(|(destination, outcome)| *destination = u8::from(outcome.done));
         });
-        let score_start = output.len();
-        output.resize(score_start + self.num_envs * std::mem::size_of::<i64>(), 0);
+        let score_start = done_end;
+        let score_end = score_start + self.num_envs * std::mem::size_of::<i64>();
+        let score_output = &mut output[score_start..score_end];
         self.pool.install(|| {
-            output[score_start..]
+            score_output
                 .par_chunks_mut(std::mem::size_of::<i64>())
                 .zip(outcomes.par_iter())
                 .for_each(|(destination, outcome)| {
@@ -559,6 +622,8 @@ where
     W: Write,
 {
     let mut server: Option<VecEnvServer<F>> = None;
+    let mut shared_batch: Option<MmapMut> = None;
+    let mut generation = 0_u64;
     loop {
         let mut line = String::new();
         let read = reader
@@ -637,6 +702,96 @@ where
                     .flush()
                     .map_err(|error| format!("failed to flush schema: {error}"))?;
                 server = Some(new_server);
+                shared_batch = None;
+                generation = 0;
+            }
+            "BIND_SHM" => {
+                let Some((path_length, size)) = parse_two_usize(parts) else {
+                    send_error(
+                        &mut writer,
+                        "BIND_SHM requires path byte length and exact size",
+                    )?;
+                    continue;
+                };
+                let Some(server) = server.as_ref() else {
+                    send_error(&mut writer, "INIT must be sent first")?;
+                    continue;
+                };
+                if size != server.batch_size {
+                    send_error(
+                        &mut writer,
+                        &format!(
+                            "shared memory size {size} does not match {}",
+                            server.batch_size
+                        ),
+                    )?;
+                    continue;
+                }
+                let mut path_bytes = vec![0_u8; path_length];
+                reader
+                    .read_exact(&mut path_bytes)
+                    .map_err(|error| format!("failed to read BIND_SHM path: {error}"))?;
+                let mut terminator = [0_u8; 1];
+                reader
+                    .read_exact(&mut terminator)
+                    .map_err(|error| format!("failed to read BIND_SHM terminator: {error}"))?;
+                if terminator[0] != b'\n' {
+                    send_error(&mut writer, "BIND_SHM path must be newline terminated")?;
+                    continue;
+                }
+                let path = match String::from_utf8(path_bytes) {
+                    Ok(path) if !path.is_empty() => path,
+                    _ => {
+                        send_error(&mut writer, "BIND_SHM path must be valid UTF-8")?;
+                        continue;
+                    }
+                };
+                if Path::new(&path).parent() != Some(Path::new("/dev/shm")) {
+                    send_error(&mut writer, "BIND_SHM path must be directly under /dev/shm")?;
+                    continue;
+                }
+                let file = match OpenOptions::new().read(true).write(true).open(&path) {
+                    Ok(file) => file,
+                    Err(error) => {
+                        send_error(
+                            &mut writer,
+                            &format!("failed to open shared memory path: {error}"),
+                        )?;
+                        continue;
+                    }
+                };
+                let metadata = match file.metadata() {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        send_error(
+                            &mut writer,
+                            &format!("failed to stat shared memory path: {error}"),
+                        )?;
+                        continue;
+                    }
+                };
+                if metadata.len() != size as u64 {
+                    send_error(
+                        &mut writer,
+                        &format!(
+                            "shared memory file has {} bytes, expected {size}",
+                            metadata.len()
+                        ),
+                    )?;
+                    continue;
+                }
+                let mapping = unsafe {
+                    MmapOptions::new()
+                        .len(size)
+                        .map_mut(&file)
+                        .map_err(|error| format!("failed to mmap shared memory path: {error}"))?
+                };
+                shared_batch = Some(mapping);
+                generation = 0;
+                writer
+                    .write_all(b"OK_SHM\n")
+                    .and_then(|()| writer.flush())
+                    .map_err(|error| format!("failed to write shared memory ACK: {error}"))?;
             }
             "RESET_ALL" => {
                 let Some((seed_start, seed_stride)) = parse_two_u64(parts) else {
@@ -647,6 +802,10 @@ where
                     send_error(&mut writer, "INIT must be sent first")?;
                     continue;
                 };
+                let Some(shared_batch) = shared_batch.as_mut() else {
+                    send_error(&mut writer, "BIND_SHM must be completed before RESET_ALL")?;
+                    continue;
+                };
                 let step_started = Instant::now();
                 if let Err(error) = server.reset_all(seed_start, seed_stride) {
                     send_error(&mut writer, &error)?;
@@ -654,6 +813,8 @@ where
                 }
                 write_batch(
                     server,
+                    shared_batch,
+                    &mut generation,
                     &mut writer,
                     BatchTiming {
                         step: step_started.elapsed(),
@@ -673,6 +834,10 @@ where
                     send_error(&mut writer, "INIT must be sent first")?;
                     continue;
                 };
+                let Some(shared_batch) = shared_batch.as_mut() else {
+                    send_error(&mut writer, "BIND_SHM must be completed before RESET_MASK")?;
+                    continue;
+                };
                 let input_started = Instant::now();
                 let mut mask = vec![0_u8; server.num_envs];
                 reader
@@ -686,6 +851,8 @@ where
                 }
                 write_batch(
                     server,
+                    shared_batch,
+                    &mut generation,
                     &mut writer,
                     BatchTiming {
                         input,
@@ -701,6 +868,10 @@ where
                 }
                 let Some(server) = server.as_mut() else {
                     send_error(&mut writer, "INIT must be sent first")?;
+                    continue;
+                };
+                let Some(shared_batch) = shared_batch.as_mut() else {
+                    send_error(&mut writer, "BIND_SHM must be completed before STEP")?;
                     continue;
                 };
                 let input_started = Instant::now();
@@ -725,6 +896,8 @@ where
                 server.step_validated(&actions)?;
                 write_batch(
                     server,
+                    shared_batch,
+                    &mut generation,
                     &mut writer,
                     BatchTiming {
                         input,
@@ -740,6 +913,10 @@ where
                 }
                 let Some(server) = server.as_mut() else {
                     send_error(&mut writer, "INIT must be sent first")?;
+                    continue;
+                };
+                let Some(shared_batch) = shared_batch.as_mut() else {
+                    send_error(&mut writer, "BIND_SHM must be completed before STEP_MASK")?;
                     continue;
                 };
                 let input_started = Instant::now();
@@ -765,6 +942,8 @@ where
                 }
                 write_batch(
                     server,
+                    shared_batch,
+                    &mut generation,
                     &mut writer,
                     BatchTiming {
                         input,
@@ -827,6 +1006,15 @@ fn parse_single_usize<'a>(mut parts: impl Iterator<Item = &'a str>) -> Option<us
     Some(value)
 }
 
+fn parse_two_usize<'a>(mut parts: impl Iterator<Item = &'a str>) -> Option<(usize, usize)> {
+    let first = parts.next()?.parse().ok()?;
+    let second = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((first, second))
+}
+
 fn parse_two_u64<'a>(mut parts: impl Iterator<Item = &'a str>) -> Option<(u64, u64)> {
     let first = parts.next()?.parse().ok()?;
     let second = parts.next()?.parse().ok()?;
@@ -845,14 +1033,19 @@ fn send_error(writer: &mut impl Write, error: &str) -> Result<(), String> {
 
 fn write_batch<F: EnvFactory>(
     server: &mut VecEnvServer<F>,
+    shared_batch: &mut MmapMut,
+    generation: &mut u64,
     writer: &mut impl Write,
     timing: BatchTiming,
 ) -> Result<(), String> {
-    let (batch, encode_timing) = server.encode_batch_timed()?;
+    let encode_timing = server.encode_batch_into_timed(&mut shared_batch[..])?;
+    *generation = generation
+        .checked_add(1)
+        .ok_or_else(|| "batch generation overflow".to_owned())?;
     writeln!(
         writer,
         "OK_BATCH {} {} {} {} {} {}",
-        batch.len(),
+        *generation,
         timing.input.as_nanos(),
         timing.validate.as_nanos(),
         timing.step.as_nanos(),
@@ -861,12 +1054,8 @@ fn write_batch<F: EnvFactory>(
     )
     .map_err(|error| format!("failed to write batch header: {error}"))?;
     writer
-        .write_all(&batch)
-        .map_err(|error| format!("failed to write batch: {error}"))?;
-    writer
-        .write_all(b"\nEND\n")
-        .and_then(|()| writer.flush())
-        .map_err(|error| format!("failed to finish batch: {error}"))
+        .flush()
+        .map_err(|error| format!("failed to finish batch header: {error}"))
 }
 
 pub fn write_f32_slice(values: &[f32], destination: &mut [u8]) -> Result<(), String> {
@@ -1104,6 +1293,25 @@ mod tests {
         }
     }
 
+    fn create_shared_file(size: usize) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let path = std::path::PathBuf::from(format!(
+            "/dev/shm/ahcrl-env-core-test-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(size as u64).unwrap();
+        path
+    }
+
     #[test]
     fn reset_mask_preserves_unselected_slots() {
         let mut server = VecEnvServer::new(DummyFactory, 3).unwrap();
@@ -1266,6 +1474,43 @@ mod tests {
     }
 
     #[test]
+    fn fixed_batch_buffer_is_reused_and_direct_destination_matches() {
+        let mut server = VecEnvServer::new(DummyFactory, 2).unwrap();
+        server.reset_all(3, 1).unwrap();
+        let (pointer, expected) = {
+            let batch = server.encode_batch().unwrap();
+            (batch.as_ptr(), batch.to_vec())
+        };
+        let mut destination = vec![0_u8; expected.len()];
+        server.encode_batch_into(&mut destination).unwrap();
+        assert_eq!(destination, expected);
+        let (second_pointer, second) = {
+            let batch = server.encode_batch().unwrap();
+            (batch.as_ptr(), batch.to_vec())
+        };
+        assert_eq!(pointer, second_pointer);
+        assert_eq!(second, expected);
+
+        let shared_path = create_shared_file(expected.len());
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&shared_path)
+            .unwrap();
+        let mut mapping = unsafe {
+            MmapOptions::new()
+                .len(expected.len())
+                .map_mut(&file)
+                .unwrap()
+        };
+        server.encode_batch_into(&mut mapping[..]).unwrap();
+        assert_eq!(&mapping[..], expected.as_slice());
+        drop(mapping);
+        drop(file);
+        std::fs::remove_file(shared_path).unwrap();
+    }
+
+    #[test]
     fn protocol_handles_init_reset_step_and_quit() {
         let init = serde_json::json!({
             "protocol_version": PROTOCOL_VERSION,
@@ -1274,17 +1519,25 @@ mod tests {
             "config": {},
         });
         let init = serde_json::to_vec(&init).unwrap();
+        let batch_size = DummyFactory.spec().batch_bytes(2).unwrap();
+        let shared_path = create_shared_file(batch_size);
+        let path = shared_path.to_str().unwrap().as_bytes().to_vec();
         let mut input = format!("INIT {}\n", init.len()).into_bytes();
         input.extend_from_slice(&init);
+        input.extend_from_slice(format!("BIND_SHM {} {}\n", path.len(), batch_size).as_bytes());
+        input.extend_from_slice(&path);
+        input.push(b'\n');
         input.extend_from_slice(b"RESET_ALL 7 1\nSTEP\n");
         input.extend_from_slice(&1_u32.to_le_bytes());
         input.extend_from_slice(&2_u32.to_le_bytes());
         input.extend_from_slice(b"QUIT\n");
         let mut output = Vec::new();
         run_server_with_io::<DummyFactory, _, _>(io::Cursor::new(input), &mut output).unwrap();
+        std::fs::remove_file(shared_path).unwrap();
         let output = String::from_utf8_lossy(&output);
         assert!(output.starts_with("OK_SPEC "));
         assert_eq!(output.matches("OK_BATCH ").count(), 2);
+        assert!(!output.contains("END"));
         assert!(output.ends_with("OK_QUIT\n"));
     }
 
@@ -1297,13 +1550,20 @@ mod tests {
             "config": {},
         });
         let init = serde_json::to_vec(&init).unwrap();
+        let batch_size = DummyFactory.spec().batch_bytes(2).unwrap();
+        let shared_path = create_shared_file(batch_size);
+        let path = shared_path.to_str().unwrap().as_bytes().to_vec();
         let mut input = format!("INIT {}\n", init.len()).into_bytes();
         input.extend_from_slice(&init);
+        input.extend_from_slice(format!("BIND_SHM {} {}\n", path.len(), batch_size).as_bytes());
+        input.extend_from_slice(&path);
+        input.push(b'\n');
         input.extend_from_slice(b"RESET_ALL 7 1\nSTEP\n");
         input.extend_from_slice(&1_u32.to_le_bytes());
         let error =
             run_server_with_io::<DummyFactory, _, _>(io::Cursor::new(input), &mut Vec::new())
                 .unwrap_err();
+        std::fs::remove_file(shared_path).unwrap();
         assert!(error.contains("failed to read actions"));
     }
 }
