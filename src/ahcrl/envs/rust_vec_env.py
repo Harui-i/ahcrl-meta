@@ -6,7 +6,6 @@ import mmap
 import os
 import subprocess
 import tempfile
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,9 +44,6 @@ class StepResult:
     done: np.ndarray
     score: np.ndarray
     metrics: dict[str, np.ndarray]
-    # Temporary measurement data for the ahc061-measure branch.  The protocol
-    # remains usable with servers that do not append the timing fields.
-    timings: dict[str, float]
 
 
 def cargo_server_command(
@@ -92,7 +88,6 @@ class RustVecEnv:
         self._buffer: mmap.mmap | None = None
         self._shared_path: str | None = None
         self._expected_generation = 0
-        self.last_timings: dict[str, float] = {}
         self._proc = subprocess.Popen(
             list(command),
             cwd=None if cwd is None else str(cwd),
@@ -115,12 +110,8 @@ class RustVecEnv:
     def reset(self, seed_start: int = 0, seed_stride: int = 1) -> dict[str, np.ndarray]:
         self._validate_seed(seed_start, "seed_start")
         self._validate_seed(seed_stride, "seed_stride")
-        send_started = time.perf_counter()
         self._send_line(f"RESET_ALL {seed_start} {seed_stride}")
-        send_seconds = time.perf_counter() - send_started
         result = self._read_batch()
-        result.timings["client_send_seconds"] = send_seconds
-        self.last_timings = result.timings
         self.obs = result.obs
         return self.obs
 
@@ -135,12 +126,8 @@ class RustVecEnv:
         mask = np.asarray(done, dtype=np.bool_)
         if mask.shape != (self.num_envs,):
             raise ValueError(f"done must have shape ({self.num_envs},), got {mask.shape}")
-        send_started = time.perf_counter()
         self._send_line(f"RESET_MASK {seed_start} {seed_stride}", mask.view(np.uint8))
-        send_seconds = time.perf_counter() - send_started
         result = self._read_batch()
-        result.timings["client_send_seconds"] = send_seconds
-        self.last_timings = result.timings
         self.obs = result.obs
         return self.obs
 
@@ -156,12 +143,8 @@ class RustVecEnv:
             if minimum < 0 or maximum > np.iinfo(np.uint32).max:
                 raise ValueError("actions must fit in uint32")
         encoded = np.asarray(values, dtype="<u4", order="C")
-        send_started = time.perf_counter()
         self._send_line("STEP", encoded.view(np.uint8))
-        send_seconds = time.perf_counter() - send_started
         result = self._read_batch()
-        result.timings["client_send_seconds"] = send_seconds
-        self.last_timings = result.timings
         self.obs = result.obs
         return result
 
@@ -188,12 +171,8 @@ class RustVecEnv:
                 raise ValueError("active actions must fit in uint32")
         encoded = np.asarray(values, dtype="<u4", order="C")
         payload = mask.view(np.uint8).tobytes() + encoded.tobytes()
-        send_started = time.perf_counter()
         self._send_line("STEP_MASK", payload)
-        send_seconds = time.perf_counter() - send_started
         result = self._read_batch()
-        result.timings["client_send_seconds"] = send_seconds
-        self.last_timings = result.timings
         self.obs = result.obs
         return result
 
@@ -357,12 +336,10 @@ class RustVecEnv:
         return tensors + required
 
     def _read_batch(self) -> StepResult:
-        header_started = time.perf_counter()
         header = self._readline()
-        header_wait_seconds = time.perf_counter() - header_started
         self._raise_if_error(header)
         parts = header.split()
-        if len(parts) not in {2, 7} or parts[0] != "OK_BATCH":
+        if len(parts) != 2 or parts[0] != "OK_BATCH":
             raise RuntimeError(f"unexpected batch response: {header!r}")
         try:
             generation = int(parts[1])
@@ -374,34 +351,6 @@ class RustVecEnv:
                 f"after {self._expected_generation}"
             )
         self._expected_generation = generation
-        timings = {
-            "client_header_wait_seconds": header_wait_seconds,
-            "rust_input_seconds": 0.0,
-            "rust_validate_seconds": 0.0,
-            "rust_step_seconds": 0.0,
-            "rust_prepare_seconds": 0.0,
-            "rust_encode_seconds": 0.0,
-        }
-        if len(parts) == 7:
-            timing_names = (
-                "rust_input_seconds",
-                "rust_validate_seconds",
-                "rust_step_seconds",
-                "rust_prepare_seconds",
-                "rust_encode_seconds",
-            )
-            try:
-                timings.update(
-                    {
-                        name: int(raw) / 1_000_000_000.0
-                        for name, raw in zip(timing_names, parts[2:], strict=True)
-                    }
-                )
-            except ValueError as error:
-                raise RuntimeError(f"invalid batch timing in {header!r}") from error
-        timings["client_payload_read_seconds"] = 0.0
-
-        decode_started = time.perf_counter()
         offset = 0
         observations: dict[str, np.ndarray] = {}
         for spec in self.observation_specs:
@@ -422,8 +371,7 @@ class RustVecEnv:
             metrics[spec.name] = array.copy()
         if offset != self._batch_size:
             raise RuntimeError(f"decoded {offset} batch bytes, expected {self._batch_size}")
-        timings["client_decode_seconds"] = time.perf_counter() - decode_started
-        return StepResult(observations, reward, done, score, metrics, timings)
+        return StepResult(observations, reward, done, score, metrics)
 
     def _array_from_buffer(self, spec: TensorSpec, offset: int) -> tuple[np.ndarray, int]:
         if self._buffer is None:

@@ -31,17 +31,6 @@ def test_schema_step_and_partial_reset() -> None:
         actions = np.argmax(env.obs["mask"], axis=1).astype(np.uint32)
         result = env.step(actions)
         stepped = result.obs["planes"].copy()
-        assert result.timings.keys() >= {
-            "client_send_seconds",
-            "client_header_wait_seconds",
-            "client_payload_read_seconds",
-            "client_decode_seconds",
-            "rust_validate_seconds",
-            "rust_step_seconds",
-            "rust_prepare_seconds",
-            "rust_encode_seconds",
-        }
-        assert all(value >= 0.0 for value in result.timings.values())
         reset = env.reset_done(np.asarray([False, True]), seed_start=100)["planes"].copy()
         np.testing.assert_array_equal(reset[0], stepped[0])
         with create_env(seed_start=101) as expected:

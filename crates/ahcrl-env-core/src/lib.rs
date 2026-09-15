@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use memmap2::{MmapMut, MmapOptions};
 use rayon::prelude::*;
@@ -172,19 +171,6 @@ struct TensorLayout {
     metric: bool,
     offset: usize,
     bytes_per_env: usize,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct BatchTiming {
-    input: Duration,
-    validate: Duration,
-    step: Duration,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct EncodeTiming {
-    prepare: Duration,
-    encode: Duration,
 }
 
 impl<F: EnvFactory> VecEnvServer<F> {
@@ -454,20 +440,8 @@ impl<F: EnvFactory> VecEnvServer<F> {
                 self.batch_size
             ));
         }
-        self.encode_batch_into_timed(destination).map(|_| ())
-    }
-
-    fn encode_batch_into_timed(&mut self, destination: &mut [u8]) -> Result<EncodeTiming, String> {
-        self.require_initialized()?;
-        let prepare_started = Instant::now();
         self.prepare_observations()?;
-        let prepare = prepare_started.elapsed();
-        let encode_started = Instant::now();
-        let result = self.encode_batch_into_prepared(destination);
-        result.map(|()| EncodeTiming {
-            prepare,
-            encode: encode_started.elapsed(),
-        })
+        self.encode_batch_into_prepared(destination)
     }
 
     fn encode_batch_into_prepared(&mut self, destination: &mut [u8]) -> Result<(), String> {
@@ -806,21 +780,11 @@ where
                     send_error(&mut writer, "BIND_SHM must be completed before RESET_ALL")?;
                     continue;
                 };
-                let step_started = Instant::now();
                 if let Err(error) = server.reset_all(seed_start, seed_stride) {
                     send_error(&mut writer, &error)?;
                     continue;
                 }
-                write_batch(
-                    server,
-                    shared_batch,
-                    &mut generation,
-                    &mut writer,
-                    BatchTiming {
-                        step: step_started.elapsed(),
-                        ..BatchTiming::default()
-                    },
-                )?;
+                write_batch(server, shared_batch, &mut generation, &mut writer)?;
             }
             "RESET_MASK" => {
                 let Some((seed_start, seed_stride)) = parse_two_u64(parts) else {
@@ -838,28 +802,15 @@ where
                     send_error(&mut writer, "BIND_SHM must be completed before RESET_MASK")?;
                     continue;
                 };
-                let input_started = Instant::now();
                 let mut mask = vec![0_u8; server.num_envs];
                 reader
                     .read_exact(&mut mask)
                     .map_err(|error| format!("failed to read reset mask: {error}"))?;
-                let input = input_started.elapsed();
-                let step_started = Instant::now();
                 if let Err(error) = server.reset_mask(&mask, seed_start, seed_stride) {
                     send_error(&mut writer, &error)?;
                     continue;
                 }
-                write_batch(
-                    server,
-                    shared_batch,
-                    &mut generation,
-                    &mut writer,
-                    BatchTiming {
-                        input,
-                        step: step_started.elapsed(),
-                        ..BatchTiming::default()
-                    },
-                )?;
+                write_batch(server, shared_batch, &mut generation, &mut writer)?;
             }
             "STEP" => {
                 if parts.next().is_some() {
@@ -874,7 +825,6 @@ where
                     send_error(&mut writer, "BIND_SHM must be completed before STEP")?;
                     continue;
                 };
-                let input_started = Instant::now();
                 let mut bytes = vec![0_u8; server.num_envs * std::mem::size_of::<u32>()];
                 reader
                     .read_exact(&mut bytes)
@@ -885,26 +835,12 @@ where
                     .iter()
                     .map(|&chunk| u32::from_le_bytes(chunk))
                     .collect::<Vec<_>>();
-                let input = input_started.elapsed();
-                let validate_started = Instant::now();
                 if let Err(error) = server.validate_actions(&actions) {
                     send_error(&mut writer, &error)?;
                     continue;
                 }
-                let validate = validate_started.elapsed();
-                let step_started = Instant::now();
                 server.step_validated(&actions)?;
-                write_batch(
-                    server,
-                    shared_batch,
-                    &mut generation,
-                    &mut writer,
-                    BatchTiming {
-                        input,
-                        validate,
-                        step: step_started.elapsed(),
-                    },
-                )?;
+                write_batch(server, shared_batch, &mut generation, &mut writer)?;
             }
             "STEP_MASK" => {
                 if parts.next().is_some() {
@@ -919,7 +855,6 @@ where
                     send_error(&mut writer, "BIND_SHM must be completed before STEP_MASK")?;
                     continue;
                 };
-                let input_started = Instant::now();
                 let mut mask = vec![0_u8; server.num_envs];
                 reader
                     .read_exact(&mut mask)
@@ -934,23 +869,11 @@ where
                     .iter()
                     .map(|&chunk| u32::from_le_bytes(chunk))
                     .collect::<Vec<_>>();
-                let input = input_started.elapsed();
-                let step_started = Instant::now();
                 if let Err(error) = server.step_mask(&mask, &actions) {
                     send_error(&mut writer, &error)?;
                     continue;
                 }
-                write_batch(
-                    server,
-                    shared_batch,
-                    &mut generation,
-                    &mut writer,
-                    BatchTiming {
-                        input,
-                        step: step_started.elapsed(),
-                        ..BatchTiming::default()
-                    },
-                )?;
+                write_batch(server, shared_batch, &mut generation, &mut writer)?;
             }
             "VISUALIZER_DATA" => {
                 if parts.next().is_some() {
@@ -1036,23 +959,13 @@ fn write_batch<F: EnvFactory>(
     shared_batch: &mut MmapMut,
     generation: &mut u64,
     writer: &mut impl Write,
-    timing: BatchTiming,
 ) -> Result<(), String> {
-    let encode_timing = server.encode_batch_into_timed(&mut shared_batch[..])?;
+    server.encode_batch_into(&mut shared_batch[..])?;
     *generation = generation
         .checked_add(1)
         .ok_or_else(|| "batch generation overflow".to_owned())?;
-    writeln!(
-        writer,
-        "OK_BATCH {} {} {} {} {} {}",
-        *generation,
-        timing.input.as_nanos(),
-        timing.validate.as_nanos(),
-        timing.step.as_nanos(),
-        encode_timing.prepare.as_nanos(),
-        encode_timing.encode.as_nanos(),
-    )
-    .map_err(|error| format!("failed to write batch header: {error}"))?;
+    writeln!(writer, "OK_BATCH {}", *generation)
+        .map_err(|error| format!("failed to write batch header: {error}"))?;
     writer
         .flush()
         .map_err(|error| format!("failed to finish batch header: {error}"))
