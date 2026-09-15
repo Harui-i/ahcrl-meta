@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -156,6 +157,19 @@ pub struct VecEnvServer<F: EnvFactory> {
     envs: Vec<F::Env>,
     outcomes: Vec<StepOutcome>,
     pool: ThreadPool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct BatchTiming {
+    input: Duration,
+    validate: Duration,
+    step: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct EncodeTiming {
+    prepare: Duration,
+    encode: Duration,
 }
 
 impl<F: EnvFactory> VecEnvServer<F> {
@@ -379,8 +393,15 @@ impl<F: EnvFactory> VecEnvServer<F> {
     }
 
     pub fn encode_batch(&mut self) -> Result<Vec<u8>, String> {
+        self.encode_batch_timed().map(|(batch, _timing)| batch)
+    }
+
+    fn encode_batch_timed(&mut self) -> Result<(Vec<u8>, EncodeTiming), String> {
         self.require_initialized()?;
+        let prepare_started = Instant::now();
         self.prepare_observations()?;
+        let prepare = prepare_started.elapsed();
+        let encode_started = Instant::now();
         let capacity = self.spec.batch_bytes(self.num_envs)?;
         let mut output = Vec::with_capacity(capacity);
         for tensor in self.spec.observations.clone() {
@@ -391,7 +412,13 @@ impl<F: EnvFactory> VecEnvServer<F> {
             self.encode_tensor(&tensor, true, &mut output)?;
         }
         debug_assert_eq!(output.len(), capacity);
-        Ok(output)
+        Ok((
+            output,
+            EncodeTiming {
+                prepare,
+                encode: encode_started.elapsed(),
+            },
+        ))
     }
 
     fn prepare_observations(&mut self) -> Result<(), String> {
@@ -620,11 +647,19 @@ where
                     send_error(&mut writer, "INIT must be sent first")?;
                     continue;
                 };
+                let step_started = Instant::now();
                 if let Err(error) = server.reset_all(seed_start, seed_stride) {
                     send_error(&mut writer, &error)?;
                     continue;
                 }
-                write_batch(server, &mut writer)?;
+                write_batch(
+                    server,
+                    &mut writer,
+                    BatchTiming {
+                        step: step_started.elapsed(),
+                        ..BatchTiming::default()
+                    },
+                )?;
             }
             "RESET_MASK" => {
                 let Some((seed_start, seed_stride)) = parse_two_u64(parts) else {
@@ -638,15 +673,26 @@ where
                     send_error(&mut writer, "INIT must be sent first")?;
                     continue;
                 };
+                let input_started = Instant::now();
                 let mut mask = vec![0_u8; server.num_envs];
                 reader
                     .read_exact(&mut mask)
                     .map_err(|error| format!("failed to read reset mask: {error}"))?;
+                let input = input_started.elapsed();
+                let step_started = Instant::now();
                 if let Err(error) = server.reset_mask(&mask, seed_start, seed_stride) {
                     send_error(&mut writer, &error)?;
                     continue;
                 }
-                write_batch(server, &mut writer)?;
+                write_batch(
+                    server,
+                    &mut writer,
+                    BatchTiming {
+                        input,
+                        step: step_started.elapsed(),
+                        ..BatchTiming::default()
+                    },
+                )?;
             }
             "STEP" => {
                 if parts.next().is_some() {
@@ -657,6 +703,7 @@ where
                     send_error(&mut writer, "INIT must be sent first")?;
                     continue;
                 };
+                let input_started = Instant::now();
                 let mut bytes = vec![0_u8; server.num_envs * std::mem::size_of::<u32>()];
                 reader
                     .read_exact(&mut bytes)
@@ -667,12 +714,24 @@ where
                     .iter()
                     .map(|&chunk| u32::from_le_bytes(chunk))
                     .collect::<Vec<_>>();
+                let input = input_started.elapsed();
+                let validate_started = Instant::now();
                 if let Err(error) = server.validate_actions(&actions) {
                     send_error(&mut writer, &error)?;
                     continue;
                 }
+                let validate = validate_started.elapsed();
+                let step_started = Instant::now();
                 server.step_validated(&actions)?;
-                write_batch(server, &mut writer)?;
+                write_batch(
+                    server,
+                    &mut writer,
+                    BatchTiming {
+                        input,
+                        validate,
+                        step: step_started.elapsed(),
+                    },
+                )?;
             }
             "STEP_MASK" => {
                 if parts.next().is_some() {
@@ -683,6 +742,7 @@ where
                     send_error(&mut writer, "INIT must be sent first")?;
                     continue;
                 };
+                let input_started = Instant::now();
                 let mut mask = vec![0_u8; server.num_envs];
                 reader
                     .read_exact(&mut mask)
@@ -697,11 +757,21 @@ where
                     .iter()
                     .map(|&chunk| u32::from_le_bytes(chunk))
                     .collect::<Vec<_>>();
+                let input = input_started.elapsed();
+                let step_started = Instant::now();
                 if let Err(error) = server.step_mask(&mask, &actions) {
                     send_error(&mut writer, &error)?;
                     continue;
                 }
-                write_batch(server, &mut writer)?;
+                write_batch(
+                    server,
+                    &mut writer,
+                    BatchTiming {
+                        input,
+                        step: step_started.elapsed(),
+                        ..BatchTiming::default()
+                    },
+                )?;
             }
             "VISUALIZER_DATA" => {
                 if parts.next().is_some() {
@@ -776,10 +846,20 @@ fn send_error(writer: &mut impl Write, error: &str) -> Result<(), String> {
 fn write_batch<F: EnvFactory>(
     server: &mut VecEnvServer<F>,
     writer: &mut impl Write,
+    timing: BatchTiming,
 ) -> Result<(), String> {
-    let batch = server.encode_batch()?;
-    writeln!(writer, "OK_BATCH {}", batch.len())
-        .map_err(|error| format!("failed to write batch header: {error}"))?;
+    let (batch, encode_timing) = server.encode_batch_timed()?;
+    writeln!(
+        writer,
+        "OK_BATCH {} {} {} {} {} {}",
+        batch.len(),
+        timing.input.as_nanos(),
+        timing.validate.as_nanos(),
+        timing.step.as_nanos(),
+        encode_timing.prepare.as_nanos(),
+        encode_timing.encode.as_nanos(),
+    )
+    .map_err(|error| format!("failed to write batch header: {error}"))?;
     writer
         .write_all(&batch)
         .map_err(|error| format!("failed to write batch: {error}"))?;
