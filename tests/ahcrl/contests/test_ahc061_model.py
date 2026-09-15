@@ -6,6 +6,7 @@ from ahcrl.contests.ahc061.encoder import (
     BOARD_SIZE,
     CRITIC_FEATURE_SHAPE,
     NUM_PLANES,
+    TYPED_NUM_PLANES,
 )
 from ahcrl.contests.ahc061.model import ActorCritic, RunningObservationNormalizer
 
@@ -18,6 +19,7 @@ def test_actor_critic_output_shapes() -> None:
 
     assert logits.shape == (3, BOARD_SIZE * BOARD_SIZE)
     assert value.shape == (3,)
+    assert model.input_adapter.output_channels == TYPED_NUM_PLANES
 
 
 def test_actor_critic_can_be_traced() -> None:
@@ -64,6 +66,27 @@ def test_observation_normalizer_is_model_state_and_normalizes_raw_inputs() -> No
     assert "observation_normalizer.mean" in state
     assert torch.allclose(normalized.mean(dim=(0, 2, 3)), torch.zeros(NUM_PLANES), atol=1e-5)
     assert torch.equal(state["observation_normalizer.mean"], normalizer.mean)
+
+
+def test_observation_normalizer_excludes_categorical_planes() -> None:
+    excluded = tuple(range(1, 23))
+    normalizer = RunningObservationNormalizer(NUM_PLANES, excluded_channels=excluded)
+    observations = torch.randn(4, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+    observations[:, 1:23] = (observations[:, 1:23] > 0).float()
+
+    normalized = normalizer.update_and_normalize(observations)
+    assert torch.equal(normalized[:, 1:23], observations[:, 1:23])
+    assert torch.allclose(
+        normalized[:, 23:].mean(dim=(0, 2, 3)),
+        torch.zeros(NUM_PLANES - 23),
+        atol=1e-5,
+    )
+    assert not any(name == "normalize_mask" for name in normalizer.state_dict())
+    mean, invstd = normalizer.effective_affine()
+    assert torch.equal(mean[:, 1:23], torch.zeros_like(mean[:, 1:23]))
+    assert torch.equal(invstd[:, 1:23], torch.ones_like(invstd[:, 1:23]))
+    stats = normalizer.stats()
+    assert stats["obs_norm_std_min"] >= 0.0
 
 
 def test_actor_critic_reports_trunk_feature_norm_stats() -> None:

@@ -18,10 +18,17 @@ from ahcrl.nn.modula import (
     mark_bounded_diagonal_parameter,
     mark_bounded_rms_parameter,
 )
+from ahcrl.nn.observation import (
+    CategoricalPlaneAdapter,
+    CategoricalPlaneGroup,
+    RunningObservationNormalizer,
+)
 from ahcrl.nn.trunk import make_trunk
 
 __all__ = [
     "ConvNeXtBlock",
+    "CategoricalPlaneAdapter",
+    "CategoricalPlaneGroup",
     "BoundedDiagonalGeometry",
     "BoundedRMSVectorGeometry",
     "ModularConv2d",
@@ -33,6 +40,7 @@ __all__ = [
     "ModularParallel",
     "ModularResidual",
     "ModularSequential",
+    "RunningObservationNormalizer",
     "build_modula_parameter_specs",
     "make_group_norm",
     "make_trunk",

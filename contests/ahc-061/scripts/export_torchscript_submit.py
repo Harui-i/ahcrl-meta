@@ -9,8 +9,9 @@ from typing import Any, cast
 
 import torch
 
-from ahcrl.contests.ahc061.encoder import NUM_PLANES
-from ahcrl.contests.ahc061.model import ActorCritic, RunningObservationNormalizer
+from ahcrl.contests.ahc061.encoder import CATEGORICAL_EXCLUDED_CHANNELS, NUM_PLANES
+from ahcrl.contests.ahc061.model import ActorCritic
+from ahcrl.nn.observation import RunningObservationNormalizer
 
 BASE91_ALPHABET = (
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~"'
@@ -63,10 +64,49 @@ def load_export_model(checkpoint_path: Path, config: dict[str, object]) -> Actor
         model.observation_normalizer = RunningObservationNormalizer(
             NUM_PLANES,
             float(cast(Any, config.get("obs_norm_epsilon", 1e-8))),
+            excluded_channels=CATEGORICAL_EXCLUDED_CHANNELS,
         )
     model.load_state_dict(checkpoint["model"])
     model.eval()
     return model
+
+
+def _q4_tensor_names(model: ActorCritic) -> list[str]:
+    """Return the version-2 actor tensor order used by the C++ reader."""
+    names = [
+        "input_adapter.embeddings.0.weight",
+        "input_adapter.embeddings.1.weight",
+        "input_adapter.embeddings.2.weight",
+        "trunk.0.weight",
+        "trunk.1.weight",
+        "trunk.1.bias",
+    ]
+    block_count = len(model.trunk) - 3
+    for block_index in range(block_count):
+        prefix = f"trunk.{3 + block_index}"
+        names.extend(
+            (
+                f"{prefix}.layer_scale",
+                f"{prefix}.depthwise.weight",
+                f"{prefix}.depthwise.bias",
+                f"{prefix}.norm.weight",
+                f"{prefix}.norm.bias",
+                f"{prefix}.pointwise.0.weight",
+                f"{prefix}.pointwise.0.bias",
+                f"{prefix}.pointwise.2.weight",
+                f"{prefix}.pointwise.2.bias",
+            )
+        )
+    names.extend(
+        (
+            "policy.0.weight",
+            "policy.1.weight",
+            "policy.1.bias",
+            "policy.3.weight",
+            "policy.3.output_gain",
+        )
+    )
+    return names
 
 
 def pack_q4_policy(checkpoint_path: Path, config: dict[str, object]) -> bytes:
@@ -77,24 +117,19 @@ def pack_q4_policy(checkpoint_path: Path, config: dict[str, object]) -> bytes:
     """
     model = load_export_model(checkpoint_path, config)
     state_dict = model.state_dict()
-    tensors = [
-        value.detach().float().contiguous()
-        for name, value in state_dict.items()
-        if name.startswith("trunk.") or name.startswith("policy.")
-    ]
+    tensor_names = _q4_tensor_names(model)
+    missing = [name for name in tensor_names if name not in state_dict]
+    if missing:
+        raise ValueError("q4 model is missing tensors: " + ", ".join(missing))
+    tensors = [state_dict[name].detach().float().contiguous() for name in tensor_names]
     obs_normalizer = model.observation_normalizer
     if obs_normalizer is None:
         raise ValueError("q4 submit requires observation normalization")
-    mean = obs_normalizer.mean.detach().float().contiguous()
-    count = obs_normalizer.count.to(dtype=obs_normalizer.m2.dtype).clamp_min(1)
-    variance = torch.where(
-        obs_normalizer.count > 0,
-        obs_normalizer.m2 / count,
-        torch.ones_like(obs_normalizer.m2),
-    )
-    invstd = torch.rsqrt(variance + obs_normalizer.epsilon).contiguous()
+    mean, invstd = obs_normalizer.effective_affine()
+    mean = mean.detach().float().contiguous()
+    invstd = invstd.detach().float().contiguous()
 
-    packed = bytearray(b"AHC061Q4\x01")
+    packed = bytearray(b"AHC061Q4\x02")
     packed += struct.pack("<H", len(tensors))
     for tensor in tensors:
         values = tensor.reshape(-1)
@@ -916,8 +951,13 @@ def render_q4_cpp(
     packed_size: int,
     pf_particles: int,
     temperature: float,
+    channels: int,
+    blocks: int,
 ) -> str:
     """Render an actor-only, direct LibTorch q4 inference submission."""
+    if channels <= 0 or blocks <= 0:
+        raise ValueError("q4 export requires positive model channels and blocks")
+    groups = next(groups for groups in range(min(8, channels), 0, -1) if channels % groups == 0)
     source = render_cpp(
         encoded_model,
         checkpoint_name=checkpoint_name,
@@ -928,14 +968,70 @@ def render_q4_cpp(
     direct_model = r"""
 using torch::Tensor;
 
-Tensor l2norm(const Tensor& x, int64_t dim) {
-    return x / torch::sqrt(torch::sum(x * x, {dim}, true) + 1e-8);
+constexpr int MODEL_CHANNELS = __MODEL_CHANNELS__;
+constexpr int MODEL_BLOCKS = __MODEL_BLOCKS__;
+constexpr int MODEL_GROUPS = __MODEL_GROUPS__;
+constexpr int TYPED_NUM_PLANES = NUM_PLANES + 2;
+constexpr double RESIDUAL_BRANCH_SCALE = 1.0 / MODEL_BLOCKS;
+
+Tensor conv2d(
+    const Tensor& input,
+    const Tensor& weight,
+    const Tensor& bias,
+    int64_t groups,
+    int64_t padding
+) {
+    namespace F = torch::nn::functional;
+    return F::conv2d(
+        input,
+        weight,
+        F::Conv2dFuncOptions().bias(bias).groups(groups).padding(padding)
+    );
 }
 
 Tensor qlinear(const Tensor& x, const Tensor& weight, const Tensor& bias = Tensor()) {
     Tensor y = torch::matmul(x, weight.t());
     return bias.defined() ? y + bias : y;
 }
+
+Tensor group_norm(const Tensor& input, const Tensor& weight, const Tensor& bias) {
+    const auto sizes = input.sizes();
+    Tensor grouped = input.view({
+        sizes[0], MODEL_GROUPS, MODEL_CHANNELS / MODEL_GROUPS, sizes[2], sizes[3]
+    });
+    Tensor mean = grouped.mean({2, 3, 4}, true);
+    Tensor centered = grouped - mean;
+    Tensor variance = (centered * centered).mean({2, 3, 4}, true);
+    Tensor normalized = centered / torch::sqrt(variance + 1e-5);
+    return normalized.view_as(input) * weight.view({1, MODEL_CHANNELS, 1, 1})
+        + bias.view({1, MODEL_CHANNELS, 1, 1});
+}
+
+struct ConvNeXtBlock {
+    Tensor layer_scale;
+    Tensor depthwise_weight, depthwise_bias;
+    Tensor norm_weight, norm_bias;
+    Tensor pointwise1_weight, pointwise1_bias;
+    Tensor pointwise2_weight, pointwise2_bias;
+
+    Tensor forward(const Tensor& input) const {
+        Tensor residual = input;
+        Tensor y = conv2d(input, depthwise_weight, depthwise_bias, MODEL_CHANNELS, 1);
+        y = y.permute({0, 2, 3, 1});
+        Tensor mean = y.mean(-1, true);
+        Tensor centered = y - mean;
+        Tensor variance = (centered * centered).mean(-1, true);
+        y = centered / torch::sqrt(variance + 1e-5);
+        y = y * norm_weight + norm_bias;
+        y = qlinear(y, pointwise1_weight, pointwise1_bias);
+        y = 0.5 * y * (1.0 + torch::erf(y / std::sqrt(2.0)));
+        y = qlinear(y, pointwise2_weight, pointwise2_bias);
+        y = y * layer_scale;
+        y = y.permute({0, 3, 1, 2});
+        return (1.0 - RESIDUAL_BRANCH_SCALE) * residual
+            + RESIDUAL_BRANCH_SCALE * y;
+    }
+};
 
 struct Q4Reader {
     const vector<unsigned char>& data;
@@ -945,8 +1041,17 @@ struct Q4Reader {
         for (int i = 0; i < 8; ++i) {
             if (data.at(pos++) != magic[i]) throw runtime_error("bad q4 model");
         }
-        if (data.at(pos++) != 1) throw runtime_error("unsupported q4 model");
-        pos += 2;  // tensor count; the fixed actor layout below validates consumption.
+        if (data.at(pos++) != 2) throw runtime_error("unsupported q4 model");
+        const uint16_t tensor_count =
+            uint16_t(data.at(pos)) | (uint16_t(data.at(pos + 1)) << 8);
+        pos += 2;
+        constexpr uint16_t expected_tensor_count = 11 + 9 * MODEL_BLOCKS;
+        if (tensor_count != expected_tensor_count) {
+            throw runtime_error(
+                "q4 tensor count mismatch: got " + to_string(tensor_count)
+                + " expected " + to_string(expected_tensor_count)
+            );
+        }
     }
     uint32_t u32() {
         uint32_t value = 0;
@@ -990,83 +1095,80 @@ struct Q4Reader {
     }
 };
 
-struct AttentionBlock {
-    Tensor w1, s1, w2, alpha, rel, qkv, out, out_scale, attn_alpha;
-    Tensor forward(const Tensor& input) const {
-        Tensor x = input;
-        Tensor y = x.permute({0, 2, 3, 1});
-        y = qlinear(y, w1) * s1;
-        y = torch::relu(y) + 1e-8;
-        y = l2norm(qlinear(y, w2), -1).permute({0, 3, 1, 2});
-        Tensor mixed = x + ((y - x).permute({0, 2, 3, 1}) * alpha).permute({0, 3, 1, 2});
-        x = l2norm(mixed, 1);
-
-        y = x.permute({0, 2, 3, 1}).reshape({1, 100, 64});
-        Tensor qkv_value = qlinear(y, qkv).view({1, 100, 3, 4, 16});
-        Tensor q = l2norm(qkv_value.select(2, 0), -1).permute({0, 2, 1, 3});
-        Tensor k = l2norm(qkv_value.select(2, 1), -1).permute({0, 2, 1, 3});
-        Tensor v = qkv_value.select(2, 2).permute({0, 2, 1, 3});
-        Tensor logits = torch::matmul(q, k.transpose(-2, -1)) * 4.0 + rel;
-        Tensor attended = torch::matmul(torch::softmax(logits, -1), v)
-            .permute({0, 2, 1, 3}).reshape({1, 100, 64});
-        Tensor target = l2norm(qlinear(attended, out) * out_scale, -1)
-            .view({1, 10, 10, 64}).permute({0, 3, 1, 2});
-        mixed = x + ((target - x).permute({0, 2, 3, 1}) * attn_alpha).permute({0, 3, 1, 2});
-        return l2norm(mixed, 1);
-    }
-};
-
 struct Q4Policy {
-    Tensor embed, embed_scale, policy1, gn_weight, gn_bias, policy2, policy2_bias, mean, invstd;
-    vector<AttentionBlock> blocks;
+    Tensor owner_embedding, level_embedding, position_embedding;
+    Tensor trunk_weight, trunk_norm_weight, trunk_norm_bias;
+    vector<ConvNeXtBlock> blocks;
+    Tensor policy_weight, policy_norm_weight, policy_norm_bias;
+    Tensor readout_weight, readout_gain;
+    Tensor mean, invstd;
     explicit Q4Policy(const vector<unsigned char>& bytes) {
         Q4Reader reader(bytes);
-        embed = reader.take({64, 155}); embed_scale = reader.take({64});
-        for (int i = 0; i < 8; ++i) {
-            AttentionBlock b;
-            b.w1 = reader.take({256, 64}); b.s1 = reader.take({256}); b.w2 = reader.take({64, 256});
-            b.alpha = reader.take({64}); b.rel = reader.take({4, 19, 19});
-            b.qkv = reader.take({192, 64});
-            b.out = reader.take({64, 64}); b.out_scale = reader.take({64});
-            b.attn_alpha = reader.take({64});
-            vector<float> bias(4 * 100 * 100);
-            auto a = b.rel.accessor<float, 3>();
-            for (int h = 0; h < 4; ++h) for (int i = 0; i < 100; ++i) for (int j = 0; j < 100; ++j)
-                bias[(h * 100 + i) * 100 + j] = a[h][i / 10 - j / 10 + 9][i % 10 - j % 10 + 9];
-            b.rel = torch::from_blob(bias.data(), {1, 4, 100, 100}, torch::kFloat32).clone();
-            blocks.push_back(move(b));
+        owner_embedding = reader.take({9, 9});
+        level_embedding = reader.take({6, 6});
+        position_embedding = reader.take({9, 9});
+        trunk_weight = reader.take({MODEL_CHANNELS, TYPED_NUM_PLANES, 3, 3});
+        trunk_norm_weight = reader.take({MODEL_CHANNELS});
+        trunk_norm_bias = reader.take({MODEL_CHANNELS});
+        for (int i = 0; i < MODEL_BLOCKS; ++i) {
+            ConvNeXtBlock block;
+            block.layer_scale = reader.take({MODEL_CHANNELS});
+            block.depthwise_weight = reader.take({MODEL_CHANNELS, 1, 3, 3});
+            block.depthwise_bias = reader.take({MODEL_CHANNELS});
+            block.norm_weight = reader.take({MODEL_CHANNELS});
+            block.norm_bias = reader.take({MODEL_CHANNELS});
+            block.pointwise1_weight = reader.take({MODEL_CHANNELS * 4, MODEL_CHANNELS});
+            block.pointwise1_bias = reader.take({MODEL_CHANNELS * 4});
+            block.pointwise2_weight = reader.take({MODEL_CHANNELS, MODEL_CHANNELS * 4});
+            block.pointwise2_bias = reader.take({MODEL_CHANNELS});
+            blocks.push_back(move(block));
         }
-        policy1 = reader.take({64, 64, 1, 1}); gn_weight = reader.take({64});
-        gn_bias = reader.take({64});
-        policy2 = reader.take({1, 64, 1, 1}); policy2_bias = reader.take({1});
-        mean = reader.take({NUM_PLANES, 1, 1}); invstd = reader.take({NUM_PLANES, 1, 1});
+        policy_weight = reader.take({MODEL_CHANNELS, MODEL_CHANNELS, 1, 1});
+        policy_norm_weight = reader.take({MODEL_CHANNELS});
+        policy_norm_bias = reader.take({MODEL_CHANNELS});
+        readout_weight = reader.take({1, MODEL_CHANNELS, 1, 1});
+        readout_gain = reader.take({1});
+        mean = reader.take({1, NUM_PLANES, 1, 1});
+        invstd = reader.take({1, NUM_PLANES, 1, 1});
+        if (reader.pos != bytes.size()) throw runtime_error("q4 model has trailing data");
     }
     Tensor forward(const Tensor& input) const {
         Tensor raw = input.to(torch::kFloat32);
         Tensor x = (raw - mean) * invstd;
-        x = x.permute({0, 2, 3, 1});
-        Tensor shift = torch::full({1, 10, 10, 1}, 3.0, torch::kFloat32);
-        x = l2norm(torch::cat({x, shift}, -1), -1);
-        x = l2norm(qlinear(x, embed) * embed_scale, -1).permute({0, 3, 1, 2});
+        Tensor owner = x.slice(1, 1, 10).permute({0, 2, 3, 1});
+        Tensor level_source = x.slice(1, 10, 15);
+        Tensor level_zero = 1.0 - level_source.sum(1, true);
+        Tensor level = torch::cat({level_zero, level_source}, 1)
+            .permute({0, 2, 3, 1});
+        Tensor position_source = x.slice(1, 15, 23);
+        Tensor position_zero = 1.0 - position_source.sum(1, true);
+        Tensor position = torch::cat({position_zero, position_source}, 1)
+            .permute({0, 2, 3, 1});
+        owner = torch::matmul(owner, owner_embedding).permute({0, 3, 1, 2});
+        level = torch::matmul(level, level_embedding).permute({0, 3, 1, 2});
+        position = torch::matmul(position, position_embedding).permute({0, 3, 1, 2});
+        x = torch::cat({x.slice(1, 0, 1), owner, level, position, x.slice(1, 23)}, 1);
+        x = group_norm(conv2d(x, trunk_weight, Tensor(), 1, 1), trunk_norm_weight, trunk_norm_bias);
+        x = torch::relu(x);
         for (const auto& block : blocks) x = block.forward(x);
-        x = qlinear(x.permute({0, 2, 3, 1}), policy1.reshape({64, 64})).permute({0, 3, 1, 2});
-        Tensor grouped = x.view({1, 8, 8, 10, 10});
-        Tensor mu = grouped.mean({2, 3, 4}, true);
-        Tensor centered = grouped - mu;
-        x = (centered / torch::sqrt((centered * centered).mean({2, 3, 4}, true) + 1e-5))
-            .view({1, 64, 10, 10});
-        x = x * gn_weight.view({1, 64, 1, 1}) + gn_bias.view({1, 64, 1, 1});
-        x = torch::relu(x).permute({0, 2, 3, 1});
-        return qlinear(x, policy2.reshape({1, 64}), policy2_bias).reshape({1, 100});
+        x = group_norm(
+            conv2d(x, policy_weight, Tensor(), 1, 0), policy_norm_weight, policy_norm_bias
+        );
+        x = torch::relu(x);
+        x = conv2d(x, readout_weight, Tensor(), 1, 0) * readout_gain;
+        return x.reshape({1, N * N});
     }
 };
 """
     source = source.replace("\nstruct State {", "\n" + direct_model + "\nstruct State {")
+    source = source.replace("__MODEL_CHANNELS__", str(channels))
+    source = source.replace("__MODEL_BLOCKS__", str(blocks))
+    source = source.replace("__MODEL_GROUPS__", str(groups))
     source = source.replace(
         "torch::jit::script::Module load_model() {\n"
         "    vector<unsigned char> model_bytes = decode_base91(kEncodedModel);\n"
-        "    string model_data(\n"
-        "        reinterpret_cast<const char*>(model_bytes.data()), model_bytes.size());\n"
+        "    string model_data(reinterpret_cast<const char*>(model_bytes.data()), "
+        "model_bytes.size());\n"
         "    istringstream input(model_data, ios::binary);\n"
         "    torch::NoGradGuard no_grad;\n"
         "    auto module = torch::jit::load(input, torch::kCPU);\n"
@@ -1084,9 +1186,7 @@ struct Q4Policy {
         "        .contiguous();",
         "torch::Tensor logits = module.forward(input).reshape({N * N}).contiguous();",
     )
-    source = source.replace(
-        "torch::jit::script::Module module = load_model();", "Q4Policy module = load_model();"
-    )
+    source = source.replace("auto module = load_model();", "Q4Policy module = load_model();")
     return source
 
 
@@ -1126,6 +1226,8 @@ def main() -> None:
             packed_size=len(packed),
             pf_particles=int(args.pf_particles or config.get("pf_particles", 16)),
             temperature=args.temperature,
+            channels=int(cast(Any, config["model_channels"])),
+            blocks=int(cast(Any, config["model_blocks"])),
         )
         print(f"q4_packed_bytes={len(packed)}")
     else:

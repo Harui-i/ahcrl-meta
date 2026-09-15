@@ -37,7 +37,7 @@ from ahcrl.training import (
 )
 from ahcrl.training.ppo import policy_surrogate, tensor_range
 
-from .encoder import NUM_PLANES
+from .encoder import CATEGORICAL_EXCLUDED_CHANNELS, NUM_PLANES
 from .model import ActorCritic, RunningObservationNormalizer
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -147,7 +147,9 @@ def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
         model = model.to(dtype=MODEL_DTYPE)
     if args.obs_norm:
         model.observation_normalizer = RunningObservationNormalizer(
-            NUM_PLANES, args.obs_norm_epsilon
+            NUM_PLANES,
+            args.obs_norm_epsilon,
+            excluded_channels=CATEGORICAL_EXCLUDED_CHANNELS,
         ).to(device=device)
     return model
 
