@@ -72,11 +72,15 @@ def load_export_model(checkpoint_path: Path, config: dict[str, object]) -> Actor
 
 
 def _q4_tensor_names(model: ActorCritic) -> list[str]:
-    """Return the version-2 actor tensor order used by the C++ reader."""
+    """Return the version-3 actor tensor order used by the C++ reader."""
     names = [
         "input_adapter.embeddings.0.weight",
         "input_adapter.embeddings.1.weight",
         "input_adapter.embeddings.2.weight",
+        "cell_encoder.0.weight",
+        "cell_encoder.0.bias",
+        "cell_encoder.2.weight",
+        "cell_encoder.2.bias",
         "trunk.0.weight",
         "trunk.1.weight",
         "trunk.1.bias",
@@ -129,7 +133,7 @@ def pack_q4_policy(checkpoint_path: Path, config: dict[str, object]) -> bytes:
     mean = mean.detach().float().contiguous()
     invstd = invstd.detach().float().contiguous()
 
-    packed = bytearray(b"AHC061Q4\x02")
+    packed = bytearray(b"AHC061Q4\x03")
     packed += struct.pack("<H", len(tensors))
     for tensor in tensors:
         values = tensor.reshape(-1)
@@ -1041,11 +1045,11 @@ struct Q4Reader {
         for (int i = 0; i < 8; ++i) {
             if (data.at(pos++) != magic[i]) throw runtime_error("bad q4 model");
         }
-        if (data.at(pos++) != 2) throw runtime_error("unsupported q4 model");
+        if (data.at(pos++) != 3) throw runtime_error("unsupported q4 model");
         const uint16_t tensor_count =
             uint16_t(data.at(pos)) | (uint16_t(data.at(pos + 1)) << 8);
         pos += 2;
-        constexpr uint16_t expected_tensor_count = 11 + 9 * MODEL_BLOCKS;
+        constexpr uint16_t expected_tensor_count = 15 + 9 * MODEL_BLOCKS;
         if (tensor_count != expected_tensor_count) {
             throw runtime_error(
                 "q4 tensor count mismatch: got " + to_string(tensor_count)
@@ -1097,6 +1101,8 @@ struct Q4Reader {
 
 struct Q4Policy {
     Tensor owner_embedding, level_embedding, position_embedding;
+    Tensor cell_encoder1_weight, cell_encoder1_bias;
+    Tensor cell_encoder2_weight, cell_encoder2_bias;
     Tensor trunk_weight, trunk_norm_weight, trunk_norm_bias;
     vector<ConvNeXtBlock> blocks;
     Tensor policy_weight, policy_norm_weight, policy_norm_bias;
@@ -1107,7 +1113,11 @@ struct Q4Policy {
         owner_embedding = reader.take({9, 9});
         level_embedding = reader.take({6, 6});
         position_embedding = reader.take({9, 9});
-        trunk_weight = reader.take({MODEL_CHANNELS, TYPED_NUM_PLANES, 3, 3});
+        cell_encoder1_weight = reader.take({MODEL_CHANNELS * 4, TYPED_NUM_PLANES});
+        cell_encoder1_bias = reader.take({MODEL_CHANNELS * 4});
+        cell_encoder2_weight = reader.take({MODEL_CHANNELS, MODEL_CHANNELS * 4});
+        cell_encoder2_bias = reader.take({MODEL_CHANNELS});
+        trunk_weight = reader.take({MODEL_CHANNELS, MODEL_CHANNELS, 3, 3});
         trunk_norm_weight = reader.take({MODEL_CHANNELS});
         trunk_norm_bias = reader.take({MODEL_CHANNELS});
         for (int i = 0; i < MODEL_BLOCKS; ++i) {
@@ -1148,6 +1158,11 @@ struct Q4Policy {
         level = torch::matmul(level, level_embedding).permute({0, 3, 1, 2});
         position = torch::matmul(position, position_embedding).permute({0, 3, 1, 2});
         x = torch::cat({x.slice(1, 0, 1), owner, level, position, x.slice(1, 23)}, 1);
+        x = x.permute({0, 2, 3, 1});
+        x = qlinear(x, cell_encoder1_weight, cell_encoder1_bias);
+        x = 0.5 * x * (1.0 + torch::erf(x / std::sqrt(2.0)));
+        x = qlinear(x, cell_encoder2_weight, cell_encoder2_bias);
+        x = x.permute({0, 3, 1, 2});
         x = group_norm(conv2d(x, trunk_weight, Tensor(), 1, 1), trunk_norm_weight, trunk_norm_bias);
         x = torch::relu(x);
         for (const auto& block : blocks) x = block.forward(x);

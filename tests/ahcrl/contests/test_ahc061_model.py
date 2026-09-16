@@ -9,6 +9,7 @@ from ahcrl.contests.ahc061.encoder import (
     TYPED_NUM_PLANES,
 )
 from ahcrl.contests.ahc061.model import ActorCritic, RunningObservationNormalizer
+from ahcrl.nn.modula import build_modula_parameter_specs
 
 
 def test_actor_critic_output_shapes() -> None:
@@ -20,6 +21,62 @@ def test_actor_critic_output_shapes() -> None:
     assert logits.shape == (3, BOARD_SIZE * BOARD_SIZE)
     assert value.shape == (3,)
     assert model.input_adapter.output_channels == TYPED_NUM_PLANES
+
+
+def test_cell_encoder_projects_each_cell_to_trunk_width_without_spatial_mixing() -> None:
+    model = ActorCritic(channels=8, blocks=1).eval()
+    x = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+
+    adapted = model.input_adapter(x)
+    encoded = model.cell_encoder(adapted.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+    assert adapted.shape == (2, TYPED_NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+    assert encoded.shape == (2, 8, BOARD_SIZE, BOARD_SIZE)
+
+    perturbed = x.clone()
+    perturbed[:, 0, 0, 0] += 1.0
+    perturbed_encoded = model.cell_encoder(
+        model.input_adapter(perturbed).permute(0, 2, 3, 1)
+    ).permute(0, 3, 1, 2)
+    unaffected = torch.ones((BOARD_SIZE, BOARD_SIZE), dtype=torch.bool)
+    unaffected[0, 0] = False
+    torch.testing.assert_close(
+        encoded.permute(0, 2, 3, 1)[:, unaffected],
+        perturbed_encoded.permute(0, 2, 3, 1)[:, unaffected],
+    )
+
+
+def test_embedding_and_cell_encoder_receive_gradients() -> None:
+    model = ActorCritic(channels=8, blocks=1)
+    x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+    logits, _ = model(x)
+
+    logits.square().mean().backward()
+
+    embedding_grad_norm = sum(
+        parameter.grad.abs().sum().item()
+        for name, parameter in model.named_parameters()
+        if name.startswith("input_adapter.embeddings") and parameter.grad is not None
+    )
+    cell_encoder_grad_norm = sum(
+        parameter.grad.abs().sum().item()
+        for name, parameter in model.named_parameters()
+        if name.startswith("cell_encoder") and parameter.grad is not None
+    )
+    assert embedding_grad_norm > 0.0
+    assert cell_encoder_grad_norm > 0.0
+
+
+def test_cell_encoder_is_in_modula_graph_without_changing_embedding_geometry() -> None:
+    model = ActorCritic(channels=8, blocks=1)
+    specs = {spec.name: spec for spec in build_modula_parameter_specs(model)}
+    embedding_geometry = specs["input_adapter.embeddings.0.weight"].geometry
+    first_cell_geometry = specs["cell_encoder.0.weight"].geometry
+    second_cell_geometry = specs["cell_encoder.2.weight"].geometry
+
+    assert embedding_geometry is not None and embedding_geometry.name == "embedding"
+    assert first_cell_geometry is not None and first_cell_geometry.name == "linear"
+    assert second_cell_geometry is not None and second_cell_geometry.name == "linear"
 
 
 def test_actor_critic_can_be_traced() -> None:
