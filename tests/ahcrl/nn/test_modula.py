@@ -51,6 +51,17 @@ def test_linear_geometry_maps_zero_gradient_to_zero() -> None:
     assert update.count_nonzero() == 0
 
 
+def test_linear_geometry_keeps_underflowing_finite_gradient_finite() -> None:
+    layer = ModularLinear(64, 64, bias=False)
+    gradient = torch.full_like(layer.weight, 1e-23)
+    assert gradient.norm() == 0
+
+    update = layer.geometry.dualize(gradient, target_norm=1.0)
+
+    assert torch.isfinite(update).all()
+    assert update.norm() > 0
+
+
 def test_bounded_rms_geometry_assigns_requested_natural_norm_and_projects() -> None:
     geometry = BoundedRMSVectorGeometry()
     direction = torch.tensor([1.0, -2.0, 3.0, -4.0])

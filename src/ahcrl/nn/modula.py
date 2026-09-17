@@ -65,7 +65,13 @@ def _polar_newton_schulz(matrix: torch.Tensor) -> torch.Tensor:
         raise ValueError(f"polar input must contain matrices, got shape={tuple(matrix.shape)}")
     transpose = matrix.shape[-2] > matrix.shape[-1]
     x = matrix.mT if transpose else matrix
-    x = x / x.norm(dim=(-2, -1), keepdim=True).clamp_min(torch.finfo(x.dtype).tiny)
+    # Computing the Frobenius norm squares the entries, so a finite, tiny
+    # direction can underflow to a zero norm.  Clamping by ``tiny`` would then
+    # amplify that direction enough for the Newton--Schulz polynomial to
+    # overflow.  sqrt(tiny) is the smallest safe norm floor for this reduction
+    # and lets numerically insignificant directions decay toward a zero update.
+    norm_floor = math.sqrt(torch.finfo(x.dtype).tiny)
+    x = x / x.norm(dim=(-2, -1), keepdim=True).clamp_min(norm_floor)
     coefficients = (
         (3955 / 1024, -8306 / 1024, 5008 / 1024),
         (3735 / 1024, -6681 / 1024, 3463 / 1024),
