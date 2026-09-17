@@ -143,7 +143,7 @@ class RunningRewardScaler:
 
 
 class ProximalPolicyEWMA:
-    """FP32で平均を保持し、推論用モデルへ同期するproximal policy。"""
+    """FP32で平均を保持し、actor専用の推論用モデルへ同期するproximal policy。"""
 
     def __init__(
         self,
@@ -155,7 +155,7 @@ class ProximalPolicyEWMA:
             raise ValueError("proximal_ewma_com must be finite and positive")
         self.center_of_mass = center_of_mass
         self.decay = center_of_mass / (center_of_mass + 1.0)
-        self.model = copy.deepcopy(model)
+        self.model = copy.deepcopy(model.policy)
         self.model.eval()
         source_parameter_names = [
             name for name, parameter in model.named_parameters() if parameter.requires_grad
@@ -167,7 +167,8 @@ class ProximalPolicyEWMA:
         ]
         proximal_parameters = dict(self.model.named_parameters())
         self.model_parameters = [
-            proximal_parameters[source_parameter_names[index]] for index in self.parameter_indices
+            proximal_parameters[source_parameter_names[index].removeprefix("policy.")]
+            for index in self.parameter_indices
         ]
         for parameter in self.model.parameters():
             parameter.requires_grad_(False)
@@ -275,6 +276,10 @@ def _model_forward(
 
 def _model_policy_logits(model: nn.Module, observations: torch.Tensor) -> torch.Tensor:
     return model.policy_logits(observations, False)  # type: ignore[attr-defined, call-arg]
+
+
+def _proximal_policy_logits(model: nn.Module, observations: torch.Tensor) -> torch.Tensor:
+    return model(observations)  # type: ignore[call-arg]
 
 
 def _model_value(
@@ -543,9 +548,7 @@ def update_model(
                 _synchronize_device(device)
                 proximal_started = time.perf_counter()
                 with torch.inference_mode():
-                    proximal_logits, _ = _model_forward(
-                        proximal_model, observations[index], critic_features[index]
-                    )
+                    proximal_logits = _proximal_policy_logits(proximal_model, observations[index])
                     if not bool(torch.isfinite(proximal_logits).all().item()):
                         raise FloatingPointError("non-finite proximal policy logits")
                     proximal_dist = Categorical(
@@ -878,7 +881,9 @@ def main() -> None:
                 f"update={update} step={global_step} fps={metrics['summary/fps']:.1f} "
                 f"mean_reward={metrics['train/mean_reward']:.5f} "
                 f"policy_loss={stats['policy_loss']:.5f} value_loss={stats['value_loss']:.5f} "
-                f"entropy={stats['entropy']:.5f} checkpoint={checkpoint_path}",
+                f"entropy={stats['entropy']:.5f} "
+                f"critic_forward_total={timing_totals['critic_forward_seconds']:.3f} "
+                f"checkpoint={checkpoint_path}",
                 flush=True,
             )
             if wandb_run is not None:
