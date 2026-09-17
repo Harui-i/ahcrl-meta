@@ -23,6 +23,45 @@ def test_actor_critic_output_shapes() -> None:
     assert model.input_adapter.output_channels == TYPED_NUM_PLANES
 
 
+def test_actor_and_critic_have_independent_representations() -> None:
+    model = ActorCritic(channels=8, blocks=1)
+
+    assert (
+        model.input_adapter.embeddings[0].weight
+        is not model.value.input_adapter.embeddings[0].weight
+    )
+    assert model.cell_encoder[0].weight is not model.value.cell_encoder[0].weight
+    assert model.trunk[0].weight is not model.value.trunk[0].weight
+
+    x = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+    critic_loss = model.value_predictions(x).square().mean()
+    critic_loss.backward()
+
+    actor_gradients = [
+        parameter.grad
+        for name, parameter in model.named_parameters()
+        if not name.startswith("value.")
+    ]
+    critic_gradients = [
+        parameter.grad for name, parameter in model.named_parameters() if name.startswith("value.")
+    ]
+    assert all(gradient is None for gradient in actor_gradients)
+    assert all(gradient is not None for gradient in critic_gradients)
+
+
+def test_actor_only_and_critic_only_apis_match_forward() -> None:
+    model = ActorCritic(channels=8, blocks=1).eval()
+    x = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+    critic_features = torch.randn(2, *CRITIC_FEATURE_SHAPE)
+
+    logits, values = model(x, critic_features)
+    actor_logits = model.policy_logits(x)
+    critic_values = model.value_predictions(x, critic_features)
+
+    torch.testing.assert_close(actor_logits, logits)
+    torch.testing.assert_close(critic_values, values)
+
+
 def test_cell_encoder_projects_each_cell_to_trunk_width_without_spatial_mixing() -> None:
     model = ActorCritic(channels=8, blocks=1).eval()
     x = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)

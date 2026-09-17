@@ -275,6 +275,16 @@ def _model_forward(
     return model(observations, critic_features, False)  # type: ignore[call-arg]
 
 
+def _model_policy_logits(model: nn.Module, observations: torch.Tensor) -> torch.Tensor:
+    return model.policy_logits(observations, False)  # type: ignore[attr-defined, call-arg]
+
+
+def _model_value(
+    model: nn.Module, observations: torch.Tensor, critic_features: torch.Tensor
+) -> torch.Tensor:
+    return model.value_predictions(observations, critic_features, False)  # type: ignore[attr-defined, call-arg]
+
+
 def _observation_normalizer(model: nn.Module) -> RunningObservationNormalizer | None:
     original = getattr(model, "_orig_mod", model)
     normalizer = getattr(original, "observation_normalizer", None)
@@ -291,6 +301,34 @@ def _to_model_tensor(array: np.ndarray, device: torch.device) -> torch.Tensor:
     if device.type == "cpu":
         tensor = tensor.clone()
     return tensor.to(dtype=MODEL_DTYPE if device.type == "cuda" else torch.float32)
+
+
+def _batched_value_predictions(
+    model: nn.Module,
+    observations: torch.Tensor,
+    critic_features: torch.Tensor,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> tuple[torch.Tensor, float]:
+    """Evaluate the independent critic after actor-only rollout collection."""
+    rollout_steps, num_envs = observations.shape[:2]
+    flat_observations = observations.flatten(0, 1).to(device)
+    flat_critic_features = critic_features.flatten(0, 1).to(device)
+    batch_size = min(max(int(args.minibatch_size), 1), flat_observations.shape[0])
+    values: list[torch.Tensor] = []
+    elapsed = 0.0
+    for start in range(0, flat_observations.shape[0], batch_size):
+        index = slice(start, start + batch_size)
+        _synchronize_device(device)
+        started = time.perf_counter()
+        with torch.inference_mode():
+            value = _model_value(model, flat_observations[index], flat_critic_features[index])
+            if not bool(torch.isfinite(value).all().item()):
+                raise FloatingPointError("non-finite critic output after rollout")
+        _synchronize_device(device)
+        elapsed += time.perf_counter() - started
+        values.append(value.float().cpu())
+    return torch.cat(values).reshape(rollout_steps, num_envs), elapsed
 
 
 def _make_rollout_buffer(
@@ -311,7 +349,6 @@ def _make_rollout_buffer(
             "rewards": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
             "dones": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
             "scores": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
-            "values": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
             "masks": RolloutFieldSpec(
                 tuple(obs["mask"].shape[1:]), torch.bool, torch.device("cpu")
             ),
@@ -333,6 +370,7 @@ def collect_rollout(
         rollout_buffer = _make_rollout_buffer(args, device, obs)
     rollout_buffer.reset()
     forward_seconds = 0.0
+    critic_forward_seconds = 0.0
     env_step_seconds = 0.0
     for step in range(args.rollout_steps):
         encoded = _to_model_tensor(obs["planes"], device)
@@ -346,9 +384,9 @@ def collect_rollout(
         _synchronize_device(device)
         started = time.perf_counter()
         with torch.inference_mode():
-            logits, value = _model_forward(model, encoded, oracle)
-            if not bool(torch.isfinite(logits).all().item() and torch.isfinite(value).all().item()):
-                raise FloatingPointError("non-finite model output during rollout")
+            logits = _model_policy_logits(model, encoded)
+            if not bool(torch.isfinite(logits).all().item()):
+                raise FloatingPointError("non-finite actor output during rollout")
             dist = Categorical(logits=logits.float().masked_fill(~mask, -1e9))
             action = dist.sample()
             logprob = dist.log_prob(action)
@@ -366,7 +404,6 @@ def collect_rollout(
             rewards=torch.from_numpy(result.reward.copy()),
             dones=torch.from_numpy(result.done.astype(np.float32)),
             scores=torch.from_numpy(result.score.copy()),
-            values=value.float().cpu(),
             masks=mask.cpu(),
         )
         obs = result.obs
@@ -380,8 +417,20 @@ def collect_rollout(
         next_encoded = normalizer.normalize(next_encoded)
     next_oracle = _to_model_tensor(obs["critic_oracle"], device)
     with torch.inference_mode():
-        next_value = _model_forward(model, next_encoded, next_oracle)[1].float().cpu()
+        _synchronize_device(device)
+        started = time.perf_counter()
+        next_value = _model_value(model, next_encoded, next_oracle).float().cpu()
+        _synchronize_device(device)
+        critic_forward_seconds += time.perf_counter() - started
     stored = rollout_buffer.as_dict()
+    stored["values"], elapsed = _batched_value_predictions(
+        model,
+        stored["obs"],
+        stored["critic_features"],
+        args,
+        device,
+    )
+    critic_forward_seconds += elapsed
     raw_rewards = stored["rewards"]
     scaled_rewards = reward_scaler.scale(raw_rewards) if reward_scaler is not None else raw_rewards
     stacked_dones = stored["dones"]
@@ -408,7 +457,11 @@ def collect_rollout(
         },
         obs,
         next_seed_start,
-        {"forward_seconds": forward_seconds, "env_step_seconds": env_step_seconds},
+        {
+            "forward_seconds": forward_seconds,
+            "critic_forward_seconds": critic_forward_seconds,
+            "env_step_seconds": env_step_seconds,
+        },
     )
 
 
@@ -722,6 +775,7 @@ def main() -> None:
     started = time.time()
     timing_totals = {
         "forward_seconds": 0.0,
+        "critic_forward_seconds": 0.0,
         "backward_seconds": 0.0,
         "proximal_forward_seconds": 0.0,
         "env_step_seconds": 0.0,
@@ -765,6 +819,7 @@ def main() -> None:
             timing_totals["forward_seconds"] += (
                 rollout_timing["forward_seconds"] + stats["forward_seconds"]
             )
+            timing_totals["critic_forward_seconds"] += rollout_timing["critic_forward_seconds"]
             timing_totals["backward_seconds"] += stats["backward_seconds"]
             timing_totals["proximal_forward_seconds"] += stats["proximal_forward_seconds"]
             timing_totals["env_step_seconds"] += rollout_timing["env_step_seconds"]
