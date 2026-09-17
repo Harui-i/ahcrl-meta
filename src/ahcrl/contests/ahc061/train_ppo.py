@@ -40,7 +40,7 @@ from ahcrl.training import (
 from ahcrl.training.ppo import policy_surrogate, tensor_range
 
 from .encoder import CATEGORICAL_EXCLUDED_CHANNELS, NUM_PLANES
-from .model import ActorCritic, RunningObservationNormalizer
+from .model import PPOModel, RunningObservationNormalizer
 
 ROOT = Path(__file__).resolve().parents[4]
 RL_TOOLS_MANIFEST = ROOT / "contests" / "ahc-061" / "rl-tools" / "Cargo.toml"
@@ -147,7 +147,7 @@ class ProximalPolicyEWMA:
 
     def __init__(
         self,
-        model: ActorCritic,
+        model: PPOModel,
         source_parameters: list[nn.Parameter],
         center_of_mass: float,
     ) -> None:
@@ -163,9 +163,7 @@ class ProximalPolicyEWMA:
         if len(source_parameter_names) != len(source_parameters):
             raise ValueError("proximal model parameter count mismatch")
         self.parameter_indices = [
-            index
-            for index, name in enumerate(source_parameter_names)
-            if not name.startswith("value.")
+            index for index, name in enumerate(source_parameter_names) if name.startswith("policy.")
         ]
         proximal_parameters = dict(self.model.named_parameters())
         self.model_parameters = [
@@ -253,8 +251,8 @@ class ProximalPolicyEWMA:
         self._copy_master_to_model()
 
 
-def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
-    model = ActorCritic(
+def create_model(args: argparse.Namespace, device: torch.device) -> PPOModel:
+    model = PPOModel(
         channels=args.model_channels,
         blocks=args.model_blocks,
     ).to(device=device)
@@ -467,7 +465,7 @@ def collect_rollout(
 
 def update_model(
     model: nn.Module,
-    raw_model: ActorCritic,
+    raw_model: PPOModel,
     optimizer: OptimizerLike,
     rollout: dict[str, torch.Tensor],
     args: argparse.Namespace,

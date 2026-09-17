@@ -6,7 +6,7 @@ from typing import Any
 import torch
 
 from ahcrl.contests.ahc061.encoder import NUM_PLANES
-from ahcrl.contests.ahc061.model import ActorCritic
+from ahcrl.contests.ahc061.model import PPOModel
 from ahcrl.nn.observation import RunningObservationNormalizer
 
 
@@ -28,24 +28,24 @@ def _load_exporter() -> ModuleType:
 
 def test_q4_tensor_layout_contains_cell_encoder_before_trunk() -> None:
     exporter = _load_exporter()
-    model = ActorCritic(channels=8, blocks=2)
+    model = PPOModel(channels=8, blocks=2)
 
     names = exporter._q4_tensor_names(model)  # type: ignore[attr-defined]
 
     assert len(names) == 15 + 9 * 2
     assert names[3:7] == [
-        "cell_encoder.0.weight",
-        "cell_encoder.0.bias",
-        "cell_encoder.2.weight",
-        "cell_encoder.2.bias",
+        "policy.cell_encoder.0.weight",
+        "policy.cell_encoder.0.bias",
+        "policy.cell_encoder.2.weight",
+        "policy.cell_encoder.2.bias",
     ]
-    assert names[7] == "trunk.0.weight"
+    assert names[7] == "policy.trunk.0.weight"
     assert all(name in model.state_dict() for name in names)
 
 
 def test_q4_pack_and_render_use_version_three_cell_encoder_layout(tmp_path: Path) -> None:
     exporter = _load_exporter()
-    model = ActorCritic(channels=8, blocks=1).to(dtype=torch.bfloat16)
+    model = PPOModel(channels=8, blocks=1).to(dtype=torch.bfloat16)
     model.observation_normalizer = RunningObservationNormalizer(NUM_PLANES)
     checkpoint_path = tmp_path / "checkpoint.pt"
     torch.save({"format_version": 1, "model": model.state_dict()}, checkpoint_path)

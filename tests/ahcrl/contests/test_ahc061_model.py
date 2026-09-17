@@ -8,30 +8,47 @@ from ahcrl.contests.ahc061.encoder import (
     NUM_PLANES,
     TYPED_NUM_PLANES,
 )
-from ahcrl.contests.ahc061.model import ActorCritic, RunningObservationNormalizer
+from ahcrl.contests.ahc061.model import (
+    PolicyNetwork,
+    PPOModel,
+    RunningObservationNormalizer,
+    ValueNetwork,
+)
 from ahcrl.nn.modula import build_modula_parameter_specs
 
 
-def test_actor_critic_output_shapes() -> None:
-    model = ActorCritic(channels=8, blocks=2)
+def test_policy_value_output_shapes() -> None:
+    model = PPOModel(channels=8, blocks=2)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
 
     logits, value = model(x)
 
     assert logits.shape == (3, BOARD_SIZE * BOARD_SIZE)
     assert value.shape == (3,)
-    assert model.input_adapter.output_channels == TYPED_NUM_PLANES
+    assert model.policy.input_adapter.output_channels == TYPED_NUM_PLANES
+
+
+def test_policy_and_value_networks_are_individually_callable() -> None:
+    policy = PolicyNetwork(channels=8, blocks=1)
+    value = ValueNetwork(channels=8, blocks=1)
+    x = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
+    critic_features = torch.randn(2, *CRITIC_FEATURE_SHAPE)
+
+    assert policy(x).shape == (2, BOARD_SIZE * BOARD_SIZE)
+    assert value(x, critic_features).shape == (2, 1)
+    assert len(policy.trunk) == len(value.trunk) == 4
+    assert not hasattr(value, "blocks")
 
 
 def test_actor_and_critic_have_independent_representations() -> None:
-    model = ActorCritic(channels=8, blocks=1)
+    model = PPOModel(channels=8, blocks=1)
 
     assert (
-        model.input_adapter.embeddings[0].weight
+        model.policy.input_adapter.embeddings[0].weight
         is not model.value.input_adapter.embeddings[0].weight
     )
-    assert model.cell_encoder[0].weight is not model.value.cell_encoder[0].weight
-    assert model.trunk[0].weight is not model.value.trunk[0].weight
+    assert model.policy.cell_encoder[0].weight is not model.value.cell_encoder[0].weight
+    assert model.policy.trunk[0].weight is not model.value.trunk[0].weight
 
     x = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
     critic_loss = model.value_predictions(x).square().mean()
@@ -50,7 +67,7 @@ def test_actor_and_critic_have_independent_representations() -> None:
 
 
 def test_actor_only_and_critic_only_apis_match_forward() -> None:
-    model = ActorCritic(channels=8, blocks=1).eval()
+    model = PPOModel(channels=8, blocks=1).eval()
     x = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
     critic_features = torch.randn(2, *CRITIC_FEATURE_SHAPE)
 
@@ -63,19 +80,19 @@ def test_actor_only_and_critic_only_apis_match_forward() -> None:
 
 
 def test_cell_encoder_projects_each_cell_to_trunk_width_without_spatial_mixing() -> None:
-    model = ActorCritic(channels=8, blocks=1).eval()
+    model = PPOModel(channels=8, blocks=1).eval()
     x = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
 
-    adapted = model.input_adapter(x)
-    encoded = model.cell_encoder(adapted.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+    adapted = model.policy.input_adapter(x)
+    encoded = model.policy.cell_encoder(adapted.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
     assert adapted.shape == (2, TYPED_NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
     assert encoded.shape == (2, 8, BOARD_SIZE, BOARD_SIZE)
 
     perturbed = x.clone()
     perturbed[:, 0, 0, 0] += 1.0
-    perturbed_encoded = model.cell_encoder(
-        model.input_adapter(perturbed).permute(0, 2, 3, 1)
+    perturbed_encoded = model.policy.cell_encoder(
+        model.policy.input_adapter(perturbed).permute(0, 2, 3, 1)
     ).permute(0, 3, 1, 2)
     unaffected = torch.ones((BOARD_SIZE, BOARD_SIZE), dtype=torch.bool)
     unaffected[0, 0] = False
@@ -86,7 +103,7 @@ def test_cell_encoder_projects_each_cell_to_trunk_width_without_spatial_mixing()
 
 
 def test_embedding_and_cell_encoder_receive_gradients() -> None:
-    model = ActorCritic(channels=8, blocks=1)
+    model = PPOModel(channels=8, blocks=1)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
     logits, _ = model(x)
 
@@ -95,31 +112,31 @@ def test_embedding_and_cell_encoder_receive_gradients() -> None:
     embedding_grad_norm = sum(
         parameter.grad.abs().sum().item()
         for name, parameter in model.named_parameters()
-        if name.startswith("input_adapter.embeddings") and parameter.grad is not None
+        if name.startswith("policy.input_adapter.embeddings") and parameter.grad is not None
     )
     cell_encoder_grad_norm = sum(
         parameter.grad.abs().sum().item()
         for name, parameter in model.named_parameters()
-        if name.startswith("cell_encoder") and parameter.grad is not None
+        if name.startswith("policy.cell_encoder") and parameter.grad is not None
     )
     assert embedding_grad_norm > 0.0
     assert cell_encoder_grad_norm > 0.0
 
 
 def test_cell_encoder_is_in_modula_graph_without_changing_embedding_geometry() -> None:
-    model = ActorCritic(channels=8, blocks=1)
+    model = PPOModel(channels=8, blocks=1)
     specs = {spec.name: spec for spec in build_modula_parameter_specs(model)}
-    embedding_geometry = specs["input_adapter.embeddings.0.weight"].geometry
-    first_cell_geometry = specs["cell_encoder.0.weight"].geometry
-    second_cell_geometry = specs["cell_encoder.2.weight"].geometry
+    embedding_geometry = specs["policy.input_adapter.embeddings.0.weight"].geometry
+    first_cell_geometry = specs["policy.cell_encoder.0.weight"].geometry
+    second_cell_geometry = specs["policy.cell_encoder.2.weight"].geometry
 
     assert embedding_geometry is not None and embedding_geometry.name == "embedding"
     assert first_cell_geometry is not None and first_cell_geometry.name == "linear"
     assert second_cell_geometry is not None and second_cell_geometry.name == "linear"
 
 
-def test_actor_critic_can_be_traced() -> None:
-    model = ActorCritic(channels=8, blocks=1).eval()
+def test_policy_value_model_can_be_traced() -> None:
+    model = PPOModel(channels=8, blocks=1).eval()
     x = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
 
     traced = cast(Any, torch.jit.trace(model, x, strict=True))
@@ -129,8 +146,8 @@ def test_actor_critic_can_be_traced() -> None:
     assert value.shape == (1,)
 
 
-def test_critic_actor_critic_can_be_traced_without_critic_features() -> None:
-    model = ActorCritic(channels=8, blocks=1).eval()
+def test_policy_value_model_can_be_traced_without_critic_features() -> None:
+    model = PPOModel(channels=8, blocks=1).eval()
     x = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
 
     traced = cast(Any, torch.jit.trace(model, x, strict=True))
@@ -140,8 +157,8 @@ def test_critic_actor_critic_can_be_traced_without_critic_features() -> None:
     assert value.shape == (1,)
 
 
-def test_actor_critic_runs_with_bfloat16_weights_and_inputs() -> None:
-    model = ActorCritic(channels=8, blocks=1).to(dtype=torch.bfloat16).eval()
+def test_policy_value_model_runs_with_bfloat16_weights_and_inputs() -> None:
+    model = PPOModel(channels=8, blocks=1).to(dtype=torch.bfloat16).eval()
     x = torch.randn(1, NUM_PLANES, BOARD_SIZE, BOARD_SIZE, dtype=torch.bfloat16)
 
     logits, value = model(x)
@@ -151,7 +168,7 @@ def test_actor_critic_runs_with_bfloat16_weights_and_inputs() -> None:
 
 
 def test_observation_normalizer_is_model_state_and_normalizes_raw_inputs() -> None:
-    model = ActorCritic(channels=8, blocks=1)
+    model = PPOModel(channels=8, blocks=1)
     normalizer = RunningObservationNormalizer(NUM_PLANES, epsilon=1e-8)
     model.observation_normalizer = normalizer
     observations = torch.randn(2, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
@@ -185,8 +202,8 @@ def test_observation_normalizer_excludes_categorical_planes() -> None:
     assert stats["obs_norm_std_min"] >= 0.0
 
 
-def test_actor_critic_reports_trunk_feature_norm_stats() -> None:
-    model = ActorCritic(channels=8, blocks=1)
+def test_policy_network_reports_trunk_feature_norm_stats() -> None:
+    model = PPOModel(channels=8, blocks=1)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
 
     stats = model.trunk_feature_norm_stats(x)
@@ -200,7 +217,7 @@ def test_actor_critic_reports_trunk_feature_norm_stats() -> None:
 
 
 def test_value_head_receives_gradients() -> None:
-    model = ActorCritic(channels=8, blocks=1)
+    model = PPOModel(channels=8, blocks=1)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
     _, value = model(x)
     loss = value.square().mean()
@@ -216,7 +233,7 @@ def test_value_head_receives_gradients() -> None:
 
 
 def test_critic_features_only_affect_value_head() -> None:
-    model = ActorCritic(channels=8, blocks=1)
+    model = PPOModel(channels=8, blocks=1)
     x = torch.randn(3, NUM_PLANES, BOARD_SIZE, BOARD_SIZE)
     zero_features = torch.zeros(3, *CRITIC_FEATURE_SHAPE)
     oracle_features = torch.rand(3, *CRITIC_FEATURE_SHAPE)

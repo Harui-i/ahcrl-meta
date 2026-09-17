@@ -10,7 +10,7 @@ from typing import Any, cast
 import torch
 
 from ahcrl.contests.ahc061.encoder import CATEGORICAL_EXCLUDED_CHANNELS, NUM_PLANES
-from ahcrl.contests.ahc061.model import ActorCritic
+from ahcrl.contests.ahc061.model import PPOModel
 from ahcrl.nn.observation import RunningObservationNormalizer
 
 BASE91_ALPHABET = (
@@ -52,11 +52,11 @@ def c_string_literal_chunks(s: str, *, width: int = 120) -> str:
     return "\n".join(chunks)
 
 
-def load_export_model(checkpoint_path: Path, config: dict[str, object]) -> ActorCritic:
+def load_export_model(checkpoint_path: Path, config: dict[str, object]) -> PPOModel:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if checkpoint.get("format_version") != 1 or "model" not in checkpoint:
         raise ValueError("checkpoint must use the shared training checkpoint format")
-    model = ActorCritic(
+    model = PPOModel(
         channels=int(cast(Any, config["model_channels"])),
         blocks=int(cast(Any, config["model_blocks"])),
     ).to(dtype=torch.bfloat16)
@@ -71,23 +71,23 @@ def load_export_model(checkpoint_path: Path, config: dict[str, object]) -> Actor
     return model
 
 
-def _q4_tensor_names(model: ActorCritic) -> list[str]:
+def _q4_tensor_names(model: PPOModel) -> list[str]:
     """Return the version-3 actor tensor order used by the C++ reader."""
     names = [
-        "input_adapter.embeddings.0.weight",
-        "input_adapter.embeddings.1.weight",
-        "input_adapter.embeddings.2.weight",
-        "cell_encoder.0.weight",
-        "cell_encoder.0.bias",
-        "cell_encoder.2.weight",
-        "cell_encoder.2.bias",
-        "trunk.0.weight",
-        "trunk.1.weight",
-        "trunk.1.bias",
+        "policy.input_adapter.embeddings.0.weight",
+        "policy.input_adapter.embeddings.1.weight",
+        "policy.input_adapter.embeddings.2.weight",
+        "policy.cell_encoder.0.weight",
+        "policy.cell_encoder.0.bias",
+        "policy.cell_encoder.2.weight",
+        "policy.cell_encoder.2.bias",
+        "policy.trunk.0.weight",
+        "policy.trunk.1.weight",
+        "policy.trunk.1.bias",
     ]
-    block_count = len(model.trunk) - 3
+    block_count = len(model.policy.trunk) - 3
     for block_index in range(block_count):
-        prefix = f"trunk.{3 + block_index}"
+        prefix = f"policy.trunk.{3 + block_index}"
         names.extend(
             (
                 f"{prefix}.layer_scale",
@@ -103,11 +103,11 @@ def _q4_tensor_names(model: ActorCritic) -> list[str]:
         )
     names.extend(
         (
-            "policy.0.weight",
-            "policy.1.weight",
-            "policy.1.bias",
-            "policy.3.weight",
-            "policy.3.output_gain",
+            "policy.policy.0.weight",
+            "policy.policy.1.weight",
+            "policy.policy.1.bias",
+            "policy.policy.3.weight",
+            "policy.policy.3.output_gain",
         )
     )
     return names

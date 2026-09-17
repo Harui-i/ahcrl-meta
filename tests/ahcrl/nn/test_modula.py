@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from ahcrl.contests.ahc061.model import ActorCritic as AHC061ActorCritic
+from ahcrl.contests.ahc061.model import PPOModel as AHC061PPOModel
 from ahcrl.contests.ahc063.model import ActorCritic as AHC063ActorCritic
 from ahcrl.nn.modula import (
     BoundedDiagonalGeometry,
@@ -174,7 +174,7 @@ def test_duplicate_parameter_in_graph_is_rejected() -> None:
         ModulaGraphNode("parallel", (atom, atom)).allocate()
 
 
-@pytest.mark.parametrize("model_type", [AHC061ActorCritic, AHC063ActorCritic])
+@pytest.mark.parametrize("model_type", [AHC061PPOModel, AHC063ActorCritic])
 def test_contest_models_classify_every_trainable_parameter(
     model_type: type[nn.Module],
 ) -> None:
