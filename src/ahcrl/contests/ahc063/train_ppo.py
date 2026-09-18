@@ -45,7 +45,7 @@ from ahcrl.training import (
 from ahcrl.training.ppo import policy_surrogate, tensor_range
 
 from .encoder import CATEGORICAL_EXCLUDED_CHANNELS, NUM_PLANES
-from .model import ActorCritic
+from .model import PPOModel
 
 ROOT = Path(__file__).resolve().parents[4]
 RL_TOOLS_MANIFEST = ROOT / "contests" / "ahc-063" / "rl-tools" / "Cargo.toml"
@@ -178,11 +178,11 @@ class RunningRewardScaler:
 
 
 class ProximalPolicyEWMA:
-    """FP32で平均を保持し、推論用モデルへ同期するproximal policy。"""
+    """FP32で平均を保持し、actor専用の推論用モデルへ同期するproximal policy。"""
 
     def __init__(
         self,
-        model: ActorCritic,
+        model: PPOModel,
         source_parameters: list[nn.Parameter],
         center_of_mass: float,
     ) -> None:
@@ -190,7 +190,7 @@ class ProximalPolicyEWMA:
             raise ValueError("proximal_ewma_com must be finite and positive")
         self.center_of_mass = center_of_mass
         self.decay = center_of_mass / (center_of_mass + 1.0)
-        self.model = copy.deepcopy(model)
+        self.model = copy.deepcopy(model.policy)
         self.model.eval()
         source_parameter_names = [
             name for name, parameter in model.named_parameters() if parameter.requires_grad
@@ -198,13 +198,12 @@ class ProximalPolicyEWMA:
         if len(source_parameter_names) != len(source_parameters):
             raise ValueError("proximal model parameter count mismatch")
         self.parameter_indices = [
-            index
-            for index, name in enumerate(source_parameter_names)
-            if not name.startswith("value.")
+            index for index, name in enumerate(source_parameter_names) if name.startswith("policy.")
         ]
         proximal_parameters = dict(self.model.named_parameters())
         self.model_parameters = [
-            proximal_parameters[source_parameter_names[index]] for index in self.parameter_indices
+            proximal_parameters[source_parameter_names[index].removeprefix("policy.")]
+            for index in self.parameter_indices
         ]
         for parameter in self.model.parameters():
             parameter.requires_grad_(False)
@@ -288,8 +287,8 @@ class ProximalPolicyEWMA:
         self._copy_master_to_model()
 
 
-def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
-    model = ActorCritic(
+def create_model(args: argparse.Namespace, device: torch.device) -> PPOModel:
+    model = PPOModel(
         channels=args.model_channels,
         blocks=args.model_blocks,
     ).to(device=device)
@@ -307,7 +306,19 @@ def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
 def _model_forward(
     model: nn.Module, observations: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    return model(observations, False)  # type: ignore[call-arg]
+
+
+def _model_policy_logits(model: nn.Module, observations: torch.Tensor) -> torch.Tensor:
+    return model.policy_logits(observations, False)  # type: ignore[attr-defined, call-arg]
+
+
+def _proximal_policy_logits(model: nn.Module, observations: torch.Tensor) -> torch.Tensor:
     return model(observations)  # type: ignore[call-arg]
+
+
+def _model_value(model: nn.Module, observations: torch.Tensor) -> torch.Tensor:
+    return model.value_predictions(observations, False)  # type: ignore[attr-defined, call-arg]
 
 
 def _observation_normalizer(model: nn.Module) -> RunningObservationNormalizer | None:
@@ -352,7 +363,7 @@ def _evaluation_generator_seed(seed: int) -> int:
 
 
 def evaluate_policy(
-    model: ActorCritic,
+    model: PPOModel,
     args: argparse.Namespace,
     device: torch.device,
 ) -> tuple[dict[str, float | int], FixedSeedEvaluation]:
@@ -386,10 +397,9 @@ def evaluate_policy(
         if device.type == "cpu":
             mask = mask.clone()
         with torch.inference_mode():
-            logits, value = _model_forward(model, encoded)
-            nonfinite_output = _first_nonfinite_model_output(logits, value)
-            if nonfinite_output is not None:
-                raise FloatingPointError(f"non-finite {nonfinite_output} during evaluation")
+            logits = _model_policy_logits(model, encoded)
+            if not bool(torch.isfinite(logits).all().item()):
+                raise FloatingPointError("non-finite policy logits during evaluation")
             masked_logits = logits.float().masked_fill(~mask, -1e9)
             if args.eval_temperature == 0.0:
                 actions = masked_logits.argmax(dim=1)
@@ -449,7 +459,6 @@ def collect_rollout(
                 "rewards": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
                 "dones": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
                 "scores": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
-                "values": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
                 "masks": RolloutFieldSpec(
                     tuple(obs["mask"].shape[1:]), torch.bool, torch.device("cpu")
                 ),
@@ -457,6 +466,7 @@ def collect_rollout(
         )
     rollout_buffer.reset()
     forward_seconds = 0.0
+    critic_forward_seconds = 0.0
     env_step_seconds = 0.0
     for step in range(args.rollout_steps):
         encoded = torch.from_numpy(obs["planes"]).to(device=device)
@@ -472,12 +482,10 @@ def collect_rollout(
         _synchronize_device(device)
         forward_started = time.perf_counter()
         with torch.inference_mode():
-            logits, value = _model_forward(model, encoded)
-            nonfinite_output = _first_nonfinite_model_output(logits, value)
-            if nonfinite_output is not None:
+            logits = _model_policy_logits(model, encoded)
+            if not bool(torch.isfinite(logits).all().item()):
                 raise FloatingPointError(
-                    f"non-finite {nonfinite_output} during rollout; "
-                    "the model weights became non-finite"
+                    "non-finite actor output during rollout; the model weights became non-finite"
                 )
             dist = Categorical(logits=logits.float().masked_fill(~mask, -1e9))
             action = dist.sample()
@@ -495,7 +503,6 @@ def collect_rollout(
             rewards=torch.from_numpy(result.reward.copy()),
             dones=torch.from_numpy(result.done.astype(np.float32)),
             scores=torch.from_numpy(result.score.copy()),
-            values=value.float().cpu(),
             masks=mask.cpu(),
         )
         obs = result.obs
@@ -512,12 +519,27 @@ def collect_rollout(
     if normalizer is not None:
         next_encoded = normalizer.normalize(next_encoded)
     _synchronize_device(device)
-    forward_started = time.perf_counter()
+    critic_started = time.perf_counter()
     with torch.inference_mode():
-        next_value = _model_forward(model, next_encoded)[1].float().cpu()
+        next_value = _model_value(model, next_encoded).float().cpu()
     _synchronize_device(device)
-    forward_seconds += time.perf_counter() - forward_started
+    critic_forward_seconds += time.perf_counter() - critic_started
     stored = rollout_buffer.as_dict()
+    flat_observations = stored["obs"].flatten(0, 1).to(device)
+    batch_size = min(max(int(args.minibatch_size), 1), flat_observations.shape[0])
+    values: list[torch.Tensor] = []
+    for start in range(0, flat_observations.shape[0], batch_size):
+        index = slice(start, start + batch_size)
+        _synchronize_device(device)
+        critic_started = time.perf_counter()
+        with torch.inference_mode():
+            value = _model_value(model, flat_observations[index])
+            if not bool(torch.isfinite(value).all().item()):
+                raise FloatingPointError("non-finite critic output after rollout")
+        _synchronize_device(device)
+        critic_forward_seconds += time.perf_counter() - critic_started
+        values.append(value.float().cpu())
+    stored["values"] = torch.cat(values).reshape(args.rollout_steps, args.num_envs)
     raw_rewards = stored["rewards"]
     scaled_rewards = reward_scaler.scale(raw_rewards) if reward_scaler is not None else raw_rewards
     stacked_dones = stored["dones"]
@@ -543,13 +565,17 @@ def collect_rollout(
             "returns": advantages + stacked_values,
         },
         obs,
-        {"forward_seconds": forward_seconds, "env_step_seconds": env_step_seconds},
+        {
+            "forward_seconds": forward_seconds,
+            "critic_forward_seconds": critic_forward_seconds,
+            "env_step_seconds": env_step_seconds,
+        },
     )
 
 
 def update_model(
     model: nn.Module,
-    raw_model: ActorCritic,
+    raw_model: PPOModel,
     optimizer: OptimizerLike,
     rollout: dict[str, torch.Tensor],
     args: argparse.Namespace,
@@ -623,7 +649,7 @@ def update_model(
                 _synchronize_device(device)
                 proximal_forward_started = time.perf_counter()
                 with torch.inference_mode():
-                    proximal_logits, _ = _model_forward(proximal_model, observations[index])
+                    proximal_logits = _proximal_policy_logits(proximal_model, observations[index])
                     if not bool(torch.isfinite(proximal_logits).all().item()):
                         raise FloatingPointError("non-finite proximal policy logits")
                     proximal_dist = Categorical(
@@ -904,7 +930,6 @@ def main() -> None:
             "rewards": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
             "dones": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
             "scores": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
-            "values": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
             "masks": RolloutFieldSpec(
                 tuple(obs["mask"].shape[1:]), torch.bool, torch.device("cpu")
             ),
@@ -913,6 +938,7 @@ def main() -> None:
     started = time.time()
     timing_totals = {
         "forward_seconds": 0.0,
+        "critic_forward_seconds": 0.0,
         "backward_seconds": 0.0,
         "proximal_forward_seconds": 0.0,
         "env_step_seconds": 0.0,
@@ -962,6 +988,7 @@ def main() -> None:
             timing_totals["forward_seconds"] += (
                 rollout_timing["forward_seconds"] + stats["forward_seconds"]
             )
+            timing_totals["critic_forward_seconds"] += rollout_timing["critic_forward_seconds"]
             timing_totals["backward_seconds"] += stats["backward_seconds"]
             timing_totals["proximal_forward_seconds"] += stats["proximal_forward_seconds"]
             timing_totals["env_step_seconds"] += rollout_timing["env_step_seconds"]
@@ -1006,6 +1033,7 @@ def main() -> None:
             )
             metrics |= {
                 "timing/forward_seconds_total": timing_totals["forward_seconds"],
+                "timing/critic_forward_seconds_total": timing_totals["critic_forward_seconds"],
                 "timing/backward_seconds_total": timing_totals["backward_seconds"],
                 "timing/proximal_forward_seconds_total": timing_totals["proximal_forward_seconds"],
                 "timing/env_step_seconds_total": timing_totals["env_step_seconds"],
@@ -1043,7 +1071,9 @@ def main() -> None:
                 f"explained_variance={metrics['train/explained_variance']:.5f} "
                 f"epochs={int(stats['training_epochs'])} "
                 f"policy_loss={stats['policy_loss']:.5f} value_loss={stats['value_loss']:.5f} "
-                f"entropy={stats['entropy']:.5f} checkpoint={checkpoint}",
+                f"entropy={stats['entropy']:.5f} "
+                f"critic_forward_total={timing_totals['critic_forward_seconds']:.3f} "
+                f"checkpoint={checkpoint}",
                 flush=True,
             )
             if wandb_run is not None:

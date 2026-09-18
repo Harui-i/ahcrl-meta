@@ -269,6 +269,10 @@ def test_proximal_policy_ewma_uses_bias_corrected_fp32_weights_and_round_trips()
     for parameter in source:
         parameter.data.zero_()
     ewma = ProximalPolicyEWMA(model, source, center_of_mass=1.0)
+    assert all(not name.startswith("value.") for name, _ in ewma.model.named_parameters())
+    assert sum(parameter.numel() for parameter in ewma.model.parameters()) == sum(
+        parameter.numel() for parameter in model.policy.parameters()
+    )
     for parameter in source:
         parameter.data.fill_(2.0)
 

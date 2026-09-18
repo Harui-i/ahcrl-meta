@@ -11,7 +11,7 @@ import torch
 from torch import nn
 
 from ahcrl.contests.ahc063.encoder import CATEGORICAL_EXCLUDED_CHANNELS, NUM_PLANES
-from ahcrl.contests.ahc063.model import ActorCritic
+from ahcrl.contests.ahc063.model import PolicyNetwork, PPOModel
 from ahcrl.nn.observation import RunningObservationNormalizer
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -26,7 +26,7 @@ BASE91_ALPHABET = (
 class NormalizedPolicy(nn.Module):
     def __init__(
         self,
-        model: ActorCritic,
+        model: PolicyNetwork,
         normalizer: RunningObservationNormalizer | None,
         apply_softmax: bool = False,
     ) -> None:
@@ -35,14 +35,14 @@ class NormalizedPolicy(nn.Module):
         self.normalizer = normalizer
         self.apply_softmax = apply_softmax
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.normalizer is not None:
             mean, invstd = self.normalizer.effective_affine()
             x = (x.float() - mean.to(device=x.device)) * invstd.to(device=x.device)
-        logits, value = self.model(x)
+        logits = self.model(x)
         if self.apply_softmax:
             logits = torch.softmax(logits, dim=-1)
-        return logits, value
+        return logits
 
 
 def base91_encode(data: bytes) -> str:
@@ -83,7 +83,7 @@ def load_policy(
     apply_softmax: bool = False,
 ) -> NormalizedPolicy:
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    model = ActorCritic(
+    model = PPOModel(
         channels=int(config["model_channels"]),
         blocks=int(config["model_blocks"]),
     ).float()
@@ -97,7 +97,7 @@ def load_policy(
     model.observation_normalizer = normalizer
     model.load_state_dict(state["model"])
     model.eval()
-    policy = NormalizedPolicy(model, normalizer, apply_softmax).eval().float()
+    policy = NormalizedPolicy(model.policy, normalizer, apply_softmax).eval().float()
     return policy
 
 
@@ -353,7 +353,7 @@ int main() {
             planes.data(), {1, NUM_PLANES, MAX_N, MAX_N},
             torch::TensorOptions().dtype(torch::kFloat32)
         ).clone();
-        auto output = module.forward({input}).toTuple();
+        auto logits = module.forward({input}).toTensor().contiguous();
 @ACTION_SELECTION@
         if (action < 0) break;
         static constexpr char directions[4] = {'U', 'D', 'L', 'R'};
@@ -366,8 +366,7 @@ int main() {
 """
 
 
-ARGMAX_ACTION_SELECTION = """        auto logits = output->elements()[0].toTensor().contiguous();
-        auto legal = legal_actions(snake);
+ARGMAX_ACTION_SELECTION = """        auto legal = legal_actions(snake);
         int action = -1;
         float best = -numeric_limits<float>::infinity();
         for (int candidate = 0; candidate < 4; ++candidate) {
@@ -378,8 +377,7 @@ ARGMAX_ACTION_SELECTION = """        auto logits = output->elements()[0].toTenso
         }"""
 
 
-SOFTMAX_ACTION_SELECTION = """        auto probabilities =
-            output->elements()[0].toTensor().contiguous();
+SOFTMAX_ACTION_SELECTION = """        auto probabilities = logits;
         auto legal = legal_actions(snake);
         array<double, 4> weights{};
         double total = 0.0;
