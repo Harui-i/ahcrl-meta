@@ -28,6 +28,14 @@ make contest-init ahc068 TOOLS_URL="https://example.invalid/tools.zip"
 
 既存ファイルは上書きされません。問題文、公式tools、環境・行動定義、モデル、PPOエントリポイントはコンテストごとに実装します。
 
+## PPO-EWMA
+
+このリポジトリの標準方策最適化は PPO-EWMA です。AHC061/063 と
+`make contest-init` で生成する設定は、`proximal_ewma = true` と
+`proximal_ewma_com = 256.0` を明示します。通常 PPO との比較実験に限り、
+`--no-proximal-ewma` で無効化できます。既存 run を resume する場合は、保存済みの
+`config.json` が優先されるため、過去の通常 PPO run の再現性は維持されます。
+
 ## Torch Modula実験
 
 PPOの既定optimizerは従来どおりAdamWです。AHC061/063で、モデルに宣言された自然な

@@ -12,6 +12,11 @@ AtCoder提供のツール: `tools/`
 
 ## PPO訓練
 
+AHC063 の標準訓練方式は PPO-EWMA であり、標準設定は
+`proximal_ewma = true` と `proximal_ewma_com = 256.0` を指定する。通常 PPO との
+比較時だけ `--no-proximal-ewma` を使用する。既存 run の resume では保存済み
+`config.json` が優先されるため、過去の通常 PPO run の再現性は維持される。
+
 ```bash
 uv run python3 -m ahcrl.contests.ahc063.train_ppo \
   --config contests/ahc-063/configs/ppo_train.toml

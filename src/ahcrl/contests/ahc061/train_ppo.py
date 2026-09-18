@@ -1,4 +1,4 @@
-"""PPO trainer for AHC061 using the shared Rust vector-environment protocol."""
+"""PPO-EWMA trainer for AHC061 using the shared Rust vector-environment protocol."""
 
 import argparse
 import copy
@@ -74,8 +74,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "entropy_coef": 0.01,
     "value_coef": 0.5,
     "max_grad_norm": 0.5,
-    "proximal_ewma": False,
-    "proximal_ewma_com": 1024.0,
+    "proximal_ewma": True,
+    "proximal_ewma_com": 256.0,
     "reward_scale": True,
     "obs_norm": True,
     "obs_norm_epsilon": 1e-8,

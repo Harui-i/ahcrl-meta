@@ -26,6 +26,8 @@ CONFIG_DEFAULTS = {
     "entropy_coef": 0.0,
     "value_coef": 0.5,
     "max_grad_norm": 0.5,
+    "proximal_ewma": True,
+    "proximal_ewma_com": 256.0,
     "wandb_enabled": False,
     "wandb_project": "project",
     "wandb_name": None,
@@ -63,6 +65,10 @@ def test_starter_ppo_configs_use_shared_training_sections(tmp_path: Path) -> Non
         assert "train" not in parsed
         assert set(parsed) == {"training", "ppo", "wandb", "model"}
         assert config["wandb_project"] == "ahcrl-meta-ahc068"
+        assert config["proximal_ewma"] is True
+        assert config["proximal_ewma_com"] == 256.0
+        assert "ppo-ewma" in config["wandb_name"]
+        assert "ewma" in config["wandb_tags"]
 
 
 def test_starter_uses_shared_rust_env_protocol(tmp_path: Path) -> None:

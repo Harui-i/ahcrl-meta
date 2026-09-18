@@ -30,11 +30,14 @@ policy_unfreeze_explained_variance = 0.90
 policy_freeze_scope = "all_except_value"
 policy_warmup_epochs_multiplier = 4
 max_grad_norm = 0.5
+proximal_ewma = true
+proximal_ewma_com = 256.0
 
 [wandb]
 enabled = true
 project = "ahcrl-meta-ahc063"
-name = "ahc063-ppo-convnext"
+name = "ahc063-ppo-ewma-com256-convnext"
+tags = ["ahc063", "ppo-ewma", "ewma"]
 
 [model]
 channels = 256

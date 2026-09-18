@@ -27,6 +27,8 @@ minibatch_size = 1024
 entropy_coef = 0.0001
 value_coef = 0.5
 max_grad_norm = 0.5
+proximal_ewma = true
+proximal_ewma_com = 256.0
 reward_scale = true
 obs_norm = true
 obs_norm_epsilon = 1e-8
@@ -41,5 +43,5 @@ pf_particles = 16
 [wandb]
 enabled = true
 project = "ahcrl-meta-ahc061"
-name = "ahc061-ppo"
-tags = ["ahc061", "ppo"]
+name = "ahc061-ppo-ewma-com256"
+tags = ["ahc061", "ppo-ewma", "ewma"]

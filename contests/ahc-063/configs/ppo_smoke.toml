@@ -19,6 +19,8 @@ checkpoint_interval_updates = 1
 lr = 0.0003
 epochs = 1
 minibatch_size = 8
+proximal_ewma = true
+proximal_ewma_com = 256.0
 
 [model]
 channels = 16

@@ -1,4 +1,4 @@
-"""PPO trainer for AHC063 using a SphericalAttentionSimba policy."""
+"""PPO-EWMA trainer for AHC063 using a SphericalAttentionSimba policy."""
 
 import argparse
 import copy
@@ -83,8 +83,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "policy_freeze_scope": "all_except_value",
     "policy_warmup_epochs_multiplier": 4,
     "max_grad_norm": 0.5,
-    "proximal_ewma": False,
-    "proximal_ewma_com": 1024.0,
+    "proximal_ewma": True,
+    "proximal_ewma_com": 256.0,
     "reward_scale": True,
     "obs_norm": True,
     "obs_norm_epsilon": 1e-8,

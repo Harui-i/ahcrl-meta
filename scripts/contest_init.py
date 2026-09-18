@@ -86,12 +86,12 @@ def starter_files(slug: str, directory: str) -> dict[str, str]:
         f"contests/{directory}/problem_ja.md": "# 問題文（日本語）\n\nTODO: AtCoderの問題文を保存する。\n",
         f"contests/{directory}/problem_en.md": "# Problem Statement (English)\n\nTODO: Save the AtCoder problem statement here.\n",
         f"contests/{directory}/configs/ppo_smoke.toml": render(
-            """[training]\nnum_envs = 4\ntotal_steps = 4096\nrollout_steps = 32\nseed_start = 0\nseed_stride = 1\ndevice = \"cpu\"\ncompile = false\nartifact_dir = \"contests/__DIRECTORY__/artifacts/ppo\"\ncheckpoint_interval_updates = 1\n\n[ppo]\nlr = 0.0003\ngamma = 0.99\ngae_lambda = 0.95\nclip = 0.2\nepochs = 1\nminibatch_size = 32\nentropy_coef = 0.01\nvalue_coef = 0.5\nmax_grad_norm = 0.5\n\n[wandb]\nenabled = false\nproject = \"ahcrl-meta-__SLUG__\"\nname = \"__SLUG__-ppo-smoke\"\ntags = [\"__SLUG__\", \"ppo\", \"smoke\"]\n\n[model]\nchannels = 32\nblocks = 2\n""",
+            """[training]\nnum_envs = 4\ntotal_steps = 4096\nrollout_steps = 32\nseed_start = 0\nseed_stride = 1\ndevice = \"cpu\"\ncompile = false\nartifact_dir = \"contests/__DIRECTORY__/artifacts/ppo\"\ncheckpoint_interval_updates = 1\n\n[ppo]\nlr = 0.0003\ngamma = 0.99\ngae_lambda = 0.95\nclip = 0.2\nepochs = 1\nminibatch_size = 32\nentropy_coef = 0.01\nvalue_coef = 0.5\nmax_grad_norm = 0.5\nproximal_ewma = true\nproximal_ewma_com = 256.0\n\n[wandb]\nenabled = false\nproject = \"ahcrl-meta-__SLUG__\"\nname = \"__SLUG__-ppo-ewma-smoke-com256\"\ntags = [\"__SLUG__\", \"ppo-ewma\", \"ewma\", \"smoke\"]\n\n[model]\nchannels = 32\nblocks = 2\n""",
             slug=slug,
             directory=directory,
         ),
         f"contests/{directory}/configs/ppo_train.toml": render(
-            """[training]\nnum_envs = 256\ntotal_steps = 20000000\nrollout_steps = 128\nseed_start = 0\nseed_stride = 1\ndevice = \"cuda\"\ncompile = true\nartifact_dir = \"contests/__DIRECTORY__/artifacts/ppo\"\ncheckpoint_interval_updates = 40\n\n[ppo]\nlr = 0.0003\ngamma = 0.99\ngae_lambda = 0.95\nclip = 0.2\nepochs = 1\nminibatch_size = 1024\nentropy_coef = 0.001\nvalue_coef = 0.5\nmax_grad_norm = 0.5\n\n[wandb]\nenabled = true\nproject = \"ahcrl-meta-__SLUG__\"\nname = \"__SLUG__-ppo\"\ntags = [\"__SLUG__\", \"ppo\"]\n\n[model]\nchannels = 128\nblocks = 4\n""",
+            """[training]\nnum_envs = 256\ntotal_steps = 20000000\nrollout_steps = 128\nseed_start = 0\nseed_stride = 1\ndevice = \"cuda\"\ncompile = true\nartifact_dir = \"contests/__DIRECTORY__/artifacts/ppo\"\ncheckpoint_interval_updates = 40\n\n[ppo]\nlr = 0.0003\ngamma = 0.99\ngae_lambda = 0.95\nclip = 0.2\nepochs = 1\nminibatch_size = 1024\nentropy_coef = 0.001\nvalue_coef = 0.5\nmax_grad_norm = 0.5\nproximal_ewma = true\nproximal_ewma_com = 256.0\n\n[wandb]\nenabled = true\nproject = \"ahcrl-meta-__SLUG__\"\nname = \"__SLUG__-ppo-ewma-com256\"\ntags = [\"__SLUG__\", \"ppo-ewma\", \"ewma\"]\n\n[model]\nchannels = 128\nblocks = 4\n""",
             slug=slug,
             directory=directory,
         ),
@@ -105,7 +105,7 @@ def starter_files(slug: str, directory: str) -> dict[str, str]:
         f"src/ahcrl/contests/{slug}/__init__.py": "",
         f"src/ahcrl/contests/{slug}/encoder.py": """\"\"\"Contest-specific observation encoder.\"\"\"\n\n# TODO: Define the exact observation layout shared by Python and C++.\n""",
         f"src/ahcrl/contests/{slug}/model.py": """\"\"\"Contest-specific Actor-Critic model.\"\"\"\n\n# TODO: Reuse blocks from ahcrl.nn and implement the policy/value heads.\n""",
-        f"src/ahcrl/contests/{slug}/train_ppo.py": """\"\"\"Contest-specific PPO entry point.\n\nUse :class:`ahcrl.envs.RustVecEnv` with ``cargo_server_command`` and this\ncontest's ``rl-tools/Cargo.toml``. Reuse configuration resolution, run state,\ncheckpoints, W&B, and standard metrics from :mod:`ahcrl.training`; keep only\nthe model, rollout details, and contest metrics in this module.\"\"\"\n\n# TODO: Implement the contest-specific PPO loop after the Rust environment and model exist.\n""",
+        f"src/ahcrl/contests/{slug}/train_ppo.py": """\"\"\"Contest-specific PPO-EWMA entry point.\n\nUse :class:`ahcrl.envs.RustVecEnv` with ``cargo_server_command`` and this\ncontest's ``rl-tools/Cargo.toml``. Reuse configuration resolution, run state,\ncheckpoints, W&B, and standard metrics from :mod:`ahcrl.training`; keep only\nthe model, rollout details, and contest metrics in this module.\"\"\"\n\n# TODO: Implement the contest-specific PPO-EWMA loop after the Rust environment and model exist.\n""",
         f"contests/{directory}/scripts/README.md": """# Scripts\n\n`export_torchscript_submit.py` should be added after the observation encoder and C++\nstate transition logic are fixed. Use the AHC061/AHC063 exporters as references.\n""",
         f"contests/{directory}/rl-tools/Cargo.toml": render(
             """[package]\nname = \"__SLUG__-rl-tools\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nahcrl-env-core = { path = \"../../../crates/ahcrl-env-core\" }\nserde = { version = \"1\", features = [\"derive\"] }\nserde_json = \"1\"\ntools = { path = \"../tools\" }\n\n[profile.dev]\noverflow-checks = false\n\n[profile.test]\noverflow-checks = false\n""",
@@ -186,8 +186,8 @@ git diff --no-index /dev/null contests/ahc-063/tools/src/rl_bridge.rs
         "# TODO: ahcrl.nn の block を再利用して policy/value head を実装する。\n"
     )
     files[f"src/ahcrl/contests/{slug}/train_ppo.py"] = (
-        '"""コンテスト固有の PPO エントリポイント。"""\n\n'
-        "# TODO: Rust環境とモデルの完成後、コンテスト固有の PPO loop を実装する。\n"
+        '"""コンテスト固有の PPO-EWMA エントリポイント。"""\n\n'
+        "# TODO: Rust環境とモデルの完成後、コンテスト固有の PPO-EWMA loop を実装する。\n"
     )
     files[f"contests/{directory}/scripts/README.md"] = """# Scripts
 

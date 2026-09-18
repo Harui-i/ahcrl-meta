@@ -114,12 +114,28 @@ def test_parse_args_rejects_removed_fixed_step_options(tmp_path: Path) -> None:
 
 
 def test_parse_args_supports_proximal_ewma_and_rejects_invalid_com() -> None:
-    args = parse_args(["--proximal-ewma", "--proximal-ewma-com", "8"])
+    defaults = parse_args([])
+    assert defaults.proximal_ewma is True
+    assert defaults.proximal_ewma_com == 256.0
 
-    assert args.proximal_ewma is True
+    args = parse_args(["--no-proximal-ewma", "--proximal-ewma-com", "8"])
+
+    assert args.proximal_ewma is False
     assert args.proximal_ewma_com == 8.0
     with pytest.raises(ValueError, match="proximal_ewma_com"):
         parse_args(["--proximal-ewma-com", "0"])
+
+
+@pytest.mark.parametrize("config_name", ["ppo_smoke.toml", "ppo_train.toml", "ppo_ezcur.toml"])
+def test_tracked_ppo_configs_explicitly_enable_proximal_ewma(config_name: str) -> None:
+    config_path = (
+        Path(__file__).resolve().parents[3] / "contests" / "ahc-063" / "configs" / config_name
+    )
+
+    args = parse_args(["--config", str(config_path)])
+
+    assert args.proximal_ewma is True
+    assert args.proximal_ewma_com == 256.0
 
 
 def test_parse_args_supports_policy_warmup_and_rejects_invalid_values() -> None:

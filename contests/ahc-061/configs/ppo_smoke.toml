@@ -27,6 +27,8 @@ minibatch_size = 1024
 entropy_coef = 0.01
 value_coef = 0.5
 max_grad_norm = 0.5
+proximal_ewma = true
+proximal_ewma_com = 256.0
 reward_scale = true
 obs_norm = true
 

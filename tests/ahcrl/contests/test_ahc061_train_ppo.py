@@ -45,12 +45,28 @@ def test_parse_args_accepts_and_rejects_env_workers() -> None:
 
 
 def test_parse_args_supports_proximal_ewma_and_rejects_invalid_com() -> None:
-    args = parse_args(["--proximal-ewma", "--proximal-ewma-com", "8"])
+    defaults = parse_args([])
+    assert defaults.proximal_ewma is True
+    assert defaults.proximal_ewma_com == 256.0
 
-    assert args.proximal_ewma is True
+    args = parse_args(["--no-proximal-ewma", "--proximal-ewma-com", "8"])
+
+    assert args.proximal_ewma is False
     assert args.proximal_ewma_com == 8.0
     with pytest.raises(ValueError, match="proximal_ewma_com"):
         parse_args(["--proximal-ewma-com", "0"])
+
+
+@pytest.mark.parametrize("config_name", ["ppo_smoke.toml", "ppo_train.toml", "ppo_modula.toml"])
+def test_tracked_ppo_configs_explicitly_enable_proximal_ewma(config_name: str) -> None:
+    config_path = (
+        Path(__file__).resolve().parents[3] / "contests" / "ahc-061" / "configs" / config_name
+    )
+
+    args = parse_args(["--config", str(config_path)])
+
+    assert args.proximal_ewma is True
+    assert args.proximal_ewma_com == 256.0
 
 
 def test_proximal_policy_ewma_uses_bias_corrected_fp32_weights_and_round_trips() -> None:
