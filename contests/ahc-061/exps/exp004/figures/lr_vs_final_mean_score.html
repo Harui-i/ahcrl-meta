@@ -1,0 +1,21 @@
+<div class="ahc061-exp004-chart">
+  <style>
+    .ahc061-exp004-chart { color: #111827; font: 14px system-ui, sans-serif; max-width: 920px; }
+    .ahc061-exp004-chart .title { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+    .ahc061-exp004-chart .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 8px 84px; }
+    .ahc061-exp004-chart .legend i { display: inline-block; width: 18px; height: 3px; margin: 0 5px 3px 0; vertical-align: middle; }
+    .ahc061-exp004-chart svg { display: block; width: 100%; height: auto; }
+    .ahc061-exp004-chart text { fill: #111827; font-size: 12px; }
+    .ahc061-exp004-chart .axis, .ahc061-exp004-chart .grid { stroke: #cbd5e1; stroke-width: 1; }
+    .ahc061-exp004-chart .grid { opacity: .55; }
+    @media (max-width: 420px) { .ahc061-exp004-chart .legend { margin-left: 0; } }
+  </style>
+  <div class="title">AHC061 Modula + EWMA: learning rate vs. final mean score</div><div class="legend"><span><i style="background:#2563eb"></i>final mean score</span></div>
+  <svg viewBox="0 0 920 500" role="img" aria-label="AHC061 Modula + EWMA: learning rate vs. final mean score">
+    <line x1="84" y1="426.0" x2="890" y2="426.0" class="grid"/><text x="75" y="430.0" text-anchor="end">193k</text><line x1="84" y1="327.0" x2="890" y2="327.0" class="grid"/><text x="75" y="331.0" text-anchor="end">195k</text><line x1="84" y1="228.0" x2="890" y2="228.0" class="grid"/><text x="75" y="232.0" text-anchor="end">196k</text><line x1="84" y1="129.0" x2="890" y2="129.0" class="grid"/><text x="75" y="133.0" text-anchor="end">197k</text><line x1="84" y1="30.0" x2="890" y2="30.0" class="grid"/><text x="75" y="34.0" text-anchor="end">198k</text><line x1="84" y1="30" x2="84" y2="426" class="axis"/>
+    <line x1="84" y1="426" x2="890" y2="426" class="axis"/>
+    <line x1="84.0" y1="426" x2="84.0" y2="431" class="axis"/><text x="84.0" y="449" text-anchor="middle">0.2</text><line x1="245.2" y1="426" x2="245.2" y2="431" class="axis"/><text x="245.2" y="449" text-anchor="middle">0.23</text><line x1="406.4" y1="426" x2="406.4" y2="431" class="axis"/><text x="406.4" y="449" text-anchor="middle">0.264</text><line x1="567.6" y1="426" x2="567.6" y2="431" class="axis"/><text x="567.6" y="449" text-anchor="middle">0.303</text><line x1="728.8" y1="426" x2="728.8" y2="431" class="axis"/><text x="728.8" y="449" text-anchor="middle">0.348</text><line x1="890.0" y1="426" x2="890.0" y2="431" class="axis"/><text x="890.0" y="449" text-anchor="middle">0.4</text><polyline points="84.0,265.8 245.2,318.9 406.4,274.5 567.6,57.3 728.8,212.4 890.0,398.7" fill="none" stroke="#2563eb" stroke-width="2.5"/><circle cx="84.0" cy="265.8" r="4.5" fill="#2563eb"><title>final mean score: 195,282</title></circle><circle cx="245.2" cy="318.9" r="4.5" fill="#2563eb"><title>final mean score: 194,654</title></circle><circle cx="406.4" cy="274.5" r="4.5" fill="#2563eb"><title>final mean score: 195,179</title></circle><circle cx="567.6" cy="57.3" r="4.5" fill="#2563eb"><title>final mean score: 197,748</title></circle><circle cx="728.8" cy="212.4" r="4.5" fill="#2563eb"><title>final mean score: 195,914</title></circle><circle cx="890.0" cy="398.7" r="4.5" fill="#2563eb"><title>final mean score: 193,710</title></circle>
+    <text x="487.0" y="485" text-anchor="middle">Learning rate (log scale)</text>
+    <text x="20" y="250.0" text-anchor="middle" transform="rotate(-90 20 250.0)">Mean score</text>
+  </svg>
+</div>
