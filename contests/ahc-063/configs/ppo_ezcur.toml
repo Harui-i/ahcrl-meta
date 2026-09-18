@@ -37,14 +37,17 @@ name = "ahc063-ppo-ewma-ezcur-com256"
 tags = ["ahc063", "ppo-ewma", "ewma", "ezcur"]
 
 [model]
-channels = 256
-blocks = 2
+architecture = "slot_fusion_conv_v1"
+sequence_channels = 64
+sequence_blocks = 8
+spatial_channels = 128
+spatial_blocks = 4
+head_channels = 128
+head_blocks = 2
 
 [contest]
 max_steps_per_cell = 4
 reward_scale = true
-obs_norm = true
-obs_norm_epsilon = 1e-8
 fixed_n = 8
 fixed_m = 16
 

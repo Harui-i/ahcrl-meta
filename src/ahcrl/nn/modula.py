@@ -30,6 +30,7 @@ __all__ = [
     "ModularParallel",
     "ModularResidual",
     "ModularSequential",
+    "ModularTare",
     "build_modula_parameter_specs",
     "mark_bounded_diagonal_parameter",
     "mark_bounded_rms_parameter",
@@ -515,6 +516,8 @@ class ModulaGraphNode:
     def mass(self) -> float:
         if self.kind == "atom":
             return self.own_mass
+        if self.kind == "tare":
+            return self.own_mass
         return sum((child.mass for child in self.children), 0.0)
 
     @property
@@ -525,10 +528,18 @@ class ModulaGraphNode:
             return math.prod(child.sensitivity for child in self.children)
         if self.kind in {"parallel", "residual"}:
             return sum((child.sensitivity for child in self.children), 0.0)
+        if self.kind == "tare":
+            if len(self.children) != 1:
+                raise ValueError("tare node must have exactly one child")
+            return self.children[0].sensitivity
         raise ValueError(f"unknown Modula graph node kind: {self.kind}")
 
     def allocate(self, target_norm: float = 1.0) -> dict[str, float]:
-        if self.kind == "bond":
+        if self.kind in {"bond", "tare"}:
+            if self.kind == "tare" and len(self.children) != 1:
+                raise ValueError("tare node must have exactly one child")
+            if self.kind == "tare":
+                return self.children[0].allocate(target_norm)
             return {}
         if self.kind == "atom":
             if self.parameter_name is None:
@@ -599,6 +610,27 @@ class ModularResidual(nn.Module):
             "residual",
             children,
         )
+
+
+class ModularTare(nn.Module):
+    """Override the mass visible to the parent while preserving sensitivity.
+
+    Taring is deliberately a graph operation: the wrapped module keeps its
+    relative parameter allocation, while the parent stack allocates it as an
+    absolute mass.  The forward pass is an identity wrapper.
+    """
+
+    def __init__(self, module: nn.Module, absolute_mass: float) -> None:
+        super().__init__()
+        self.module = module
+        self.absolute_mass = _validate_nonnegative_finite(absolute_mass, name="absolute_mass")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.module(x)
+
+    def modula_node(self, prefix: str = "") -> ModulaGraphNode:
+        child = module_to_modula_graph(self.module, _join_name(prefix, "module"))
+        return ModulaGraphNode("tare", (child,), own_mass=self.absolute_mass)
 
 
 class ModularParallel(nn.Module):
@@ -689,7 +721,15 @@ def validate_modula_graph(graph: ModulaGraphNode) -> float:
     """
 
     def visit(node: ModulaGraphNode) -> float:
-        if node.kind not in {"atom", "bond", "parameter_group", "sequence", "parallel", "residual"}:
+        if node.kind not in {
+            "atom",
+            "bond",
+            "parameter_group",
+            "sequence",
+            "parallel",
+            "residual",
+            "tare",
+        }:
             raise ValueError(f"unknown Modula graph node kind: {node.kind}")
         if node.kind == "atom" and node.parameter_name is None:
             raise ValueError("atom node is missing parameter_name")
@@ -697,6 +737,10 @@ def validate_modula_graph(graph: ModulaGraphNode) -> float:
             return _validate_positive_finite(node.own_sensitivity, name=f"{node.kind} sensitivity")
 
         child_sensitivities = tuple(visit(child) for child in node.children)
+        if node.kind == "tare":
+            if len(child_sensitivities) != 1:
+                raise ValueError("tare node must have exactly one child")
+            return child_sensitivities[0]
         sensitivity = (
             math.prod(child_sensitivities)
             if node.kind == "sequence"

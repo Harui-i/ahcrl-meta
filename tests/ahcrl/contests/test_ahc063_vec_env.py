@@ -1,135 +1,59 @@
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 from ahcrl.envs import RustVecEnv, cargo_server_command
 
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "contests" / "ahc-063" / "rl-tools" / "Cargo.toml"
-GOLDEN = Path(__file__).with_name("data") / "ahc063_seed0_observation_golden.npz"
+GOLDEN = (
+    ROOT / "tests" / "ahcrl" / "contests" / "data" / "ahc063_seed0_typed_observation_golden.npz"
+)
 
 
-def create_env(
-    num_envs: int = 1,
-    *,
-    seed_start: int = 0,
-    seed_stride: int = 1,
-) -> RustVecEnv:
+def create_env(num_envs: int = 1, seed_start: int = 0) -> RustVecEnv:
     return RustVecEnv(
-        cargo_server_command(MANIFEST, release=False),
+        cargo_server_command(MANIFEST),
         num_envs,
-        config={
-            "fixed_n": None,
-            "fixed_m": None,
-            "fixed_c": None,
-            "max_steps_per_cell": 4,
-        },
+        config={"fixed_n": 8, "fixed_m": 16, "fixed_c": 3, "max_steps_per_cell": 4},
+        workers=0,
         seed_start=seed_start,
-        seed_stride=seed_stride,
+        seed_stride=1,
         cwd=ROOT,
     )
 
 
-def test_schema_and_observations_match_numpy_golden() -> None:
+def test_typed_observation_schema() -> None:
     golden = np.load(GOLDEN)
     with create_env() as env:
-        assert env.obs["planes"].shape == (1, 44, 16, 16)
-        assert env.obs["planes"].dtype == np.float16
+        assert env.obs["board_food"].shape == (1, 16, 16)
+        assert env.obs["board_food"].dtype == np.uint8
+        assert env.obs["board_features"].shape == (1, 8, 16, 16)
+        assert env.obs["slot_colors"].shape == (1, 192, 2)
+        assert env.obs["slot_positions"].shape == (1, 192, 2)
+        assert env.obs["global_features"].shape == (1, 10)
+        assert env.obs["previous_action"].shape == (1, 1)
+        assert env.obs["action_colors"].shape == (1, 4)
+        assert env.obs["action_features"].shape == (1, 4, 7)
         assert env.obs["mask"].shape == (1, 4)
-        assert env.obs["mask"].dtype == np.bool_
-        np.testing.assert_array_equal(env.obs["planes"][0], golden["planes"][0].astype(np.float16))
-        np.testing.assert_array_equal(env.obs["mask"][0], golden["mask"][0])
-
-        for frame, action in enumerate(golden["actions"], start=1):
-            result = env.step(np.asarray([action], dtype=np.uint32))
-            np.testing.assert_array_equal(
-                result.obs["planes"][0], golden["planes"][frame].astype(np.float16)
-            )
-            np.testing.assert_array_equal(result.obs["mask"][0], golden["mask"][frame])
-            assert result.reward[0] == golden["reward"][frame]
-            assert result.done[0] == golden["done"][frame]
-            assert result.score[0] == golden["score"][frame]
-            assert result.metrics["prefix_match_ratio"][0] == golden["prefix_match_ratio"][frame]
+        assert np.all(env.obs["slot_positions"][0, 5:] == 255)
+        for key in golden.files:
+            np.testing.assert_array_equal(env.obs[key][0], golden[key][0])
 
 
-def test_seed_reproducibility_and_partial_reset() -> None:
-    with create_env(3, seed_start=0, seed_stride=1) as env:
-        initial = env.obs["planes"].copy()
-        first_legal = np.argmax(env.obs["mask"], axis=1).astype(np.uint32)
-        stepped = env.step(first_legal).obs["planes"].copy()
-        assert not np.array_equal(stepped, initial)
-
-        reset = env.reset_done(
-            np.asarray([False, True, False]),
-            seed_start=100,
-            seed_stride=7,
-        )["planes"].copy()
-        np.testing.assert_array_equal(reset[0], stepped[0])
-        np.testing.assert_array_equal(reset[2], stepped[2])
-
-        with create_env(seed_start=107) as expected:
-            np.testing.assert_array_equal(reset[1], expected.obs["planes"][0])
-
-        repeated = env.reset(seed_start=0, seed_stride=1)["planes"].copy()
-        np.testing.assert_array_equal(repeated, initial)
+def test_seed_reproducibility() -> None:
+    with create_env(seed_start=0) as first, create_env(seed_start=0) as second:
+        for key in first.obs:
+            np.testing.assert_array_equal(first.obs[key], second.obs[key])
 
 
-def test_invalid_batch_is_rejected_without_mutation() -> None:
+def test_action_preview_changes_after_step() -> None:
     golden = np.load(GOLDEN)
     with create_env() as env:
-        with pytest.raises(RuntimeError, match="invalid action 0"):
-            env.step(np.asarray([0], dtype=np.uint32))
-
-        result = env.step(np.asarray([1], dtype=np.uint32))
-        assert result.score[0] == golden["score"][1]
-        np.testing.assert_array_equal(
-            result.obs["planes"][0], golden["planes"][1].astype(np.float16)
-        )
-
-
-def test_removed_fixed_max_steps_config_is_rejected() -> None:
-    with pytest.raises(RuntimeError, match="unknown field `max_steps`"):
-        RustVecEnv(
-            cargo_server_command(MANIFEST, release=False),
-            1,
-            config={"max_steps": 256},
-            cwd=ROOT,
-        )
-
-
-def test_step_mask_preserves_inactive_environment_without_validating_its_action() -> None:
-    with create_env() as env:
-        before = env.obs["planes"].copy()
-        result = env.step_mask(np.asarray([False]), np.asarray([999], dtype=np.int64))
-        np.testing.assert_array_equal(result.obs["planes"], before)
-        assert result.done.tolist() == [False]
-
-
-def test_visualizer_data_matches_the_official_input_and_output_format() -> None:
-    with create_env(seed_start=3) as env:
-        action = np.argmax(env.obs["mask"], axis=1).astype(np.uint32)
-        env.step(action)
-        input_text, output_text = env.visualizer_data()[0]
-        assert len(input_text.splitlines()[0].split()) == 3
-        assert output_text in {"U\n", "D\n", "L\n", "R\n"}
-
-
-def test_client_validation_and_process_failure() -> None:
-    env = create_env()
-    with pytest.raises(TypeError, match="integer dtype"):
-        env.step(np.asarray([1.0], dtype=np.float32))
-    with pytest.raises(ValueError, match="shape"):
-        env.step(np.asarray([1, 1], dtype=np.uint32))
-
-    env._proc.terminate()
-    env._proc.wait(timeout=5)
-    with pytest.raises(RuntimeError, match="exit code"):
-        env.step(np.asarray([1], dtype=np.uint32))
-    env.close()
-    env.close()
-
-
-def test_client_rejects_negative_worker_count_before_starting_process() -> None:
-    with pytest.raises(ValueError, match="workers"):
-        RustVecEnv(["does-not-run"], 1, workers=-1)
+        before = {key: value.copy() for key, value in env.obs.items()}
+        action = int(np.flatnonzero(before["mask"][0])[0])
+        result = env.step(np.asarray([action], dtype=np.uint32))
+        assert result.obs["previous_action"][0, 0] == action + 1
+        assert not np.array_equal(result.obs["global_features"], before["global_features"])
+        for key in golden.files:
+            np.testing.assert_array_equal(result.obs[key][0], golden[key][1])

@@ -10,22 +10,14 @@ use tools::{gen, Input, State, DIR};
 pub const MAX_BOARD_SIZE: usize = 16;
 pub const MAX_COLORS: usize = 7;
 pub const ACTION_COUNT: usize = 4;
-pub const NUM_PLANES: usize = 44;
+pub const MAX_SEQUENCE_LENGTH: usize = 192;
+pub const BOARD_FEATURE_COUNT: usize = 8;
+pub const GLOBAL_FEATURE_COUNT: usize = 10;
+pub const ACTION_FEATURE_COUNT: usize = 7;
+pub const POSITION_SENTINEL: u8 = 255;
 pub const INITIAL_SNAKE_LENGTH: usize = 5;
 const MAX_OFFICIAL_STEPS: usize = 100_000;
 const DEFAULT_MAX_STEPS_PER_CELL: usize = 4;
-
-fn plane_index(plane: usize, row: usize, col: usize) -> usize {
-    (plane * MAX_BOARD_SIZE + row) * MAX_BOARD_SIZE + col
-}
-
-fn fill_actual_board(planes: &mut [f32], n: usize, plane: usize, value: f32) {
-    for row in 0..n {
-        for col in 0..n {
-            planes[plane_index(plane, row, col)] = value;
-        }
-    }
-}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -97,9 +89,44 @@ impl EnvFactory for Ahc063Factory {
             protocol_version: PROTOCOL_VERSION,
             observations: vec![
                 TensorSpec {
-                    name: "planes".to_owned(),
+                    name: "board_food".to_owned(),
+                    dtype: DType::U8,
+                    shape: vec![MAX_BOARD_SIZE, MAX_BOARD_SIZE],
+                },
+                TensorSpec {
+                    name: "board_features".to_owned(),
                     dtype: DType::F16,
-                    shape: vec![NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE],
+                    shape: vec![BOARD_FEATURE_COUNT, MAX_BOARD_SIZE, MAX_BOARD_SIZE],
+                },
+                TensorSpec {
+                    name: "slot_colors".to_owned(),
+                    dtype: DType::U8,
+                    shape: vec![MAX_SEQUENCE_LENGTH, 2],
+                },
+                TensorSpec {
+                    name: "slot_positions".to_owned(),
+                    dtype: DType::U8,
+                    shape: vec![MAX_SEQUENCE_LENGTH, 2],
+                },
+                TensorSpec {
+                    name: "global_features".to_owned(),
+                    dtype: DType::F16,
+                    shape: vec![GLOBAL_FEATURE_COUNT],
+                },
+                TensorSpec {
+                    name: "previous_action".to_owned(),
+                    dtype: DType::U8,
+                    shape: vec![1],
+                },
+                TensorSpec {
+                    name: "action_colors".to_owned(),
+                    dtype: DType::U8,
+                    shape: vec![ACTION_COUNT],
+                },
+                TensorSpec {
+                    name: "action_features".to_owned(),
+                    dtype: DType::F16,
+                    shape: vec![ACTION_COUNT, ACTION_FEATURE_COUNT],
                 },
                 TensorSpec {
                     name: "mask".to_owned(),
@@ -223,64 +250,196 @@ impl Ahc063Env {
         prefix as f32 / self.input.M.max(1) as f32
     }
 
-    fn encode_planes(&self) -> Vec<f32> {
-        let mut planes = vec![0.0_f32; NUM_PLANES * MAX_BOARD_SIZE * MAX_BOARD_SIZE];
-        let view = state_view(&self.state);
-        let n = self.input.N;
-        let m = self.input.M;
-        let c = self.input.C;
-        let length = view.positions.len();
-
-        for row in 0..n {
-            for col in 0..n {
-                let food = view.food[row][col];
-                if food != 0 {
-                    planes[plane_index(food - 1, row, col)] = 1.0;
-                }
+    fn board_food(&self) -> Vec<u8> {
+        let view = self.state_view();
+        let mut output = vec![0_u8; MAX_BOARD_SIZE * MAX_BOARD_SIZE];
+        for row in 0..self.input.N {
+            for col in 0..self.input.N {
+                output[row * MAX_BOARD_SIZE + col] = view.food[row][col] as u8;
             }
         }
-        for (index, (&(row, col), &color)) in view.positions.iter().zip(view.colors).enumerate() {
-            planes[plane_index(7 + color - 1, row, col)] = 1.0;
-            planes[plane_index(14, row, col)] = f32::from(index == 0);
-            planes[plane_index(15, row, col)] = f32::from(0 < index && index < length - 1);
-            planes[plane_index(16, row, col)] = f32::from(index == length - 1);
-        }
-        if length < m {
-            fill_actual_board(&mut planes, n, 16 + self.input.d[length], 1.0);
-        }
-        for color in 1..=c {
-            let count = self.input.d[length..m]
-                .iter()
-                .filter(|&&value| value == color)
-                .count();
-            fill_actual_board(&mut planes, n, 23 + color, count as f32 / m.max(1) as f32);
-        }
+        output
+    }
+
+    fn state_view(&self) -> StateView<'_> {
+        state_view(&self.state)
+    }
+
+    fn board_features(&self) -> Vec<f32> {
+        let view = self.state_view();
+        let mut features = vec![0.0_f32; BOARD_FEATURE_COUNT * MAX_BOARD_SIZE * MAX_BOARD_SIZE];
+        let index = |channel: usize, row: usize, col: usize| {
+            (channel * MAX_BOARD_SIZE + row) * MAX_BOARD_SIZE + col
+        };
         let (head_row, head_col) = view.positions[0];
+        for row in 0..self.input.N {
+            for col in 0..self.input.N {
+                features[index(0, row, col)] = 1.0;
+                features[index(5, row, col)] = (row as f32 - head_row as f32) / 15.0;
+                features[index(6, row, col)] = (col as f32 - head_col as f32) / 15.0;
+                features[index(7, row, col)] = ((row as f32 - head_row as f32).abs()
+                    + (col as f32 - head_col as f32).abs())
+                    / 30.0;
+            }
+        }
+        for (segment, (&(row, col), _color)) in view.positions.iter().zip(view.colors).enumerate() {
+            features[index(1, row, col)] = 1.0;
+            features[index(2, row, col)] = f32::from(segment == 0);
+            features[index(3, row, col)] =
+                f32::from(segment > 0 && segment + 1 < view.positions.len());
+            features[index(4, row, col)] = f32::from(segment + 1 == view.positions.len());
+        }
+        features
+    }
+
+    fn slot_colors(&self) -> Vec<u8> {
+        let view = self.state_view();
+        let mut output = vec![0_u8; MAX_SEQUENCE_LENGTH * 2];
+        for p in 0..MAX_SEQUENCE_LENGTH {
+            if p < self.input.M {
+                output[2 * p] = self.input.d[p] as u8;
+            }
+            if p < view.colors.len() {
+                output[2 * p + 1] = view.colors[p] as u8;
+            }
+        }
+        output
+    }
+
+    fn slot_positions(&self) -> Vec<u8> {
+        let view = self.state_view();
+        let mut output = vec![POSITION_SENTINEL; MAX_SEQUENCE_LENGTH * 2];
+        for (p, &(row, col)) in view.positions.iter().take(MAX_SEQUENCE_LENGTH).enumerate() {
+            output[2 * p] = row as u8;
+            output[2 * p + 1] = col as u8;
+        }
+        output
+    }
+
+    fn error_count(&self, view: &StateView<'_>) -> usize {
+        view.colors
+            .iter()
+            .zip(&self.input.d)
+            .filter(|(actual, desired)| actual != desired)
+            .count()
+    }
+
+    fn global_features(&self) -> Vec<f32> {
+        let view = self.state_view();
         let food_count = view
             .food
             .iter()
             .flatten()
             .filter(|&&value| value != 0)
             .count();
-        let scalar_values = [
-            n as f32 / MAX_BOARD_SIZE as f32,
-            c as f32 / MAX_COLORS as f32,
-            length as f32 / m.max(1) as f32,
-            length.min(m) as f32 / m.max(1) as f32,
-            head_row as f32 / (n - 1).max(1) as f32,
-            head_col as f32 / (n - 1).max(1) as f32,
-            food_count as f32 / (m - INITIAL_SNAKE_LENGTH).max(1) as f32,
+        let errors = self.error_count(&view);
+        let correct_prefix = view
+            .colors
+            .iter()
+            .zip(&self.input.d)
+            .take_while(|(a, d)| a == d)
+            .count();
+        let denominator = (20_000 * self.input.M + self.max_steps).max(1) as f32;
+        vec![
+            self.input.N as f32 / 16.0,
+            self.input.M as f32 / 192.0,
+            self.input.C as f32 / 7.0,
+            view.positions.len() as f32 / self.input.M.max(1) as f32,
+            food_count as f32 / (self.input.M.saturating_sub(INITIAL_SNAKE_LENGTH)).max(1) as f32,
             view.turn as f32 / self.max_steps.max(1) as f32,
-            (self.state.score() - self.best_score) as f32 / 10_000.0,
-        ];
-        for (offset, value) in scalar_values.into_iter().enumerate() {
-            fill_actual_board(&mut planes, n, 31 + offset, value);
-        }
-        if let Some(action) = self.previous_action {
-            fill_actual_board(&mut planes, n, 40 + action, 1.0);
-        }
-        planes
+            (self.max_steps.saturating_sub(view.turn)) as f32 / self.max_steps.max(1) as f32,
+            errors as f32 / self.input.M.max(1) as f32,
+            correct_prefix as f32 / self.input.M.max(1) as f32,
+            (self.state.score() - self.best_score) as f32 / denominator,
+        ]
     }
+
+    fn previous_action_tensor(&self) -> Vec<u8> {
+        vec![self.previous_action.map_or(0, |action| action + 1) as u8]
+    }
+
+    fn preview(&self, action: usize) -> Option<ActionPreview> {
+        if self.legal_mask()[action] == 0 {
+            return None;
+        }
+        let view = self.state_view();
+        let (row, col) = view.positions[0];
+        let (dr, dc) = [(-1_i32, 0_i32), (1, 0), (0, -1), (0, 1)][action];
+        let destination = ((row as i32 + dr) as usize, (col as i32 + dc) as usize);
+        let old_length = view.positions.len();
+        let food = view.food[destination.0][destination.1];
+        let mut length = if food != 0 {
+            old_length + 1
+        } else {
+            old_length
+        };
+        let mut collision_index = 0;
+        if food == 0 {
+            for h in 1..=old_length.saturating_sub(2) {
+                if view.positions[h - 1] == destination {
+                    collision_index = h;
+                    length = h + 1;
+                    break;
+                }
+            }
+        }
+        let mut new_errors: i32 = 0;
+        for p in 0..length {
+            let color = if p < old_length { view.colors[p] } else { food };
+            if self.input.d[p] != color {
+                new_errors += 1;
+            }
+        }
+        let old_errors = self.error_count(&view) as i32;
+        let score_after = (view.turn + 1) as i64
+            + 10_000 * (new_errors as i64 + 2 * (self.input.M as i64 - length as i64));
+        Some(ActionPreview {
+            food,
+            collision_index,
+            length,
+            food_match: food != 0 && old_length < self.input.M && food == self.input.d[old_length],
+            body_collision: collision_index != 0,
+            error_delta: new_errors - old_errors,
+            score_delta: score_after - self.state.score(),
+        })
+    }
+
+    fn action_colors(&self) -> Vec<u8> {
+        (0..ACTION_COUNT)
+            .map(|action| self.preview(action).map_or(0, |p| p.food as u8))
+            .collect()
+    }
+
+    fn action_features(&self) -> Vec<f32> {
+        let mut output = vec![0.0_f32; ACTION_COUNT * ACTION_FEATURE_COUNT];
+        for action in 0..ACTION_COUNT {
+            if let Some(preview) = self.preview(action) {
+                let offset = action * ACTION_FEATURE_COUNT;
+                output[offset] = f32::from(preview.food_match);
+                output[offset + 1] = f32::from(preview.body_collision);
+                output[offset + 2] = preview.collision_index as f32 / self.input.M.max(1) as f32;
+                output[offset + 3] = preview.length as f32 / self.input.M.max(1) as f32;
+                output[offset + 4] =
+                    (preview.length as i32 - self.state_view().positions.len() as i32) as f32
+                        / self.input.M.max(1) as f32;
+                output[offset + 5] = preview.error_delta as f32 / self.input.M.max(1) as f32;
+                output[offset + 6] =
+                    preview.score_delta as f32 / (20_000 * self.input.M + 1) as f32;
+            }
+        }
+        output
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ActionPreview {
+    food: usize,
+    collision_index: usize,
+    length: usize,
+    food_match: bool,
+    body_collision: bool,
+    error_delta: i32,
+    score_delta: i64,
 }
 
 impl ContestEnv for Ahc063Env {
@@ -328,7 +487,49 @@ impl ContestEnv for Ahc063Env {
 
     fn write_observation(&self, name: &str, destination: &mut [u8]) -> Result<(), String> {
         match name {
-            "planes" => write_f16_slice(&self.encode_planes(), destination),
+            "board_food" => {
+                let values = self.board_food();
+                if destination.len() != values.len() {
+                    return Err("board_food destination size mismatch".to_owned());
+                }
+                destination.copy_from_slice(&values);
+                Ok(())
+            }
+            "board_features" => write_f16_slice(&self.board_features(), destination),
+            "slot_colors" => {
+                let values = self.slot_colors();
+                if destination.len() != values.len() {
+                    return Err("slot_colors destination size mismatch".to_owned());
+                }
+                destination.copy_from_slice(&values);
+                Ok(())
+            }
+            "slot_positions" => {
+                let values = self.slot_positions();
+                if destination.len() != values.len() {
+                    return Err("slot_positions destination size mismatch".to_owned());
+                }
+                destination.copy_from_slice(&values);
+                Ok(())
+            }
+            "global_features" => write_f16_slice(&self.global_features(), destination),
+            "previous_action" => {
+                let values = self.previous_action_tensor();
+                if destination.len() != values.len() {
+                    return Err("previous_action destination size mismatch".to_owned());
+                }
+                destination.copy_from_slice(&values);
+                Ok(())
+            }
+            "action_colors" => {
+                let values = self.action_colors();
+                if destination.len() != values.len() {
+                    return Err("action_colors destination size mismatch".to_owned());
+                }
+                destination.copy_from_slice(&values);
+                Ok(())
+            }
+            "action_features" => write_f16_slice(&self.action_features(), destination),
             "mask" => {
                 let mask = self.legal_mask();
                 if destination.len() != mask.len() {
@@ -433,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn drawdown_plane_tracks_current_score_above_best() {
+    fn global_feature_tracks_current_score_above_best() {
         let mut slot = Ahc063Env::from_seed(0, &default_config()).unwrap();
         let view = state_view(&slot.state);
         let (row, col) = view.positions[0];
@@ -451,8 +652,14 @@ mod tests {
         let outcome = slot.step(action as u32).unwrap();
 
         assert_eq!(outcome.reward, 0.0);
-        let planes = slot.encode_planes();
-        assert!((planes[plane_index(39, 0, 0)] - 0.0001).abs() < 1e-7);
+        let features = slot.global_features();
+        assert!(
+            (features[9]
+                - (slot.state.score() - slot.best_score) as f32
+                    / (20_000 * slot.input.M + 1) as f32)
+                .abs()
+                < 1e-7
+        );
     }
 
     #[test]
@@ -510,5 +717,73 @@ mod tests {
         assert_eq!(slot.actions.len(), expected_steps);
         assert!(outcome.done);
         assert!(slot.validate_action(0).is_err());
+    }
+
+    #[test]
+    fn action_preview_matches_official_apply_for_random_trajectories() {
+        for seed in [0_u64, 1, 7, 99] {
+            let mut slot = Ahc063Env::from_seed(seed, &default_config()).unwrap();
+            for turn in 0..128 {
+                if slot.done {
+                    break;
+                }
+                let mask = slot.legal_mask();
+                let features = slot.action_features();
+                for (action, &legal) in mask.iter().enumerate() {
+                    if legal == 0 {
+                        continue;
+                    }
+                    let mut actions = slot.actions.clone();
+                    actions.push(action);
+                    let (_, error, candidate) = compute_score_details(&slot.input, &actions);
+                    assert_eq!(error, "");
+                    let candidate_view = state_view(&candidate);
+                    let offset = action * ACTION_FEATURE_COUNT;
+                    let current_view = state_view(&slot.state);
+                    let current_errors = slot.error_count(&current_view) as i32;
+                    let candidate_errors = slot.error_count(&candidate_view) as i32;
+                    assert!(
+                        (features[offset + 3]
+                            - candidate_view.positions.len() as f32 / slot.input.M as f32)
+                            .abs()
+                            < 1e-5,
+                        "seed={seed} turn={turn} action={action} M={} got={} expected={} len={} features={:?}",
+                        slot.input.M,
+                        features[offset + 3],
+                        candidate_view.positions.len() as f32 / slot.input.M as f32,
+                        candidate_view.positions.len(),
+                        &features[offset..offset + ACTION_FEATURE_COUNT]
+                    );
+                    assert!(
+                        (features[offset + 4]
+                            - (candidate_view.positions.len() as i32
+                                - current_view.positions.len() as i32)
+                                as f32
+                                / slot.input.M as f32)
+                            .abs()
+                            < 1e-5
+                    );
+                    assert!(
+                        (features[offset + 5]
+                            - (candidate_errors - current_errors) as f32 / slot.input.M as f32)
+                            .abs()
+                            < 1e-5
+                    );
+                    assert!(
+                        (features[offset + 6]
+                            - (candidate.score() - slot.state.score()) as f32
+                                / (20_000 * slot.input.M + 1) as f32)
+                            .abs()
+                            < 1e-5
+                    );
+                }
+                let action = mask
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, &legal)| (legal != 0).then_some(index))
+                    .unwrap_or(turn % ACTION_COUNT);
+                slot.step(action as u32).unwrap();
+            }
+        }
     }
 }

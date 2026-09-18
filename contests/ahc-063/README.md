@@ -23,19 +23,18 @@ uv run python3 -m ahcrl.contests.ahc063.train_ppo \
 ```
 
 学習成果物は `contests/ahc-063/artifacts/ppo/run_*/` に保存される。各 run の
-`checkpoint_latest.pt` が export 対象で、`config.json` からモデル構成と
-観測正規化の状態を復元する。
+`checkpoint_latest.pt` が export 対象で、`config.json` から
+`slot_fusion_conv_v1` の構成を復元する。旧44-plane checkpointとの互換性はない。
 
-環境は各時点までの公式絶対スコアの最小値を trajectory best として保持する。
-`score` は trajectory best、reward は trajectory best を更新した量を `10000` で
-割った非負値である。盤面上の現在スコアが best より悪い場合、その差も観測 plane に
-含める。episode と提出コードの探索上限はともに `max_steps_per_cell * N^2` で、標準の
+観測は`board_food`、8枚の`board_features`、192 slotの色/位置、10個のglobal値、
+前手、4方向の food 色・1手 preview特徴・legal maskからなるtyped tensor schemaである。
+盤面とslotをそれぞれModula ResNet/ConvNeXtで符号化し、Actor/Criticは重みを共有しない。
+episode と提出コードの探索上限はともに `max_steps_per_cell * N^2` で、標準の
 `max_steps_per_cell = 4` では N=8 が256手、N=16が1024手となる。
 
 visualizer と提出コードが出力するのは best prefix ではなく、実際に選択した全行動である。
 したがって環境が報告する trajectory-best score と、全出力を公式 scorer で採点した最終
-状態のscoreは一致しない場合がある。drawdown plane の追加により観測は44 planesとなり、
-43 planesで学習した既存checkpointとは互換性がない。
+状態のscoreは一致しない場合がある。
 
 ## 学習済みモデルの export と評価
 
@@ -53,7 +52,7 @@ uv run python3 contests/ahc-063/scripts/export_torchscript_submit.py \
 cp "$RUN_DIR/submit.cpp" contests/ahc-063/eval/ahc063/main.cpp
 ```
 
-exporter は TorchScript モデル、観測正規化、および盤面遷移を `submit.cpp` に埋め込む。
+exporter は9入力TorchScript actor、typed観測encoder、および盤面遷移を `submit.cpp` に埋め込む。
 デフォルトは各手で最大 logit の合法手を選ぶ決定的な方策である。確率的に行動をサンプルしたい場合は
 export 時に `--softmax` を追加する。
 

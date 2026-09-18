@@ -23,15 +23,19 @@ proximal_ewma = true
 proximal_ewma_com = 256.0
 
 [model]
-channels = 16
-blocks = 1
+architecture = "slot_fusion_conv_v1"
+sequence_channels = 16
+sequence_blocks = 1
+spatial_channels = 32
+spatial_blocks = 1
+head_channels = 32
+head_blocks = 1
 
 [contest]
 fixed_n = 8
 fixed_m = 16
 fixed_c = 3
 reward_scale = false
-obs_norm = false
 
 [evaluation]
 enabled = false

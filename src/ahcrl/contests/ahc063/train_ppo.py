@@ -1,4 +1,4 @@
-"""PPO-EWMA trainer for AHC063 using a SphericalAttentionSimba policy."""
+"""PPO-EWMA trainer for the AHC063 slot-fusion actor/critic."""
 
 import argparse
 import copy
@@ -14,7 +14,6 @@ from torch.distributions import Categorical, kl_divergence
 
 from ahcrl.envs import RustVecEnv, cargo_server_command
 from ahcrl.nn.modula import validate_modula_graph
-from ahcrl.nn.observation import RunningObservationNormalizer
 from ahcrl.training import (
     FixedSeedEvaluation,
     FP32MasterWeights,
@@ -44,7 +43,6 @@ from ahcrl.training import (
 )
 from ahcrl.training.ppo import policy_surrogate, tensor_range
 
-from .encoder import CATEGORICAL_EXCLUDED_CHANNELS, NUM_PLANES
 from .model import PPOModel
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -83,8 +81,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "proximal_ewma": True,
     "proximal_ewma_com": 256.0,
     "reward_scale": True,
-    "obs_norm": True,
-    "obs_norm_epsilon": 1e-8,
     "artifact_dir": ROOT / "contests/ahc-063/artifacts/ppo",
     "checkpoint_interval_updates": 20,
     "eval_enabled": False,
@@ -96,8 +92,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "eval_fixed_m": None,
     "eval_fixed_c": None,
     "eval_max_steps_per_cell": 4,
-    "model_channels": 128,
-    "model_blocks": 3,
+    "model_architecture": "slot_fusion_conv_v1",
+    "model_sequence_channels": 64,
+    "model_sequence_blocks": 8,
+    "model_spatial_channels": 128,
+    "model_spatial_blocks": 4,
+    "model_head_channels": 128,
+    "model_head_blocks": 2,
     "wandb_enabled": False,
     "wandb_project": "ahcrl-meta",
     "wandb_entity": None,
@@ -289,42 +290,50 @@ class ProximalPolicyEWMA:
 
 def create_model(args: argparse.Namespace, device: torch.device) -> PPOModel:
     model = PPOModel(
-        channels=args.model_channels,
-        blocks=args.model_blocks,
+        architecture=args.model_architecture,
+        sequence_channels=args.model_sequence_channels,
+        sequence_blocks=args.model_sequence_blocks,
+        spatial_channels=args.model_spatial_channels,
+        spatial_blocks=args.model_spatial_blocks,
+        head_channels=args.model_head_channels,
+        head_blocks=args.model_head_blocks,
     ).to(device=device)
     if device.type == "cuda":
         model = model.to(dtype=MODEL_DTYPE)
-    if args.obs_norm:
-        model.observation_normalizer = RunningObservationNormalizer(
-            NUM_PLANES,
-            args.obs_norm_epsilon,
-            excluded_channels=CATEGORICAL_EXCLUDED_CHANNELS,
-        ).to(device=device)
     return model
 
 
+OBSERVATION_KEYS = (
+    "board_food",
+    "board_features",
+    "slot_colors",
+    "slot_positions",
+    "global_features",
+    "previous_action",
+    "action_colors",
+    "action_features",
+    "mask",
+)
+
+
 def _model_forward(
-    model: nn.Module, observations: torch.Tensor
+    model: nn.Module, observations: tuple[torch.Tensor, ...]
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    return model(observations, False)  # type: ignore[call-arg]
+    return model(*observations)  # type: ignore[call-arg]
 
 
-def _model_policy_logits(model: nn.Module, observations: torch.Tensor) -> torch.Tensor:
-    return model.policy_logits(observations, False)  # type: ignore[attr-defined, call-arg]
+def _model_policy_logits(model: nn.Module, observations: tuple[torch.Tensor, ...]) -> torch.Tensor:
+    return model.policy_logits(*observations)  # type: ignore[attr-defined, call-arg]
 
 
-def _proximal_policy_logits(model: nn.Module, observations: torch.Tensor) -> torch.Tensor:
-    return model(observations)  # type: ignore[call-arg]
+def _proximal_policy_logits(
+    model: nn.Module, observations: tuple[torch.Tensor, ...]
+) -> torch.Tensor:
+    return model(*observations)  # type: ignore[call-arg]
 
 
-def _model_value(model: nn.Module, observations: torch.Tensor) -> torch.Tensor:
-    return model.value_predictions(observations, False)  # type: ignore[attr-defined, call-arg]
-
-
-def _observation_normalizer(model: nn.Module) -> RunningObservationNormalizer | None:
-    original = getattr(model, "_orig_mod", model)
-    normalizer = getattr(original, "observation_normalizer", None)
-    return normalizer if isinstance(normalizer, RunningObservationNormalizer) else None
+def _model_value(model: nn.Module, observations: tuple[torch.Tensor, ...]) -> torch.Tensor:
+    return model.value_predictions(*observations[:6])  # type: ignore[attr-defined, call-arg]
 
 
 def _first_nonfinite_model_output(logits: torch.Tensor, value: torch.Tensor) -> str | None:
@@ -351,7 +360,28 @@ def _to_model_tensor(array: np.ndarray, device: torch.device) -> torch.Tensor:
     tensor = torch.from_numpy(array).to(device=device)
     if device.type == "cpu":
         tensor = tensor.clone()
+    if array.dtype in (np.uint8, np.bool_):
+        return tensor.to(dtype=torch.uint8)
     return tensor.to(dtype=MODEL_DTYPE if device.type == "cuda" else torch.float32)
+
+
+def _observation_tensors(
+    obs: dict[str, np.ndarray], device: torch.device
+) -> tuple[torch.Tensor, ...]:
+    return tuple(_to_model_tensor(obs[key], device) for key in OBSERVATION_KEYS)
+
+
+def _flatten_observations(
+    stored: dict[str, torch.Tensor],
+    *,
+    device: torch.device,
+    keys: tuple[str, ...] = OBSERVATION_KEYS,
+) -> tuple[torch.Tensor, ...]:
+    tensors = []
+    for key in keys:
+        value = stored[key] if key in stored else stored[f"obs_{key}"]
+        tensors.append(value.flatten(0, 1).to(device))
+    return tuple(tensors)
 
 
 def _evaluation_generator_seed(seed: int) -> int:
@@ -389,13 +419,8 @@ def evaluate_policy(
     def select_actions(
         obs: dict[str, np.ndarray], active: np.ndarray, seeds: np.ndarray
     ) -> np.ndarray:
-        encoded = _to_model_tensor(obs["planes"], device)
-        normalizer = _observation_normalizer(model)
-        if normalizer is not None:
-            encoded = normalizer.normalize(encoded)
-        mask = torch.from_numpy(obs["mask"]).to(device=device)
-        if device.type == "cpu":
-            mask = mask.clone()
+        encoded = _observation_tensors(obs, device)
+        mask = encoded[-1].bool()
         with torch.inference_mode():
             logits = _model_policy_logits(model, encoded)
             if not bool(torch.isfinite(logits).all().item()):
@@ -449,11 +474,20 @@ def collect_rollout(
     if rollout_buffer is None:
         model_device = device if device.type == "cuda" else torch.device("cpu")
         model_dtype = MODEL_DTYPE if device.type == "cuda" else torch.float32
+        observation_specs = {
+            key: RolloutFieldSpec(
+                tuple(obs[key].shape[1:]),
+                torch.uint8 if obs[key].dtype == np.uint8 else model_dtype,
+                torch.device("cpu") if obs[key].dtype == np.uint8 else model_device,
+            )
+            for key in OBSERVATION_KEYS
+        }
+        observation_specs.pop("mask")
         rollout_buffer = RolloutBuffer(
             args.rollout_steps,
             args.num_envs,
             {
-                "obs": RolloutFieldSpec(tuple(obs["planes"].shape[1:]), model_dtype, model_device),
+                **{f"obs_{key}": spec for key, spec in observation_specs.items()},
                 "actions": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
                 "logprobs": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
                 "rewards": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
@@ -469,16 +503,8 @@ def collect_rollout(
     critic_forward_seconds = 0.0
     env_step_seconds = 0.0
     for step in range(args.rollout_steps):
-        encoded = torch.from_numpy(obs["planes"]).to(device=device)
-        if device.type == "cpu":
-            encoded = encoded.clone()
-        encoded = encoded.to(dtype=MODEL_DTYPE if device.type == "cuda" else torch.float32)
-        normalizer = _observation_normalizer(model)
-        if normalizer is not None:
-            encoded = normalizer.update_and_normalize(encoded)
-        mask = torch.from_numpy(obs["mask"]).to(device=device)
-        if device.type == "cpu":
-            mask = mask.clone()
+        encoded = _observation_tensors(obs, device)
+        mask = encoded[-1].bool()
         _synchronize_device(device)
         forward_started = time.perf_counter()
         with torch.inference_mode():
@@ -495,9 +521,12 @@ def collect_rollout(
         env_step_started = time.perf_counter()
         result = env.step(action.cpu().numpy())
         env_step_seconds += time.perf_counter() - env_step_started
+        stored_observations = {
+            f"obs_{key}": encoded[index] for index, key in enumerate(OBSERVATION_KEYS[:-1])
+        }
         rollout_buffer.store(
             step,
-            obs=encoded,
+            **stored_observations,
             actions=action.cpu(),
             logprobs=logprob.float().cpu(),
             rewards=torch.from_numpy(result.reward.copy()),
@@ -513,11 +542,7 @@ def collect_rollout(
                 args.seed_stride,
             )
 
-    next_encoded = torch.from_numpy(obs["planes"]).to(device=device)
-    next_encoded = next_encoded.to(dtype=MODEL_DTYPE if device.type == "cuda" else torch.float32)
-    normalizer = _observation_normalizer(model)
-    if normalizer is not None:
-        next_encoded = normalizer.normalize(next_encoded)
+    next_encoded = _observation_tensors(obs, device)
     _synchronize_device(device)
     critic_started = time.perf_counter()
     with torch.inference_mode():
@@ -525,15 +550,15 @@ def collect_rollout(
     _synchronize_device(device)
     critic_forward_seconds += time.perf_counter() - critic_started
     stored = rollout_buffer.as_dict()
-    flat_observations = stored["obs"].flatten(0, 1).to(device)
-    batch_size = min(max(int(args.minibatch_size), 1), flat_observations.shape[0])
+    flat_observations = _flatten_observations(stored, device=device, keys=OBSERVATION_KEYS[:-1])
+    batch_size = min(max(int(args.minibatch_size), 1), flat_observations[0].shape[0])
     values: list[torch.Tensor] = []
-    for start in range(0, flat_observations.shape[0], batch_size):
+    for start in range(0, flat_observations[0].shape[0], batch_size):
         index = slice(start, start + batch_size)
         _synchronize_device(device)
         critic_started = time.perf_counter()
         with torch.inference_mode():
-            value = _model_value(model, flat_observations[index])
+            value = _model_value(model, tuple(item[index] for item in flat_observations))
             if not bool(torch.isfinite(value).all().item()):
                 raise FloatingPointError("non-finite critic output after rollout")
         _synchronize_device(device)
@@ -586,14 +611,14 @@ def update_model(
 ) -> dict[str, float]:
     if (proximal_ewma is None) != (proximal_model is None):
         raise ValueError("proximal EWMA state and model must be provided together")
-    observations = rollout["obs"].flatten(0, 1).to(device)
+    observations = _flatten_observations(rollout, device=device, keys=OBSERVATION_KEYS[:-1])
     actions = rollout["actions"].flatten().to(device)
     old_logprobs = rollout["logprobs"].flatten().to(device)
     advantages = rollout["advantages"].flatten().to(device)
     returns = rollout["returns"].flatten().to(device)
     masks = rollout["masks"].flatten(0, 1).to(device)
     advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
-    batch_size = observations.shape[0]
+    batch_size = observations[0].shape[0]
     minibatch_size = min(args.minibatch_size, batch_size)
     totals = {
         "policy_loss": 0.0,
@@ -631,7 +656,10 @@ def update_model(
             index = permutation[start : start + minibatch_size]
             _synchronize_device(device)
             forward_started = time.perf_counter()
-            logits, value = _model_forward(model, observations[index])
+            observation_batch = tuple(item[index] for item in observations) + (
+                masks[index].to(dtype=torch.uint8),
+            )
+            logits, value = _model_forward(model, observation_batch)
             logits_max_abs = max(logits_max_abs, float(logits.float().abs().max().item()))
             value_max_abs = max(value_max_abs, float(value.float().abs().max().item()))
             if not bool(torch.isfinite(logits).all().item()) or not bool(
@@ -649,7 +677,7 @@ def update_model(
                 _synchronize_device(device)
                 proximal_forward_started = time.perf_counter()
                 with torch.inference_mode():
-                    proximal_logits = _proximal_policy_logits(proximal_model, observations[index])
+                    proximal_logits = _proximal_policy_logits(proximal_model, observation_batch)
                     if not bool(torch.isfinite(proximal_logits).all().item()):
                         raise FloatingPointError("non-finite proximal policy logits")
                     proximal_dist = Categorical(
@@ -920,11 +948,18 @@ def main() -> None:
         args.rollout_steps,
         args.num_envs,
         {
-            "obs": RolloutFieldSpec(
-                tuple(obs["planes"].shape[1:]),
-                MODEL_DTYPE if device.type == "cuda" else torch.float32,
-                device if device.type == "cuda" else torch.device("cpu"),
-            ),
+            **{
+                f"obs_{key}": RolloutFieldSpec(
+                    tuple(obs[key].shape[1:]),
+                    torch.uint8
+                    if obs[key].dtype == np.uint8
+                    else (MODEL_DTYPE if device.type == "cuda" else torch.float32),
+                    torch.device("cpu")
+                    if obs[key].dtype == np.uint8
+                    else (device if device.type == "cuda" else torch.device("cpu")),
+                )
+                for key in OBSERVATION_KEYS[:-1]
+            },
             "actions": RolloutFieldSpec((), torch.int64, torch.device("cpu")),
             "logprobs": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
             "rewards": RolloutFieldSpec((), torch.float32, torch.device("cpu")),
@@ -1160,8 +1195,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     config["init_checkpoint"] = init_checkpoint
     if not isinstance(config["env_workers"], int) or config["env_workers"] < 0:
         raise ValueError("env_workers must be a non-negative integer")
-    if config["model_channels"] % 4:
-        raise ValueError("model_channels must be divisible by four")
+    if config["model_architecture"] != "slot_fusion_conv_v1":
+        raise ValueError("architecture must be slot_fusion_conv_v1")
+    for key in (
+        "model_sequence_channels",
+        "model_sequence_blocks",
+        "model_spatial_channels",
+        "model_spatial_blocks",
+        "model_head_channels",
+        "model_head_blocks",
+    ):
+        if config[key] <= 0:
+            raise ValueError(f"{key} must be positive")
     if config["checkpoint_interval_updates"] <= 0:
         raise ValueError("checkpoint_interval_updates must be positive")
     if not math.isfinite(config["proximal_ewma_com"]) or config["proximal_ewma_com"] <= 0.0:

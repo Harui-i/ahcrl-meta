@@ -1,208 +1,100 @@
-from typing import Any, cast
-
 import torch
-from torch import nn
 
 from ahcrl.contests.ahc063.encoder import (
-    ACTION_COUNT,
-    CATEGORICAL_EXCLUDED_CHANNELS,
-    MAX_BOARD_SIZE,
-    NUM_PLANES,
-    TYPED_NUM_PLANES,
+    ACTION_FEATURE_COUNT,
+    BOARD_FEATURE_COUNT,
+    GLOBAL_FEATURE_COUNT,
+    MAX_SEQUENCE_LENGTH,
 )
-from ahcrl.contests.ahc063.model import AHC063_CATEGORICAL_GROUPS, PPOModel
-from ahcrl.nn.modula import ModularEmbedding, build_modula_parameter_specs
-from ahcrl.nn.observation import RunningObservationNormalizer
+from ahcrl.contests.ahc063.model import PPOModel
+from ahcrl.nn.fusion_blocks import SequenceStack, SpatialStack
+from ahcrl.nn.modula import module_to_modula_graph
 
 
-def test_actor_critic_convnext() -> None:
-    model = PPOModel(NUM_PLANES, 16, 4)
-    batch_size = 5
-    x = torch.randn(batch_size, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-    policy, value = model(x)
+def observations(batch: int = 2) -> tuple[torch.Tensor, ...]:
+    board_food = torch.zeros(batch, 16, 16, dtype=torch.uint8)
+    board_features = torch.zeros(batch, BOARD_FEATURE_COUNT, 16, 16)
+    board_features[:, 0] = 1
+    board_features[:, 1, 4, 0] = 1
+    board_features[:, 2, 4, 0] = 1
+    slot_colors = torch.zeros(batch, MAX_SEQUENCE_LENGTH, 2, dtype=torch.uint8)
+    slot_colors[:, :5, 0] = 1
+    slot_colors[:, :5, 1] = 1
+    slot_positions = torch.full((batch, MAX_SEQUENCE_LENGTH, 2), 255, dtype=torch.uint8)
+    slot_positions[:, :5] = torch.tensor([[4, 0], [3, 0], [2, 0], [1, 0], [0, 0]])
+    global_features = torch.zeros(batch, GLOBAL_FEATURE_COUNT)
+    global_features[:, :4] = torch.tensor([0.5, 0.1, 0.4, 0.2])
+    previous_action = torch.zeros(batch, 1, dtype=torch.uint8)
+    action_colors = torch.zeros(batch, 4, dtype=torch.uint8)
+    action_features = torch.zeros(batch, 4, ACTION_FEATURE_COUNT)
+    mask = torch.ones(batch, 4, dtype=torch.uint8)
+    return (
+        board_food,
+        board_features,
+        slot_colors,
+        slot_positions,
+        global_features,
+        previous_action,
+        action_colors,
+        action_features,
+        mask,
+    )
 
-    assert policy.shape == (batch_size, ACTION_COUNT)
-    assert value.shape == (batch_size,)
+
+def small_model() -> PPOModel:
+    return PPOModel(
+        sequence_channels=8,
+        sequence_blocks=2,
+        spatial_channels=8,
+        spatial_blocks=2,
+        head_channels=8,
+        head_blocks=2,
+    )
 
 
-def test_actor_critic_with_two_blocks() -> None:
-    model = PPOModel(NUM_PLANES, 16, 2)
-    x = torch.randn(3, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-
-    policy, value = model(x)
-
-    assert policy.shape == (3, ACTION_COUNT)
-    assert value.shape == (3,)
-
-
-def test_actor_critic_can_be_traced() -> None:
-    model = PPOModel(NUM_PLANES, 8, 1).eval()
-    x = torch.randn(1, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-
-    traced = cast(Any, torch.jit.trace(model, x, strict=True))
-    policy, value = traced(x)
-
-    assert policy.shape == (1, ACTION_COUNT)
-    assert value.shape == (1,)
+def test_typed_forward_and_core_value_io() -> None:
+    model = small_model()
+    inputs = observations()
+    logits, value = model(*inputs)
+    assert logits.shape == (2, 4)
+    assert value.shape == (2,)
+    assert torch.isfinite(logits).all()
+    assert torch.allclose(value, model.value_predictions(*inputs[:6]))
 
 
-def test_actor_critic_runs_with_bfloat16_weights_and_inputs() -> None:
-    model = PPOModel(NUM_PLANES, 8, 1).to(dtype=torch.bfloat16).eval()
-    x = torch.randn(1, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE, dtype=torch.bfloat16)
+def test_actor_and_critic_do_not_share_parameters() -> None:
+    model = small_model()
+    actor = {id(parameter) for parameter in model.policy.parameters()}
+    critic = {id(parameter) for parameter in model.value.parameters()}
+    assert actor.isdisjoint(critic)
 
-    policy, value = model(x)
 
-    assert policy.dtype == torch.bfloat16
+def test_modula_stack_tare_preserves_sensitivity_and_mass() -> None:
+    for module in (SequenceStack(8, 2), SpatialStack(8, 2)):
+        graph = module_to_modula_graph(module)
+        assert graph.mass == 5
+        assert graph.sensitivity == 1
+
+
+def test_slot_order_changes_logits() -> None:
+    model = small_model().eval()
+    inputs = list(observations(1))
+    with torch.no_grad():
+        baseline = model.policy_logits(*inputs)
+        inputs[2] = inputs[2].clone()
+        inputs[2][:, 0, 0] = 2
+        changed = model.policy_logits(*inputs)
+    assert not torch.allclose(baseline, changed)
+
+
+def test_bfloat16_and_compile_forward() -> None:
+    model = small_model().to(dtype=torch.bfloat16).eval()
+    inputs = list(observations(1))
+    inputs[1] = inputs[1].to(torch.float16)
+    inputs[4] = inputs[4].to(torch.float16)
+    inputs[7] = inputs[7].to(torch.float16)
+    logits, value = model(*inputs)
+    assert logits.dtype == torch.bfloat16
     assert value.dtype == torch.bfloat16
-
-
-def test_actor_critic_uses_explicit_max_pool_for_compile_safety() -> None:
-    model = PPOModel(NUM_PLANES, 16, 1)
-    features = torch.randn(2, 16, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-
-    assert isinstance(model.policy.max_pool, nn.AdaptiveMaxPool2d)
-    assert isinstance(model.value.max_pool, nn.AdaptiveMaxPool2d)
-    torch.testing.assert_close(
-        model.policy.max_pool(features).flatten(1), features.amax(dim=(-2, -1))
-    )
-
-
-def test_actor_critic_reports_feature_norm_stats_after_cell_encoder() -> None:
-    model = PPOModel(NUM_PLANES, 8, 1)
-    x = torch.randn(2, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-
-    stats = model.feature_norm_stats(x)
-
-    assert set(stats) == {
-        "trunk_feature_norm_mean",
-        "trunk_feature_norm_std",
-        "trunk_feature_norm_max",
-    }
-    assert all(value >= 0.0 for value in stats.values())
-
-
-def test_categorical_adapter_expands_all_semantic_groups_and_handles_none() -> None:
-    model = PPOModel(NUM_PLANES, 16, 1)
-    x = torch.zeros(1, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-    for group in AHC063_CATEGORICAL_GROUPS:
-        x[0, group.start, 1, 1] = 1.0
-
-    adapted = model.policy.input_adapter(x)
-    assert adapted.shape == (1, TYPED_NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-
-    raw_cursor = 0
-    output_cursor = 0
-    for group, embedding_module in zip(
-        AHC063_CATEGORICAL_GROUPS, model.policy.input_adapter.embeddings, strict=True
-    ):
-        output_cursor += group.start - raw_cursor
-        embedding = embedding_module
-        assert isinstance(embedding, ModularEmbedding)
-        none = embedding.weight[0]
-        active = embedding.weight[1]
-        torch.testing.assert_close(
-            adapted[0, output_cursor : output_cursor + group.output_dim, 0, 0], none
-        )
-        torch.testing.assert_close(
-            adapted[0, output_cursor : output_cursor + group.output_dim, 1, 1], active
-        )
-        raw_cursor = group.end
-        output_cursor += group.output_dim
-
-
-def test_cell_encoder_is_per_cell_and_projects_to_trunk_width() -> None:
-    model = PPOModel(NUM_PLANES, 16, 1).eval()
-    x = torch.zeros(2, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-    adapted = model.policy.input_adapter(x)
-    encoded = model.policy.cell_encoder(adapted.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
-
-    assert encoded.shape == (2, 16, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-    perturbed = x.clone()
-    perturbed[:, 31, 0, 0] = 1.0
-    perturbed_encoded = model.policy.cell_encoder(
-        model.policy.input_adapter(perturbed).permute(0, 2, 3, 1)
-    ).permute(0, 3, 1, 2)
-    unaffected = torch.ones((MAX_BOARD_SIZE, MAX_BOARD_SIZE), dtype=torch.bool)
-    unaffected[0, 0] = False
-    torch.testing.assert_close(
-        encoded.permute(0, 2, 3, 1)[:, unaffected],
-        perturbed_encoded.permute(0, 2, 3, 1)[:, unaffected],
-    )
-
-
-def test_embedding_and_cell_encoder_receive_gradients() -> None:
-    model = PPOModel(NUM_PLANES, 8, 1)
-    x = torch.randn(3, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-    logits, _ = model(x)
-
-    logits.square().mean().backward()
-
-    embedding_grad_norm = sum(
-        parameter.grad.abs().sum().item()
-        for name, parameter in model.named_parameters()
-        if name.startswith("policy.input_adapter.embeddings") and parameter.grad is not None
-    )
-    cell_encoder_grad_norm = sum(
-        parameter.grad.abs().sum().item()
-        for name, parameter in model.named_parameters()
-        if name.startswith("policy.cell_encoder") and parameter.grad is not None
-    )
-    assert embedding_grad_norm > 0.0
-    assert cell_encoder_grad_norm > 0.0
-
-
-def test_embedding_and_cell_encoder_have_dedicated_modula_geometries() -> None:
-    model = PPOModel(NUM_PLANES, 8, 1)
-    specs = {spec.name: spec for spec in build_modula_parameter_specs(model)}
-
-    for index in range(len(AHC063_CATEGORICAL_GROUPS)):
-        geometry = specs[f"policy.input_adapter.embeddings.{index}.weight"].geometry
-        assert geometry is not None and geometry.name == "embedding"
-    for name in (
-        "policy.cell_encoder.0.weight",
-        "policy.cell_encoder.0.bias",
-        "policy.cell_encoder.2.weight",
-    ):
-        geometry = specs[name].geometry
-        assert geometry is not None
-        expected = "linear" if name.endswith("weight") else "bounded_rms_vector"
-        assert geometry.name == expected
-
-
-def test_policy_and_value_networks_are_independent_and_individually_callable() -> None:
-    model = PPOModel(NUM_PLANES, 8, 1)
-    assert (
-        model.policy.input_adapter.embeddings[0].weight
-        is not model.value.input_adapter.embeddings[0].weight
-    )
-    assert model.policy.cell_encoder[0].weight is not model.value.cell_encoder[0].weight
-    assert model.policy.trunk[0].weight is not model.value.trunk[0].weight
-
-    x = torch.randn(2, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-    policy, value = model(x)
-    torch.testing.assert_close(policy, model.policy_logits(x))
-    torch.testing.assert_close(value, model.value_predictions(x))
-
-    model.policy_logits(x).square().mean().backward()
-    assert all(parameter.grad is None for parameter in model.value.parameters())
-
-
-def test_observation_normalizer_excludes_semantic_planes() -> None:
-    normalizer = RunningObservationNormalizer(
-        NUM_PLANES,
-        excluded_channels=CATEGORICAL_EXCLUDED_CHANNELS,
-    )
-    observations = torch.randn(4, NUM_PLANES, MAX_BOARD_SIZE, MAX_BOARD_SIZE)
-    categorical = list(CATEGORICAL_EXCLUDED_CHANNELS)
-    observations[:, categorical] = (observations[:, categorical] > 0).float()
-
-    normalized = normalizer.update_and_normalize(observations)
-    torch.testing.assert_close(normalized[:, categorical], observations[:, categorical])
-    normalized_channels = [
-        channel for channel in range(NUM_PLANES) if channel not in CATEGORICAL_EXCLUDED_CHANNELS
-    ]
-    assert torch.allclose(
-        normalized[:, normalized_channels].mean(dim=(0, 2, 3)),
-        torch.zeros(len(normalized_channels)),
-        atol=1e-5,
-    )
+    compiled = torch.compile(model, backend="eager")
+    compiled(*inputs)
