@@ -14,6 +14,7 @@ from torch.distributions import Categorical, kl_divergence
 
 from ahcrl.envs import RustVecEnv, cargo_server_command
 from ahcrl.nn.modula import validate_modula_graph
+from ahcrl.nn.observation import RunningObservationNormalizer
 from ahcrl.training import (
     FixedSeedEvaluation,
     FP32MasterWeights,
@@ -43,8 +44,8 @@ from ahcrl.training import (
 )
 from ahcrl.training.ppo import policy_surrogate, tensor_range
 
-from .encoder import NUM_PLANES
-from .model import ActorCritic, RunningObservationNormalizer
+from .encoder import CATEGORICAL_EXCLUDED_CHANNELS, NUM_PLANES
+from .model import ActorCritic
 
 ROOT = Path(__file__).resolve().parents[4]
 RL_TOOLS_MANIFEST = ROOT / "contests" / "ahc-063" / "rl-tools" / "Cargo.toml"
@@ -296,7 +297,9 @@ def create_model(args: argparse.Namespace, device: torch.device) -> ActorCritic:
         model = model.to(dtype=MODEL_DTYPE)
     if args.obs_norm:
         model.observation_normalizer = RunningObservationNormalizer(
-            NUM_PLANES, args.obs_norm_epsilon
+            NUM_PLANES,
+            args.obs_norm_epsilon,
+            excluded_channels=CATEGORICAL_EXCLUDED_CHANNELS,
         ).to(device=device)
     return model
 

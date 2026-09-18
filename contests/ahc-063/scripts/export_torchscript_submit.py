@@ -10,8 +10,9 @@ from typing import Any
 import torch
 from torch import nn
 
-from ahcrl.contests.ahc063.encoder import NUM_PLANES
-from ahcrl.contests.ahc063.model import ActorCritic, RunningObservationNormalizer
+from ahcrl.contests.ahc063.encoder import CATEGORICAL_EXCLUDED_CHANNELS, NUM_PLANES
+from ahcrl.contests.ahc063.model import ActorCritic
+from ahcrl.nn.observation import RunningObservationNormalizer
 
 ROOT = Path(__file__).resolve().parents[3]
 MAX_BOARD_SIZE = 16
@@ -36,14 +37,8 @@ class NormalizedPolicy(nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.normalizer is not None:
-            mean = self.normalizer.mean.to(device=x.device, dtype=torch.float32)
-            count = self.normalizer.count.to(dtype=self.normalizer.m2.dtype).clamp_min(1)
-            variance = torch.where(
-                self.normalizer.count > 0,
-                self.normalizer.m2 / count,
-                torch.ones_like(self.normalizer.m2),
-            ).to(device=x.device)
-            x = (x.float() - mean) / torch.sqrt(variance + self.normalizer.epsilon)
+            mean, invstd = self.normalizer.effective_affine()
+            x = (x.float() - mean.to(device=x.device)) * invstd.to(device=x.device)
         logits, value = self.model(x)
         if self.apply_softmax:
             logits = torch.softmax(logits, dim=-1)
@@ -97,6 +92,7 @@ def load_policy(
         normalizer = RunningObservationNormalizer(
             NUM_PLANES,
             epsilon=float(config.get("obs_norm_epsilon", 1e-8)),
+            excluded_channels=CATEGORICAL_EXCLUDED_CHANNELS,
         ).float()
     model.observation_normalizer = normalizer
     model.load_state_dict(state["model"])

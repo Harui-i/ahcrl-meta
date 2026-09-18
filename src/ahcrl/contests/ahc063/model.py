@@ -12,9 +12,65 @@ from ahcrl.nn.modula import (
     module_to_modula_graph,
     validate_modula_graph,
 )
+from ahcrl.nn.observation import (
+    CategoricalPlaneAdapter,
+    CategoricalPlaneGroup,
+)
 from ahcrl.nn.trunk import make_trunk
 
-from .encoder import ACTION_COUNT, NUM_PLANES
+from .encoder import (
+    ACTION_COUNT,
+    FOOD_COLOR_COUNT,
+    FOOD_COLOR_START,
+    NUM_PLANES,
+    PLANE_PREV_ACTION_START,
+    PREV_ACTION_COUNT,
+    SEGMENT_COUNT,
+    SEGMENT_START,
+    SNAKE_COLOR_COUNT,
+    SNAKE_COLOR_START,
+    TARGET_COLOR_COUNT,
+    TARGET_COLOR_START,
+    TYPED_NUM_PLANES,
+)
+
+AHC063_CATEGORICAL_GROUPS = (
+    CategoricalPlaneGroup(
+        "food_color",
+        FOOD_COLOR_START,
+        FOOD_COLOR_COUNT,
+        implicit_zero=True,
+        embedding_dim=FOOD_COLOR_COUNT + 1,
+    ),
+    CategoricalPlaneGroup(
+        "snake_color",
+        SNAKE_COLOR_START,
+        SNAKE_COLOR_COUNT,
+        implicit_zero=True,
+        embedding_dim=SNAKE_COLOR_COUNT + 1,
+    ),
+    CategoricalPlaneGroup(
+        "segment",
+        SEGMENT_START,
+        SEGMENT_COUNT,
+        implicit_zero=True,
+        embedding_dim=SEGMENT_COUNT + 1,
+    ),
+    CategoricalPlaneGroup(
+        "target_color",
+        TARGET_COLOR_START,
+        TARGET_COLOR_COUNT,
+        implicit_zero=True,
+        embedding_dim=TARGET_COLOR_COUNT + 1,
+    ),
+    CategoricalPlaneGroup(
+        "previous_action",
+        PLANE_PREV_ACTION_START,
+        PREV_ACTION_COUNT,
+        implicit_zero=True,
+        embedding_dim=PREV_ACTION_COUNT + 1,
+    ),
+)
 
 
 class ActorCritic(nn.Module):
@@ -30,11 +86,21 @@ class ActorCritic(nn.Module):
         self.NUM_PLANES = NUM_PLANES
         self.ACTION_COUNT = ACTION_COUNT
 
+        if in_channels != NUM_PLANES:
+            raise ValueError(f"AHC063 expects {NUM_PLANES} input planes, got {in_channels}")
         if channels <= 0 or blocks <= 0:
             raise ValueError("channels and blocks must be positive")
         self.observation_normalizer: nn.Module | None = None
+        self.input_adapter = CategoricalPlaneAdapter(in_channels, AHC063_CATEGORICAL_GROUPS)
+        if self.input_adapter.output_channels != TYPED_NUM_PLANES:
+            raise AssertionError("AHC063 categorical adapter width is inconsistent")
+        self.cell_encoder = ModularSequential(
+            ModularLinear(TYPED_NUM_PLANES, channels * 4),
+            nn.GELU(),
+            ModularLinear(channels * 4, channels),
+        )
         self.trunk = make_trunk(
-            in_channels=in_channels,
+            in_channels=channels,
             channels=channels,
             blocks=blocks,
         )
@@ -58,6 +124,8 @@ class ActorCritic(nn.Module):
         return ModulaGraphNode(
             "sequence",
             (
+                module_to_modula_graph(self.input_adapter, "input_adapter"),
+                module_to_modula_graph(self.cell_encoder, "cell_encoder"),
                 module_to_modula_graph(self.trunk, "trunk"),
                 ModulaGraphNode(
                     "parallel",
@@ -74,77 +142,26 @@ class ActorCritic(nn.Module):
     ) -> tuple[Float[torch.Tensor, "batch {self.ACTION_COUNT}"], Float[torch.Tensor, "batch"]]:
         if x.ndim != 4:
             raise ValueError(f"expected NCHW input, got {x.ndim} dimensions")
-        h = self.trunk(x)
+        h = self._trunk_features(x)
         pooled = torch.cat(
             [h.mean(dim=(-2, -1)), self.max_pool(h).flatten(1)],
             dim=1,
         )
         return self.policy(pooled), self.value(pooled).squeeze(-1)
 
+    def _trunk_features(self, x: torch.Tensor) -> torch.Tensor:
+        cells = self.input_adapter(x).permute(0, 2, 3, 1)
+        cells = self.cell_encoder(cells)
+        return self.trunk(cells.permute(0, 3, 1, 2))
+
     @torch.no_grad()
     def feature_norm_stats(
         self, x: Float[torch.Tensor, "batch {self.NUM_PLANES} H W"]
     ) -> dict[str, float]:
-        h = cast(torch.Tensor, self.trunk(x))
+        h = cast(torch.Tensor, self._trunk_features(x))
         norm = h.float().pow(2).sum(dim=1).sqrt()
         return {
             "trunk_feature_norm_mean": float(norm.mean().item()),
             "trunk_feature_norm_std": float(norm.std(unbiased=False).item()),
             "trunk_feature_norm_max": float(norm.max().item()),
-        }
-
-
-class RunningObservationNormalizer(nn.Module):
-    """Channel-wise Welford statistics kept inside the checkpoint."""
-
-    def __init__(self, channels: int, epsilon: float = 1e-8) -> None:
-        super().__init__()
-        if epsilon <= 0:
-            raise ValueError("epsilon must be positive")
-        self.epsilon = epsilon
-        self.count: torch.Tensor
-        self.mean: torch.Tensor
-        self.m2: torch.Tensor
-        self.register_buffer("count", torch.zeros((), dtype=torch.long))
-        self.register_buffer("mean", torch.zeros(1, channels, 1, 1))
-        self.register_buffer("m2", torch.zeros(1, channels, 1, 1))
-
-    @torch.no_grad()
-    def update_and_normalize(self, x: torch.Tensor) -> torch.Tensor:
-        values = x.detach().float()
-        batch_count = values.shape[0] * values.shape[2] * values.shape[3]
-        if batch_count:
-            batch_mean = values.mean((0, 2, 3), keepdim=True).to(device=self.mean.device)
-            batch_m2 = (
-                values.sub(batch_mean.to(values.device))
-                .square()
-                .sum((0, 2, 3), keepdim=True)
-                .to(device=self.mean.device)
-            )
-            current = int(self.count.item())
-            if current == 0:
-                self.count.fill_(batch_count)
-                self.mean.copy_(batch_mean)
-                self.m2.copy_(batch_m2)
-            else:
-                total = current + batch_count
-                delta = batch_mean - self.mean
-                self.mean.add_(delta * batch_count / total)
-                self.m2.add_(batch_m2 + delta.square() * current * batch_count / total)
-                self.count.fill_(total)
-        return self.normalize(x)
-
-    def normalize(self, x: torch.Tensor) -> torch.Tensor:
-        count = self.count.to(dtype=self.m2.dtype).clamp_min(1)
-        variance = torch.where(self.count > 0, self.m2 / count, torch.ones_like(self.m2))
-        y = (x.float() - self.mean.to(x.device)) / torch.sqrt(variance.to(x.device) + self.epsilon)
-        return y.to(dtype=x.dtype)
-
-    def stats(self) -> dict[str, float]:
-        count = self.count.to(dtype=self.m2.dtype).clamp_min(1)
-        variance = torch.where(self.count > 0, self.m2 / count, torch.ones_like(self.m2))
-        return {
-            "obs_norm_count": float(self.count.item()),
-            "obs_norm_std_min": float(variance.sqrt().min().item()),
-            "obs_norm_std_max": float(variance.sqrt().max().item()),
         }
