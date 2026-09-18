@@ -4,7 +4,15 @@ from collections.abc import Mapping
 
 import torch
 
-from .policy_warmup import calculate_explained_variance
+
+def calculate_explained_variance(values: torch.Tensor, returns: torch.Tensor) -> float:
+    """Value prediction が return の分散をどれだけ説明するかを返す。"""
+    values = values.float()
+    returns = returns.float()
+    return_variance = returns.var(unbiased=False)
+    if float(return_variance.item()) <= 1e-8:
+        return float("nan")
+    return float((1.0 - (returns - values).var(unbiased=False) / return_variance).item())
 
 
 def build_completed_episode_score_metrics(

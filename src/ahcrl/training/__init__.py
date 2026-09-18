@@ -17,7 +17,11 @@ from .evaluation import (
     evaluate_fixed_seeds,
     write_visualizer_artifacts,
 )
-from .metrics import build_completed_episode_score_metrics, build_standard_ppo_metrics
+from .metrics import (
+    build_completed_episode_score_metrics,
+    build_standard_ppo_metrics,
+    calculate_explained_variance,
+)
 from .optimizer import (
     FP32MasterWeights,
     HybridModularOptimizer,
@@ -25,7 +29,6 @@ from .optimizer import (
     build_optimizer,
     optimizer_metrics,
 )
-from .policy_warmup import ExplainedVariancePolicyWarmup, calculate_explained_variance
 from .rollout import RolloutBuffer, RolloutFieldSpec
 from .run import get_wandb_run_id, prepare_run_dir, update_run_state, write_config
 from .wandb import WandbConfig, finish_wandb, init_wandb
@@ -33,7 +36,6 @@ from .wandb import WandbConfig, finish_wandb, init_wandb
 __all__ = [
     "FORMAT_VERSION",
     "EVALUATIONS_FILE_NAME",
-    "ExplainedVariancePolicyWarmup",
     "FixedSeedEvaluation",
     "FP32MasterWeights",
     "HybridModularOptimizer",
