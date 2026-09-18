@@ -126,7 +126,9 @@ def test_parse_args_supports_proximal_ewma_and_rejects_invalid_com() -> None:
         parse_args(["--proximal-ewma-com", "0"])
 
 
-@pytest.mark.parametrize("config_name", ["ppo_smoke.toml", "ppo_train.toml", "ppo_ezcur.toml"])
+@pytest.mark.parametrize(
+    "config_name", ["ppo_smoke.toml", "ppo_train.toml", "ppo_ezcur.toml", "ppo_modula.toml"]
+)
 def test_tracked_ppo_configs_explicitly_enable_proximal_ewma(config_name: str) -> None:
     config_path = (
         Path(__file__).resolve().parents[3] / "contests" / "ahc-063" / "configs" / config_name

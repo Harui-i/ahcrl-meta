@@ -1,0 +1,60 @@
+[training]
+optimizer = "modula"
+weight_decay = 0.01
+modula_momentum = 0.95
+modula_nesterov = true
+modula_diagnostics_interval = 100
+modula_initialize = true
+modula_project = true
+modula_target_kl = 0.03
+num_envs = 1024
+env_workers = 0
+total_steps = 20000000
+rollout_steps = 256
+seed_start = 0
+seed_stride = 1
+device = "cuda"
+compile = true
+artifact_dir = "contests/ahc-063/artifacts/ppo_modula"
+checkpoint_interval_updates = 10
+
+[ppo]
+# Modula の自然ノルム 1 の更新方向に対する更新量。
+lr = 0.3
+gamma = 0.995
+gae_lambda = 0.95
+clip = 0.2
+epochs = 1
+minibatch_size = 256
+entropy_coef = 0.0001
+value_coef = 0.5
+policy_unfreeze_explained_variance = 0.90
+policy_freeze_scope = "all_except_value"
+policy_warmup_epochs_multiplier = 4
+max_grad_norm = 0.5
+proximal_ewma = true
+proximal_ewma_com = 256.0
+
+[wandb]
+enabled = true
+project = "ahcrl-meta-ahc063"
+name = "ahc063-ppo-ewma-modula-com256"
+tags = ["ahc063", "ppo-ewma", "ewma", "modula"]
+
+[model]
+channels = 256
+blocks = 2
+
+[contest]
+max_steps_per_cell = 4
+reward_scale = true
+obs_norm = true
+obs_norm_epsilon = 1e-8
+
+[evaluation]
+enabled = true
+seed_start = 0
+seed_num = 1024
+seed_stride = 1
+temperature = 0.0
+max_steps_per_cell = 4
