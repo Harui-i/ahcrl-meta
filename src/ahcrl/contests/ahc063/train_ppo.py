@@ -83,6 +83,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "reward_scale": True,
     "artifact_dir": ROOT / "contests/ahc-063/artifacts/ppo",
     "checkpoint_interval_updates": 20,
+    # Print a one-line timing breakdown every N updates.  A positive value
+    # also enables CUDA synchronization around the extra timing boundaries;
+    # keep it at 0 for normal training to avoid profiling overhead.
+    "timing_log_interval": 0,
     "eval_enabled": False,
     "eval_seed_start": 0,
     "eval_seed_num": 100,
@@ -125,6 +129,7 @@ RESUME_ALLOWED_OVERRIDE_KEYS = {
     "num_envs",
     "env_workers",
     "wandb_name",
+    "timing_log_interval",
 } | EVALUATION_CONFIG_KEYS
 WANDB_CONFIG_KEYS = {
     "wandb_enabled",
@@ -499,12 +504,23 @@ def collect_rollout(
             },
         )
     rollout_buffer.reset()
+    profile_timing = args.timing_log_interval > 0
     forward_seconds = 0.0
+    observation_seconds = 0.0
+    rollout_store_seconds = 0.0
     critic_forward_seconds = 0.0
+    critic_next_forward_seconds = 0.0
+    critic_batch_forward_seconds = 0.0
     env_step_seconds = 0.0
+    gae_seconds = 0.0
+    rollout_started = time.perf_counter()
     for step in range(args.rollout_steps):
+        observation_started = time.perf_counter()
         encoded = _observation_tensors(obs, device)
         mask = encoded[-1].bool()
+        if profile_timing:
+            _synchronize_device(device)
+        observation_seconds += time.perf_counter() - observation_started
         _synchronize_device(device)
         forward_started = time.perf_counter()
         with torch.inference_mode():
@@ -521,6 +537,7 @@ def collect_rollout(
         env_step_started = time.perf_counter()
         result = env.step(action.cpu().numpy())
         env_step_seconds += time.perf_counter() - env_step_started
+        store_started = time.perf_counter()
         stored_observations = {
             f"obs_{key}": encoded[index] for index, key in enumerate(OBSERVATION_KEYS[:-1])
         }
@@ -541,14 +558,20 @@ def collect_rollout(
                 args.seed_start + step + 1,
                 args.seed_stride,
             )
+        rollout_store_seconds += time.perf_counter() - store_started
 
+    observation_started = time.perf_counter()
     next_encoded = _observation_tensors(obs, device)
-    _synchronize_device(device)
+    if profile_timing:
+        _synchronize_device(device)
+    observation_seconds += time.perf_counter() - observation_started
     critic_started = time.perf_counter()
     with torch.inference_mode():
         next_value = _model_value(model, next_encoded).float().cpu()
     _synchronize_device(device)
-    critic_forward_seconds += time.perf_counter() - critic_started
+    critic_elapsed = time.perf_counter() - critic_started
+    critic_forward_seconds += critic_elapsed
+    critic_next_forward_seconds += critic_elapsed
     stored = rollout_buffer.as_dict()
     flat_observations = _flatten_observations(stored, device=device, keys=OBSERVATION_KEYS[:-1])
     batch_size = min(max(int(args.minibatch_size), 1), flat_observations[0].shape[0])
@@ -562,9 +585,12 @@ def collect_rollout(
             if not bool(torch.isfinite(value).all().item()):
                 raise FloatingPointError("non-finite critic output after rollout")
         _synchronize_device(device)
-        critic_forward_seconds += time.perf_counter() - critic_started
+        critic_elapsed = time.perf_counter() - critic_started
+        critic_forward_seconds += critic_elapsed
+        critic_batch_forward_seconds += critic_elapsed
         values.append(value.float().cpu())
     stored["values"] = torch.cat(values).reshape(args.rollout_steps, args.num_envs)
+    gae_started = time.perf_counter()
     raw_rewards = stored["rewards"]
     scaled_rewards = reward_scaler.scale(raw_rewards) if reward_scaler is not None else raw_rewards
     stacked_dones = stored["dones"]
@@ -579,6 +605,8 @@ def collect_rollout(
         )
         last_gae = delta + args.gamma * args.gae_lambda * nonterminal * last_gae
         advantages[step] = last_gae
+    gae_seconds += time.perf_counter() - gae_started
+    rollout_total_seconds = time.perf_counter() - rollout_started
     return (
         {
             **stored,
@@ -592,8 +620,14 @@ def collect_rollout(
         obs,
         {
             "forward_seconds": forward_seconds,
+            "observation_seconds": observation_seconds,
+            "rollout_store_seconds": rollout_store_seconds,
             "critic_forward_seconds": critic_forward_seconds,
+            "critic_next_forward_seconds": critic_next_forward_seconds,
+            "critic_batch_forward_seconds": critic_batch_forward_seconds,
             "env_step_seconds": env_step_seconds,
+            "gae_seconds": gae_seconds,
+            "rollout_total_seconds": rollout_total_seconds,
         },
     )
 
@@ -609,6 +643,8 @@ def update_model(
     proximal_ewma: ProximalPolicyEWMA | None = None,
     proximal_model: nn.Module | None = None,
 ) -> dict[str, float]:
+    update_started = time.perf_counter()
+    profile_timing = args.timing_log_interval > 0
     if (proximal_ewma is None) != (proximal_model is None):
         raise ValueError("proximal EWMA state and model must be provided together")
     observations = _flatten_observations(rollout, device=device, keys=OBSERVATION_KEYS[:-1])
@@ -633,7 +669,13 @@ def update_model(
     count = 0
     grad_norm = 0.0
     forward_seconds = 0.0
+    model_forward_seconds = 0.0
+    loss_seconds = 0.0
+    minibatch_prepare_seconds = 0.0
     backward_seconds = 0.0
+    grad_prepare_seconds = 0.0
+    optimizer_step_seconds = 0.0
+    parameter_sync_seconds = 0.0
     proximal_forward_seconds = 0.0
     current_behavior_approx_kl_total = 0.0
     current_behavior_approx_kl_count = 0
@@ -654,12 +696,23 @@ def update_model(
         permutation = torch.randperm(batch_size, device=device)
         for start in range(0, batch_size, minibatch_size):
             index = permutation[start : start + minibatch_size]
-            _synchronize_device(device)
-            forward_started = time.perf_counter()
+            if profile_timing:
+                _synchronize_device(device)
+            minibatch_prepare_started = time.perf_counter()
             observation_batch = tuple(item[index] for item in observations) + (
                 masks[index].to(dtype=torch.uint8),
             )
+            minibatch_prepare_elapsed = time.perf_counter() - minibatch_prepare_started
+            minibatch_prepare_seconds += minibatch_prepare_elapsed
+            if profile_timing:
+                _synchronize_device(device)
+            model_forward_started = time.perf_counter()
             logits, value = _model_forward(model, observation_batch)
+            if profile_timing:
+                _synchronize_device(device)
+            model_forward_elapsed = time.perf_counter() - model_forward_started
+            model_forward_seconds += model_forward_elapsed
+            loss_started = time.perf_counter()
             logits_max_abs = max(logits_max_abs, float(logits.float().abs().max().item()))
             value_max_abs = max(value_max_abs, float(value.float().abs().max().item()))
             if not bool(torch.isfinite(logits).all().item()) or not bool(
@@ -716,8 +769,11 @@ def update_model(
             weighted_value_loss = args.value_coef * value_loss
             entropy_loss = -args.entropy_coef * entropy
             loss = weighted_policy_loss + weighted_value_loss + entropy_loss
-            _synchronize_device(device)
-            forward_seconds += time.perf_counter() - forward_started
+            if profile_timing:
+                _synchronize_device(device)
+            loss_elapsed = time.perf_counter() - loss_started
+            loss_seconds += loss_elapsed
+            forward_seconds += minibatch_prepare_elapsed + model_forward_elapsed + loss_elapsed
             if not bool(torch.isfinite(loss).item()):
                 raise FloatingPointError(
                     "non-finite PPO loss before backward: "
@@ -729,11 +785,14 @@ def update_model(
                 )
             raw_model.zero_grad(set_to_none=True)
             optimizer.zero_grad(set_to_none=True)
-            _synchronize_device(device)
+            if profile_timing:
+                _synchronize_device(device)
             backward_started = time.perf_counter()
             loss.backward()
-            _synchronize_device(device)
+            if profile_timing:
+                _synchronize_device(device)
             backward_seconds += time.perf_counter() - backward_started
+            grad_prepare_started = time.perf_counter()
             if isinstance(optimizer, HybridModularOptimizer):
                 if master_weights is None:
                     raise ValueError("Modula optimizer requires fp32 master weights")
@@ -770,7 +829,19 @@ def update_model(
                         "non-finite gradient before optimizer.step: "
                         f"master_parameter_index={bad_gradient} model_parameter={model_gradient}"
                     ) from error
+            if profile_timing:
+                _synchronize_device(device)
+            grad_prepare_seconds += time.perf_counter() - grad_prepare_started
+            if profile_timing:
+                _synchronize_device(device)
+            optimizer_started = time.perf_counter()
             optimizer.step()
+            if profile_timing:
+                _synchronize_device(device)
+            optimizer_step_seconds += time.perf_counter() - optimizer_started
+            if profile_timing:
+                _synchronize_device(device)
+            parameter_sync_started = time.perf_counter()
             if master_weights is not None:
                 master_weights.copy_master_to_model()
                 if proximal_ewma is not None:
@@ -779,6 +850,9 @@ def update_model(
                 proximal_ewma.update(
                     [parameter for parameter in raw_model.parameters() if parameter.requires_grad]
                 )
+            if profile_timing:
+                _synchronize_device(device)
+            parameter_sync_seconds += time.perf_counter() - parameter_sync_started
             clipping_ratio = policy.clipping_ratio
             totals["policy_loss"] += float(policy_loss.item())
             totals["value_loss"] += float(value_loss.item())
@@ -819,14 +893,22 @@ def update_model(
         | {
             "grad_norm": grad_norm,
             "forward_seconds": forward_seconds,
+            "model_forward_seconds": model_forward_seconds,
+            "loss_seconds": loss_seconds,
+            "minibatch_prepare_seconds": minibatch_prepare_seconds,
             "backward_seconds": backward_seconds,
+            "grad_prepare_seconds": grad_prepare_seconds,
+            "optimizer_step_seconds": optimizer_step_seconds,
+            "parameter_sync_seconds": parameter_sync_seconds,
             "proximal_forward_seconds": proximal_forward_seconds,
+            "update_total_seconds": time.perf_counter() - update_started,
             "current_behavior_approx_kl": current_behavior_approx_kl_total
             / max(current_behavior_approx_kl_count, 1),
             "max_abs_log_ratio": max_abs_log_ratio,
             "trust_region_stop_count": float(trust_region_stop_count),
             "logits_max_abs": logits_max_abs,
             "value_max_abs": value_max_abs,
+            "minibatch_count": float(count),
             "training_epochs": float(args.epochs),
         }
         | optimizer_metrics(optimizer)
@@ -973,10 +1055,24 @@ def main() -> None:
     started = time.time()
     timing_totals = {
         "forward_seconds": 0.0,
+        "rollout_observation_seconds": 0.0,
+        "rollout_store_seconds": 0.0,
+        "rollout_gae_seconds": 0.0,
+        "rollout_total_seconds": 0.0,
         "critic_forward_seconds": 0.0,
+        "critic_next_forward_seconds": 0.0,
+        "critic_batch_forward_seconds": 0.0,
         "backward_seconds": 0.0,
+        "model_forward_seconds": 0.0,
+        "loss_seconds": 0.0,
+        "minibatch_prepare_seconds": 0.0,
+        "grad_prepare_seconds": 0.0,
+        "optimizer_step_seconds": 0.0,
+        "parameter_sync_seconds": 0.0,
+        "update_total_seconds": 0.0,
         "proximal_forward_seconds": 0.0,
         "env_step_seconds": 0.0,
+        "iteration_wall_seconds": 0.0,
     }
     wandb_run = None
     try:
@@ -1000,6 +1096,7 @@ def main() -> None:
             wandb_run_id=None if wandb_run is None else wandb_run.id,
         )
         while global_step < args.total_steps:
+            iteration_started = time.perf_counter()
             rollout, obs, rollout_timing = collect_rollout(
                 model,
                 env,
@@ -1023,10 +1120,29 @@ def main() -> None:
             timing_totals["forward_seconds"] += (
                 rollout_timing["forward_seconds"] + stats["forward_seconds"]
             )
-            timing_totals["critic_forward_seconds"] += rollout_timing["critic_forward_seconds"]
-            timing_totals["backward_seconds"] += stats["backward_seconds"]
-            timing_totals["proximal_forward_seconds"] += stats["proximal_forward_seconds"]
-            timing_totals["env_step_seconds"] += rollout_timing["env_step_seconds"]
+            for source_key, total_key in {
+                "observation_seconds": "rollout_observation_seconds",
+                "rollout_store_seconds": "rollout_store_seconds",
+                "gae_seconds": "rollout_gae_seconds",
+                "rollout_total_seconds": "rollout_total_seconds",
+                "critic_forward_seconds": "critic_forward_seconds",
+                "critic_next_forward_seconds": "critic_next_forward_seconds",
+                "critic_batch_forward_seconds": "critic_batch_forward_seconds",
+                "env_step_seconds": "env_step_seconds",
+            }.items():
+                timing_totals[total_key] += rollout_timing[source_key]
+            for key in (
+                "backward_seconds",
+                "model_forward_seconds",
+                "loss_seconds",
+                "minibatch_prepare_seconds",
+                "grad_prepare_seconds",
+                "optimizer_step_seconds",
+                "parameter_sync_seconds",
+                "update_total_seconds",
+                "proximal_forward_seconds",
+            ):
+                timing_totals[key] += stats[key]
             global_step += args.num_envs * args.rollout_steps
             update += 1
             checkpoint = None
@@ -1058,6 +1174,8 @@ def main() -> None:
                         },
                         result=evaluation,
                     )
+            iteration_wall_seconds = time.perf_counter() - iteration_started
+            timing_totals["iteration_wall_seconds"] += iteration_wall_seconds
             elapsed = max(time.time() - started, 1e-6)
             metrics = build_standard_ppo_metrics(
                 update=update,
@@ -1066,12 +1184,28 @@ def main() -> None:
                 rollout=rollout,
                 update_stats=stats,
             )
+            metrics |= {f"timing/{key}_total": value for key, value in timing_totals.items()}
+            metrics["timing/iteration_wall_seconds"] = iteration_wall_seconds
+            metrics["timing/iteration_fps"] = (
+                args.num_envs * args.rollout_steps / max(iteration_wall_seconds, 1e-6)
+            )
+            metrics |= {f"timing/rollout/{key}": value for key, value in rollout_timing.items()}
             metrics |= {
-                "timing/forward_seconds_total": timing_totals["forward_seconds"],
-                "timing/critic_forward_seconds_total": timing_totals["critic_forward_seconds"],
-                "timing/backward_seconds_total": timing_totals["backward_seconds"],
-                "timing/proximal_forward_seconds_total": timing_totals["proximal_forward_seconds"],
-                "timing/env_step_seconds_total": timing_totals["env_step_seconds"],
+                f"timing/update/{key}": stats[key]
+                for key in (
+                    "forward_seconds",
+                    "model_forward_seconds",
+                    "loss_seconds",
+                    "minibatch_prepare_seconds",
+                    "backward_seconds",
+                    "grad_prepare_seconds",
+                    "optimizer_step_seconds",
+                    "parameter_sync_seconds",
+                    "proximal_forward_seconds",
+                    "update_total_seconds",
+                )
+            }
+            metrics |= {
                 "train/current_behavior_approx_kl": stats["current_behavior_approx_kl"],
                 "train/ppo_epochs": stats["training_epochs"],
             }
@@ -1100,14 +1234,37 @@ def main() -> None:
                 update=update,
                 wandb_run_id=None if wandb_run is None else wandb_run.id,
             )
+            timing_suffix = ""
+            if args.timing_log_interval and update % args.timing_log_interval == 0:
+                timing_suffix = (
+                    " timing="
+                    f"rollout:{rollout_timing['rollout_total_seconds']:.3f}s"
+                    f"(obs {rollout_timing['observation_seconds']:.3f}"
+                    f"/actor {rollout_timing['forward_seconds']:.3f}"
+                    f"/critic {rollout_timing['critic_forward_seconds']:.3f}"
+                    f"/env {rollout_timing['env_step_seconds']:.3f}"
+                    f"/gae {rollout_timing['gae_seconds']:.3f})"
+                    f" update:{stats['update_total_seconds']:.3f}s"
+                    f"(fwd {stats['model_forward_seconds']:.3f}"
+                    f"/bwd {stats['backward_seconds']:.3f}"
+                    f"/grad {stats['grad_prepare_seconds']:.3f}"
+                    f"/opt {stats['optimizer_step_seconds']:.3f}"
+                    f"/proj {stats.get('timing/optimizer_project_seconds', 0.0):.3f}"
+                    f"/prox {stats['proximal_forward_seconds']:.3f}"
+                    f"/sync {stats['parameter_sync_seconds']:.3f})"
+                    f" mb={int(stats['minibatch_count'])}"
+                    f" trust_stop={int(stats['trust_region_stop_count'])}"
+                )
             print(
                 f"update={update} step={global_step} fps={metrics['summary/fps']:.1f} "
+                f"iter_fps={metrics['timing/iteration_fps']:.1f} "
                 f"mean_reward={metrics['train/mean_reward']:.5f} "
                 f"explained_variance={metrics['train/explained_variance']:.5f} "
                 f"epochs={int(stats['training_epochs'])} "
                 f"policy_loss={stats['policy_loss']:.5f} value_loss={stats['value_loss']:.5f} "
                 f"entropy={stats['entropy']:.5f} "
                 f"critic_forward_total={timing_totals['critic_forward_seconds']:.3f} "
+                f"{timing_suffix} "
                 f"checkpoint={checkpoint}",
                 flush=True,
             )
@@ -1209,6 +1366,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             raise ValueError(f"{key} must be positive")
     if config["checkpoint_interval_updates"] <= 0:
         raise ValueError("checkpoint_interval_updates must be positive")
+    if config["timing_log_interval"] < 0:
+        raise ValueError("timing_log_interval must be non-negative")
     if not math.isfinite(config["proximal_ewma_com"]) or config["proximal_ewma_com"] <= 0.0:
         raise ValueError("proximal_ewma_com must be finite and positive")
     if config["eval_temperature"] < 0.0:

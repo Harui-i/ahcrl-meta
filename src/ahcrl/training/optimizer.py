@@ -142,6 +142,9 @@ class HybridModularOptimizer:
         self.bounded_second_moments: dict[str, torch.Tensor] = {}
         self.bounded_steps: dict[str, int] = {}
         self.last_metrics: dict[str, float] = {}
+        # Kept separately from diagnostic metrics so projection timing is
+        # available on every step, not only on diagnostics_interval steps.
+        self.last_timing: dict[str, float] = {}
         self._gradients_validated = False
 
     def zero_grad(self, set_to_none: bool = True) -> None:
@@ -204,18 +207,17 @@ class HybridModularOptimizer:
                 self.momentum_buffers[spec.name] = buffer
             buffer.mul_(self.momentum).add_(gradient)
             direction = gradient.add(buffer, alpha=self.momentum) if self.nesterov else buffer
-            dualize_started = time.perf_counter() if collect_diagnostics else 0.0
+            dualize_started = time.perf_counter()
             dualized = spec.geometry.dualize(direction, target_norm=spec.target_norm)
-            if collect_diagnostics:
-                dualize_seconds += time.perf_counter() - dualize_started
+            dualize_seconds += time.perf_counter() - dualize_started
             parameter.mul_(1.0 - self.lr * self.weight_decay).add_(dualized, alpha=-self.lr)
             projection_displacement_rms = 0.0
             if self.project_enabled:
                 before_projection = parameter.clone() if collect_diagnostics else None
-                projection_started = time.perf_counter() if collect_diagnostics else 0.0
+                projection_started = time.perf_counter()
                 parameter.copy_(spec.geometry.project(parameter))
+                project_seconds += time.perf_counter() - projection_started
                 if collect_diagnostics:
-                    project_seconds += time.perf_counter() - projection_started
                     assert before_projection is not None
                     projection_displacement_rms = float(
                         (parameter - before_projection).square().mean().sqrt().item()
@@ -269,17 +271,16 @@ class HybridModularOptimizer:
             first_hat = first / (1.0 - _BOUNDED_BETA1**bounded_step)
             second_hat = second / (1.0 - _BOUNDED_BETA2**bounded_step)
             direction = first_hat / (second_hat.sqrt() + _BOUNDED_EPSILON)
-            dualize_started = time.perf_counter() if collect_diagnostics else 0.0
+            dualize_started = time.perf_counter()
             dualized = spec.geometry.dualize(direction, target_norm=spec.target_norm)
-            if collect_diagnostics:
-                dualize_seconds += time.perf_counter() - dualize_started
+            dualize_seconds += time.perf_counter() - dualize_started
             parameter.add_(dualized, alpha=-self.lr)
             before_projection = parameter.clone() if collect_diagnostics else None
-            projection_started = time.perf_counter() if collect_diagnostics else 0.0
+            projection_started = time.perf_counter()
             parameter.copy_(spec.geometry.project(parameter))
             projection_displacement_rms = 0.0
+            project_seconds += time.perf_counter() - projection_started
             if collect_diagnostics:
-                project_seconds += time.perf_counter() - projection_started
                 assert before_projection is not None
                 projection_displacement_rms = float(
                     (parameter - before_projection).square().mean().sqrt().item()
@@ -311,6 +312,11 @@ class HybridModularOptimizer:
                 totals[metric] = totals.get(metric, 0.0) + value
             counts[geometry] = counts.get(geometry, 0) + 1
 
+        self.last_timing = {
+            "timing/optimizer_step_seconds": time.perf_counter() - started,
+            "timing/optimizer_dualize_seconds": dualize_seconds,
+            "timing/optimizer_project_seconds": project_seconds,
+        }
         if collect_diagnostics:
             for geometry, count in counts.items():
                 for metric in list(totals):
@@ -440,4 +446,6 @@ def build_optimizer(
 
 
 def optimizer_metrics(optimizer: OptimizerLike) -> dict[str, float]:
-    return dict(optimizer.last_metrics) if isinstance(optimizer, HybridModularOptimizer) else {}
+    if not isinstance(optimizer, HybridModularOptimizer):
+        return {}
+    return dict(optimizer.last_metrics) | dict(optimizer.last_timing)

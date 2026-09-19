@@ -23,7 +23,7 @@ gamma = 0.995
 gae_lambda = 0.95
 clip = 0.2
 epochs = 1
-minibatch_size = 256
+minibatch_size = 1024
 entropy_coef = 0.0001
 value_coef = 0.5
 max_grad_norm = 0.5
@@ -39,9 +39,9 @@ tags = ["ahc063", "ppo-ewma", "ewma"]
 [model]
 architecture = "slot_fusion_conv_v1"
 sequence_channels = 64
-sequence_blocks = 8
+sequence_blocks = 2
 spatial_channels = 128
-spatial_blocks = 4
+spatial_blocks = 2
 head_channels = 128
 head_blocks = 2
 

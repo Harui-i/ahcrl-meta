@@ -41,3 +41,8 @@ def test_reward_scaler_round_trip() -> None:
 def test_config_paths_are_resolved() -> None:
     args = parse_args(["--artifact-dir", "/tmp/ahc063-test-artifacts"])
     assert isinstance(args.artifact_dir, Path)
+
+
+def test_timing_log_interval_can_be_disabled() -> None:
+    args = parse_args(["--timing-log-interval", "0"])
+    assert args.timing_log_interval == 0
